@@ -763,15 +763,22 @@ export async function createGatewaySession(params: {
           }),
         );
       }
-      const { emitGatewayBeforeResetPluginHook } = await loadSessionLifecycleRuntime();
-      await emitGatewayBeforeResetPluginHook({
-        cfg: params.cfg,
-        key: canonicalParentSessionKey,
-        target: parentSessionTarget,
-        storePath: parentSessionTarget.storePath,
-        entry: parentEntry,
-        reason: "new",
-      });
+      // before_reset retires parent-owned runtime state (e.g. the durable
+      // Codex binding generation). A parallel child (succeedsParent: false)
+      // leaves the parent authoritative, so only a rollover child may emit it
+      // — mirroring the session_end guard applied after the child transcript
+      // is created below.
+      if (params.succeedsParent !== false) {
+        const { emitGatewayBeforeResetPluginHook } = await loadSessionLifecycleRuntime();
+        await emitGatewayBeforeResetPluginHook({
+          cfg: params.cfg,
+          key: canonicalParentSessionKey,
+          target: parentSessionTarget,
+          storePath: parentSessionTarget.storePath,
+          entry: parentEntry,
+          reason: "new",
+        });
+      }
     }
 
     const target = creationTarget;

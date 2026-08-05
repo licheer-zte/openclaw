@@ -26,6 +26,14 @@ function firstHookEvent(mock: { mock: { calls: unknown[][] } }): HookEvent {
   return call[0] as HookEvent;
 }
 
+function firstHookCall(mock: { mock: { calls: unknown[][] } }): unknown[] {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error("Expected hook call");
+  }
+  return call;
+}
+
 async function seedParent(sessionId: string) {
   const { storePath } = await createSessionStoreDir();
   await writeSessionStore({
@@ -52,7 +60,10 @@ test("sessions.create keeps the parent active for an explicit parallel child", a
 
   expect(result.ok).toBe(true);
   expect(result.payload?.key).toMatch(/^agent:main:dashboard:/);
-  expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
+  // A parallel child leaves the parent authoritative: no reset lifecycle may
+  // fire for it (before_reset retires parent-owned runtime bindings such as
+  // the durable Codex binding generation).
+  expect(beforeResetHookMocks.runBeforeReset).not.toHaveBeenCalled();
   expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
   expect(firstHookEvent(sessionLifecycleHookMocks.runSessionStart).sessionKey).toBe(
     result.payload?.key,
@@ -61,6 +72,7 @@ test("sessions.create keeps the parent active for an explicit parallel child", a
 
 test("sessions.create accepts an explicit successor with a minted dashboard key", async () => {
   await seedParent("sess-successor");
+  beforeResetHookState.hasBeforeResetHook = true;
 
   const result = await directSessionReq<{ key: string }>("sessions.create", {
     parentSessionKey: "main",
@@ -70,6 +82,8 @@ test("sessions.create accepts an explicit successor with a minted dashboard key"
 
   expect(result.ok).toBe(true);
   expect(result.payload?.key).toMatch(/^agent:main:dashboard:/);
+  const [, resetContext] = firstHookCall(beforeResetHookMocks.runBeforeReset);
+  expect(resetContext).toMatchObject({ sessionKey: "agent:main:main" });
   const endEvent = firstHookEvent(sessionLifecycleHookMocks.runSessionEnd);
   expect(endEvent.sessionKey).toBe("agent:main:main");
   expect(endEvent.nextSessionKey).toBe(result.payload?.key);
