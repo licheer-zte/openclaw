@@ -415,6 +415,14 @@ function sanitizePresentationTextFieldsResult(
             sanitizedButton.label = sanitized.text;
             suppressionReason ??= sanitized.suppressionReason;
           }
+          // Downstream normalizers accept `text` as a legacy label alias
+          // (normalizeButton: label ?? text); sanitize it too so heartbeat
+          // tokens cannot ride through a legacy-shaped button.
+          if (typeof sanitizedButton.text === "string") {
+            const sanitized = sanitizeVisibleText(sanitizedButton.text);
+            sanitizedButton.text = sanitized.text;
+            suppressionReason ??= sanitized.suppressionReason;
+          }
           if (typeof sanitizedButton.url === "string") {
             const sanitized = sanitizeUrl(sanitizedButton.url);
             if (sanitized.text) {
@@ -484,6 +492,12 @@ function sanitizePresentationTextFieldsResult(
           if (typeof sanitizedOption.label === "string") {
             const sanitized = sanitizeVisibleText(sanitizedOption.label);
             sanitizedOption.label = sanitized.text;
+            suppressionReason ??= sanitized.suppressionReason;
+          }
+          // normalizeOption also accepts `text` as a legacy label alias.
+          if (typeof sanitizedOption.text === "string") {
+            const sanitized = sanitizeVisibleText(sanitizedOption.text);
+            sanitizedOption.text = sanitized.text;
             suppressionReason ??= sanitized.suppressionReason;
           }
           return sanitizedOption;

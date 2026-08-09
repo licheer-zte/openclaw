@@ -4613,6 +4613,70 @@ describe("message tool internal-runtime-context sanitization", () => {
     });
   });
 
+  it("suppresses heartbeat-only sends through legacy button and option label aliases", async () => {
+    const { call, result } = await executeSendWithResult({
+      action: {
+        channel: "slack",
+        target: "slack:C123",
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ text: "HEARTBEAT_OK", value: "run" }],
+            },
+            {
+              type: "select",
+              options: [{ text: "HEARTBEAT_OK", value: "pick" }],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(call).toBeUndefined();
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      status: "suppressed",
+      reason: "heartbeat_token",
+    });
+  });
+
+  it("strips heartbeat tokens from legacy button and option label aliases with real content", async () => {
+    mockSendResult({ channel: "slack", to: "slack:C123" });
+
+    const call = await executeSend({
+      action: {
+        channel: "slack",
+        target: "slack:C123",
+        interactive: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ text: "Run now HEARTBEAT_OK", value: "run" }],
+            },
+            {
+              type: "select",
+              options: [{ text: "Pick me HEARTBEAT_OK", value: "pick" }],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(call?.params?.interactive).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [{ text: "Run now", value: "run" }],
+        },
+        {
+          type: "select",
+          options: [{ text: "Pick me", value: "pick" }],
+        },
+      ],
+    });
+  });
+
   it("strips heartbeat tokens across mixed flat and structured send text", async () => {
     mockSendResult({ channel: "slack", to: "slack:C123" });
 
