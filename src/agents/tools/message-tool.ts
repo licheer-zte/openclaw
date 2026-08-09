@@ -1718,9 +1718,12 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       //    substantial chunk of the boot prompt content. Refs #53732.
       const bootPromptForSession = getBootEchoContextForSession(options?.agentSessionKey);
       let suppressedVisiblePayloadReason: VisibleTextSuppressionReason | undefined;
-      // HEARTBEAT_OK is a send-only silence sentinel. Other actions can use
-      // the same parameter names for channel-owned values and must preserve them.
-      const visibleTextOptions = { stripHeartbeatToken: action === "send" };
+      // HEARTBEAT_OK is a send-only silence sentinel. Broadcast fans out to
+      // send actions, so it must receive the same token-only suppression
+      // decision before fan-out. Other actions can use the same parameter
+      // names for channel-owned values and must preserve them.
+      const stripHeartbeatToken = action === "send" || action === "broadcast";
+      const visibleTextOptions = { stripHeartbeatToken };
       parseJsonMessageParam(params, "presentation");
       parseInteractiveParam(params);
       for (const field of [
@@ -1778,7 +1781,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
 
       if (
         suppressedVisiblePayloadReason &&
-        action === "send" &&
+        (action === "send" || action === "broadcast") &&
         !hasSanitizedSendPayloadContent(params)
       ) {
         const suppressedReason = suppressedVisiblePayloadReason;

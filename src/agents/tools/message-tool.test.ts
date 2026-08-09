@@ -4719,6 +4719,38 @@ describe("message tool internal-runtime-context sanitization", () => {
     expect(call?.params?.pollQuestion).toBe("HEARTBEAT_OK");
   });
 
+  it("suppresses a heartbeat-only broadcast before fan-out", async () => {
+    const { call, result } = await executeSendWithResult({
+      action: {
+        action: "broadcast",
+        targets: ["telegram:123", "slack:C123"],
+        text: "HEARTBEAT_OK",
+      },
+    });
+
+    expect(call).toBeUndefined();
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({
+      status: "suppressed",
+      reason: "heartbeat_token",
+    });
+  });
+
+  it("strips the heartbeat token from broadcast text with real content", async () => {
+    mockSendResult({ channel: "telegram", to: "telegram:123" });
+
+    const call = await executeSend({
+      action: {
+        action: "broadcast",
+        targets: ["telegram:123", "slack:C123"],
+        text: "Broadcast update HEARTBEAT_OK",
+      },
+    });
+
+    expect(call?.params?.text).toBe("Broadcast update");
+    expect(call?.action).toBe("broadcast");
+  });
+
   it.each([
     {
       name: "media URL",
