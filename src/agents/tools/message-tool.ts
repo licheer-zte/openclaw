@@ -1722,8 +1722,8 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       // send actions, so it must receive the same token-only suppression
       // decision before fan-out. Other actions can use the same parameter
       // names for channel-owned values and must preserve them.
-      const stripHeartbeatToken = action === "send" || action === "broadcast";
-      const visibleTextOptions = { stripHeartbeatToken };
+      const shouldStripHeartbeatToken = action === "send" || action === "broadcast";
+      const visibleTextOptions = { stripHeartbeatToken: shouldStripHeartbeatToken };
       parseJsonMessageParam(params, "presentation");
       parseInteractiveParam(params);
       for (const field of [
