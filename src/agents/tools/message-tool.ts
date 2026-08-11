@@ -1719,10 +1719,12 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const bootPromptForSession = getBootEchoContextForSession(options?.agentSessionKey);
       let suppressedVisiblePayloadReason: VisibleTextSuppressionReason | undefined;
       // HEARTBEAT_OK is a send-only silence sentinel. Broadcast fans out to
-      // send actions, so it must receive the same token-only suppression
-      // decision before fan-out. Other actions can use the same parameter
-      // names for channel-owned values and must preserve them.
-      const shouldStripHeartbeatToken = action === "send" || action === "broadcast";
+      // send actions, and reply is a sibling visible delivery action, so both
+      // must receive the same token-only suppression decision before dispatch.
+      // Other actions can use the same parameter names for channel-owned
+      // values and must preserve them.
+      const shouldStripHeartbeatToken =
+        action === "send" || action === "broadcast" || action === "reply";
       const visibleTextOptions = { stripHeartbeatToken: shouldStripHeartbeatToken };
       parseJsonMessageParam(params, "presentation");
       parseInteractiveParam(params);
@@ -1781,7 +1783,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
 
       if (
         suppressedVisiblePayloadReason &&
-        (action === "send" || action === "broadcast") &&
+        (action === "send" || action === "broadcast" || action === "reply") &&
         !hasSanitizedSendPayloadContent(params)
       ) {
         const suppressedReason = suppressedVisiblePayloadReason;
