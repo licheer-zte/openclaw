@@ -8,6 +8,7 @@ import type {
 } from "../../../../packages/ai/src/provider-types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
+import { isPathInside } from "../../../infra/path-guards.js";
 import type { Context, ImageContent, TextContent } from "../../../llm/types.js";
 import {
   attachRuntimePromptMediaFacts,
@@ -257,7 +258,7 @@ async function loadMediaFromRef(
         })
       : await loadWebMedia(
           targetPath,
-          options?.workspaceOnly || options?.localRoots
+          options?.workspaceOnly || options?.localRoots || isPathInside(workspaceDir, targetPath)
             ? { maxBytes: options.maxBytes, localRoots: options.localRoots ?? [workspaceDir] }
             : options?.maxBytes,
         );

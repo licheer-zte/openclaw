@@ -372,6 +372,38 @@ describe("detectAndLoadPromptImages", () => {
     }
   });
 
+  it("hydrates a staged attachment inside a non-default agent workspace", async () => {
+    // Named agents stage inbound attachments under their own workspace, which is
+    // not covered by the default state/config media roots. The read must use the
+    // fact's workspace as the local root instead of falling back to defaults.
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-named-agent-media-"));
+    const agentWorkspace = path.join(stateDir, "agents-ws", "financier");
+    const stagedDir = path.join(agentWorkspace, "media", "inbound", "openclaw-staged-abc");
+    const imagePath = path.join(stagedDir, "photo.jpg");
+    await fs.mkdir(stagedDir, { recursive: true });
+    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+
+    try {
+      const result = await detectAndLoadPromptImages({
+        prompt: "describe the attached image",
+        media: [{ path: imagePath, contentType: "image/jpeg", workspaceDir: agentWorkspace }],
+        workspaceDir: agentWorkspace,
+        model: { input: ["text", "image"] },
+      });
+
+      expect(result.failedMediaCount).toBe(0);
+      expect(result.loadedCount).toBe(1);
+      expect(result.images).toEqual([
+        { type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" },
+      ]);
+    } finally {
+      envSnapshot.restore();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("uses a described fact identity to suppress its generated media-note path", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-described-dedupe-"));
     const imagePath = path.join(workspaceDir, "photo.png");
