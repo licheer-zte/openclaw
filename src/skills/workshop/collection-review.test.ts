@@ -96,6 +96,15 @@ describe("skill collection review", () => {
     });
     expect(onError).not.toHaveBeenCalled();
     expect(reviewResult).toMatchObject({ kept: ["useful"], written: [], dropped: [] });
+    const admissionRunId = runEmbeddedAgent.mock.calls[0]?.[0]?.runId;
+    const preparedRunAdmission = runEmbeddedAgent.mock.calls[0]?.[0]?.preparedRunAdmission;
+    expect(preparedRunAdmission).toBeDefined();
+    expect(preparedRunAdmission.operationalRunInstance.runId).toBe(admissionRunId);
+    // The caller closes the admission after the run; a late admit must be refused
+    // instead of minting a replacement authority for the same run.
+    await expect(preparedRunAdmission.admit("embedded")).rejects.toThrow(
+      "prepared execution context is already closed",
+    );
     expect(runEmbeddedAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         trigger: "cron",
