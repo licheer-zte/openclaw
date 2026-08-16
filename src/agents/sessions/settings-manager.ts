@@ -163,14 +163,24 @@ export class FileSettingsStorage implements SettingsStorage {
         release = acquireFileLockSyncWithRetry(path);
       }
       const current = fileExists ? readFileSync(path, "utf-8") : undefined;
-      const next = fn(current);
+      let next = fn(current);
       if (next !== undefined) {
         // Only create directory when we actually need to write
         if (!existsSync(dir)) {
           mkdirSync(dir, { recursive: true });
         }
         if (!release) {
+          // The first read above ran without the lock because the file did
+          // not exist yet — the exact window where two processes can both
+          // read "no file", each merge from an empty base, and the second
+          // write silently replaces the first. Take the lock now and re-read
+          // before writing, so the merge in `fn` applies on top of any
+          // settings another process committed in between.
           release = acquireFileLockSyncWithRetry(path);
+          const currentUnderLock = existsSync(path) ? readFileSync(path, "utf-8") : undefined;
+          if (currentUnderLock !== current) {
+            next = fn(currentUnderLock);
+          }
         }
         writeFileSync(path, next, "utf-8");
       }

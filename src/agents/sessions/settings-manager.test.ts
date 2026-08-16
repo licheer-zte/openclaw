@@ -1,6 +1,14 @@
 /** Tests session settings loading, persistence, and runtime overrides. */
-import { describe, expect, it } from "vitest";
-import { SettingsManager, type SettingsScope, type SettingsStorage } from "./settings-manager.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  FileSettingsStorage,
+  SettingsManager,
+  type SettingsScope,
+  type SettingsStorage,
+} from "./settings-manager.js";
 
 class InspectableSettingsStorage implements SettingsStorage {
   private values: Record<SettingsScope, string | undefined> = {
@@ -155,5 +163,83 @@ describe("SettingsManager runtime overrides", () => {
       maxRetryDelayMs: 60_000,
     });
     expect(settingsManager.getPackages()).toEqual(["npm:@openclaw/override"]);
+  });
+});
+
+describe("FileSettingsStorage first-write atomicity", () => {
+  const tempDirs: string[] = [];
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  function makeStorage(): { storage: FileSettingsStorage; settingsPath: string } {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "settings-first-write-"));
+    tempDirs.push(agentDir);
+    return {
+      storage: new FileSettingsStorage(process.cwd(), agentDir),
+      settingsPath: path.join(agentDir, "settings.json"),
+    };
+  }
+
+  it("merges a setting committed by another process while the file did not exist yet", () => {
+    const { storage, settingsPath } = makeStorage();
+
+    storage.withLock("global", (current) => {
+      // First invocation: the file does not exist yet (current === undefined).
+      // Simulate the concurrent first write: the other process creates the
+      // settings file with its own field between our unlocked read and our
+      // write. The pre-fix code then truncates the file with our merge from
+      // an empty base, silently dropping the foreign field.
+      if (current === undefined) {
+        fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+        fs.writeFileSync(settingsPath, JSON.stringify({ theme: "foreign-theme" }, null, 2));
+        return JSON.stringify({ defaultModel: "mine" }, null, 2);
+      }
+      // Locked re-read: merge our field on top of the foreign content.
+      return JSON.stringify({ ...JSON.parse(current), defaultModel: "mine" }, null, 2);
+    });
+
+    expect(JSON.parse(fs.readFileSync(settingsPath, "utf-8"))).toEqual({
+      defaultModel: "mine",
+      theme: "foreign-theme",
+    });
+  });
+
+  it("does not create the settings directory for a read-only load", () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "settings-readonly-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "settings-readonly-cwd-"));
+    tempDirs.push(agentDir, cwd);
+    const storage = new FileSettingsStorage(cwd, agentDir);
+
+    storage.withLock("project", (current) => {
+      expect(current).toBeUndefined();
+      return undefined;
+    });
+
+    // The read-only path must stay lazy: no `.openclaw/` directory and no
+    // lock file materialize just because settings were loaded.
+    expect(fs.existsSync(path.join(cwd, ".openclaw"))).toBe(false);
+    expect(fs.existsSync(path.join(agentDir, "settings.json.lock"))).toBe(false);
+  });
+
+  it("merges settings written by two managers for the same scope", async () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "settings-two-managers-"));
+    tempDirs.push(agentDir);
+
+    const first = SettingsManager.create(process.cwd(), agentDir);
+    first.setTheme("theme-a");
+    await first.flush();
+
+    const second = SettingsManager.create(process.cwd(), agentDir);
+    second.setDefaultModel("model-b");
+    await second.flush();
+
+    const settingsPath = path.join(agentDir, "settings.json");
+    expect(JSON.parse(fs.readFileSync(settingsPath, "utf-8"))).toMatchObject({
+      theme: "theme-a",
+      defaultModel: "model-b",
+    });
   });
 });
