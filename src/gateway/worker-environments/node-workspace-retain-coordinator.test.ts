@@ -14,7 +14,7 @@ const node = {
   clientId: "node-host",
   clientMode: "node",
   protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-  commands: [],
+  commands: [NODE_WORKER_WORKSPACE_RETAIN_COMMAND],
 } as const;
 
 function environment(overrides: Record<string, unknown> = {}) {
@@ -75,6 +75,7 @@ function createHarness(
   params: {
     environments?: unknown[];
     placements?: unknown[];
+    nodes?: readonly (typeof node)[];
     results?: Array<{ applied: boolean; deleted: number; hasMore: boolean }>;
   } = {},
 ) {
@@ -84,10 +85,11 @@ function createHarness(
     payloadJSON: JSON.stringify(results.shift() ?? { applied: true, deleted: 0, hasMore: false }),
   }));
   const transport: NodeWorkerSupervisorTransport = {
-    listCurrentNodes: async () => [node],
+    listCurrentNodes: async () => params.nodes ?? [node],
     isCurrent: () => true,
     invoke,
   };
+  const warn = vi.fn();
   const coordinator = createNodeWorkspaceRetainCoordinator({
     gatewayNamespace: "gateway-test",
     environments: {
@@ -96,10 +98,10 @@ function createHarness(
     placements: {
       list: () => (params.placements ?? [placement()]) as never,
     } as Pick<WorkerSessionPlacementStore, "list">,
-    warn: vi.fn(),
+    warn,
   });
   coordinator.bindTransport(transport);
-  return { coordinator, invoke };
+  return { coordinator, invoke, warn };
 }
 
 describe("node workspace retain coordinator", () => {
@@ -173,6 +175,64 @@ describe("node workspace retain coordinator", () => {
 
     expect(invoke).toHaveBeenCalledTimes(2);
     expect(invoke.mock.calls[1]?.[0].params).toMatchObject({ sequence: 2 });
+    await coordinator.stop();
+  });
+
+  it("skips a node that never advertised the retain command, without warning", async () => {
+    const nodeWithoutWorkerRuntime = { ...node, nodeId: "node-no-worker", commands: [] } as const;
+    const { coordinator, invoke, warn } = createHarness({
+      nodes: [nodeWithoutWorkerRuntime],
+    });
+
+    await coordinator.start();
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    await coordinator.stop();
+  });
+
+  it("skips the no-command node while still retaining advertised nodes", async () => {
+    const nodeWithoutWorkerRuntime = { ...node, nodeId: "node-no-worker", commands: [] } as const;
+    const { coordinator, invoke, warn } = createHarness({
+      nodes: [node, nodeWithoutWorkerRuntime],
+    });
+
+    await coordinator.start();
+
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke.mock.calls[0]?.[0]).toMatchObject({ node });
+    expect(warn).not.toHaveBeenCalled();
+    await coordinator.stop();
+  });
+
+  it("still warns when an advertised node fails to answer the retain command", async () => {
+    const failingInvoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () => ({
+      ok: false,
+      error: { code: "UNAVAILABLE", message: "node worker runtime unavailable" },
+    }));
+    const transport: NodeWorkerSupervisorTransport = {
+      listCurrentNodes: async () => [node],
+      isCurrent: () => true,
+      invoke: failingInvoke,
+    };
+    const warn = vi.fn();
+    const coordinator = createNodeWorkspaceRetainCoordinator({
+      gatewayNamespace: "gateway-test",
+      environments: {
+        list: () => [environment()] as never,
+      } as Pick<WorkerEnvironmentService, "list">,
+      placements: {
+        list: () => [placement()] as never,
+      } as Pick<WorkerSessionPlacementStore, "list">,
+      warn,
+    });
+    coordinator.bindTransport(transport);
+
+    await coordinator.start();
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("Node workspace retain publication failed (node-1)"),
+    );
     await coordinator.stop();
   });
 });

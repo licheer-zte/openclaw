@@ -158,9 +158,15 @@ export function createNodeWorkspaceRetainCoordinator(
         );
         continue;
       }
-      const targets = reconcileAll
-        ? currentNodes
-        : currentNodes.filter((node) => requestedNodes.has(node.nodeId));
+      // A node that never advertised the worker-runtime retain command is
+      // not a valid target for it: dispatching anyway makes the node answer
+      // UNAVAILABLE ("node worker runtime unavailable") once per reconcile
+      // pass, forever. Skip such nodes silently — that is a normal
+      // configuration, not a fault — while keeping the warn below for nodes
+      // that advertise the command and genuinely fail to answer.
+      const targets = (
+        reconcileAll ? currentNodes : currentNodes.filter((node) => requestedNodes.has(node.nodeId))
+      ).filter((node) => node.commands.includes(NODE_WORKER_WORKSPACE_RETAIN_COMMAND));
       await Promise.all(
         targets.map(async (node) => {
           try {
