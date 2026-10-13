@@ -1,3 +1,4 @@
+import { copyConfigResolutionFactsThroughRewrite } from "../../config/resolution-facts.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   collectOpenAICodexAuthProfileStoreIdMap,
@@ -45,6 +46,11 @@ export async function repairAuthProfileMigration(params: {
       ? await maybeRepairLegacyAuthProfileStores({ cfg: config, env, profileIdMap: authorized })
       : { profileIdMap: authorized, changes: [], warnings: [] };
   const repaired = maybeRepairOpenAICodexAuthConfig(config, { profileIdMap: aliases.profileIdMap });
+  // The migration clone above rebuilds config through structuredClone, which drops the
+  // loader's WeakMap-keyed env-reference facts; without them the downstream security
+  // audit classifies resolved ${ENV} shorthand as plaintext (issue #171022). Re-carry the
+  // facts, invalidating any credential path the rewrite actually changed.
+  copyConfigResolutionFactsThroughRewrite(params.cfg, repaired.config);
   return {
     config: repaired.config,
     changes: [

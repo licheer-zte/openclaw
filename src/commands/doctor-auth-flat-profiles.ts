@@ -69,6 +69,10 @@ import { resolveLegacyInheritedAuthAgentDir } from "../agents/legacy-inherited-a
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { OPENAI_PROVIDER_ID } from "../agents/openai-routing.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import {
+  cloneConfigWithResolutionFacts,
+  copyConfigResolutionFactsThroughRewrite,
+} from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { loadJsonFileThroughSymlink } from "../infra/json-file.js";
@@ -1289,7 +1293,7 @@ export function maybeRepairOpenAICodexAuthConfig(
   changes: string[];
   warnings: string[];
 } {
-  let config = structuredClone(cfg);
+  let config = cloneConfigWithResolutionFacts(cfg);
   const root = config as Record<string, unknown>;
   const auth = isRecord(root.auth) ? root.auth : undefined;
   const profileIdMap = new Map<string, string>(options?.profileIdMap);
@@ -1317,6 +1321,11 @@ export function maybeRepairOpenAICodexAuthConfig(
     const models = repairRetiredConfigModelRefs(config, ({ modelRef }) =>
       repairModelRefAuthProfile(modelRef, profileIdMap),
     );
+    if (models.config !== config) {
+      // repairRetiredConfigModelRefs clones again when it rewrites model refs; re-carry
+      // the facts onto the returned config so its own credential paths stay classified.
+      copyConfigResolutionFactsThroughRewrite(config, models.config);
+    }
     config = models.config;
     changed ||= models.changes.length > 0;
     const pluginsChanged = rewritePluginAuthProfileRefs(config, profileIdMap);
