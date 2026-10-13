@@ -268,6 +268,26 @@ describe("gateway startup log", () => {
     expect(modelMocks.resolveThinkingDefault).toHaveBeenCalledTimes(1);
   });
 
+  it("reports the authoritative resolved level when a provider model default is off", () => {
+    // Regression for #170180: with no explicit thinking config, Claude Opus
+    // 4.7/4.8 on claude-cli resolve to an omitted-thinking default of "off".
+    // The banner must report that level rather than substituting "medium",
+    // which contradicted the actual launch budget (thinking was forced off).
+    modelMocks.resolveThinkingDefault.mockReturnValue("off");
+    expect(
+      formatAgentModelStartupDetails({
+        cfg: {
+          agents: {
+            defaults: { model: "anthropic/claude-opus-4-8" },
+          },
+        },
+        provider: "anthropic",
+        model: "claude-opus-4-8",
+      }),
+    ).toBe("thinking=off, fast=off");
+    expect(modelMocks.resolveThinkingDefault).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves explicit startup thinking off", () => {
     expect(
       formatAgentModelStartupDetails({

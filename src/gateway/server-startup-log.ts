@@ -156,7 +156,11 @@ export function formatAgentModelStartupDetails(params: {
         model: params.model,
         catalog: configuredCatalog,
       });
-      thinking = resolvedThinking === "off" ? "medium" : resolvedThinking;
+      // The resolved level is authoritative: when a provider/model default is
+      // "off" (e.g. Claude Opus 4.7/4.8 on claude-cli, whose omitted-thinking
+      // default is off), report "off" instead of substituting "medium". The old
+      // substitution made the banner contradict the actual launch budget.
+      thinking = resolvedThinking;
     }
   }
   const fast = resolveFastModeState({
