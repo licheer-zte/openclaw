@@ -486,8 +486,12 @@ describe("native Control UI browser assets", () => {
     expect(catalog.plugins[0]?.imports).toEqual([]);
   });
 
-  it("serves authenticated immutable builds and preserves the last working revision on failure", async () => {
+  it("serves hardlinked bundled assets, reloads a hardlinked manifest, and preserves working revisions", async () => {
     const fixture = activateFixture();
+    fs.linkSync(
+      path.join(fixture.directory, "index.js"),
+      path.join(fixture.rootDir, "linked-entry.js"),
+    );
     const firstChunk = "export const value = 'first';";
     fs.writeFileSync(path.join(fixture.directory, "lazy.js"), firstChunk);
     const first = await listControlUiPluginCatalog();
@@ -534,6 +538,10 @@ describe("native Control UI browser assets", () => {
         fs.writeFileSync(path.join(fixture.directory, "index.js"), nextSource);
         expect(await listControlUiPluginCatalog()).toEqual(first);
         expect((await read(entry.entryUrl)).end.mock.calls[0]?.[0]?.toString()).toBe(firstSource);
+        fs.linkSync(
+          path.join(fixture.rootDir, "openclaw.plugin.json"),
+          path.join(fixture.rootDir, "linked-manifest.json"),
+        );
         const next = await reloadControlUiPluginCatalog("native-ui");
         expect(next.plugins[0]!.revision).not.toBe(entry.revision);
         expect((await read(next.plugins[0]!.entryUrl)).end.mock.calls[0]?.[0]?.toString()).toBe(
@@ -905,70 +913,24 @@ describe("native Control UI browser assets", () => {
     });
   });
 
-  it("serves hardlinked bundled browser assets through a listening Gateway and denies them after retirement", async () => {
-    // End-to-end proof for #170409: a genuine hardlinked bundled asset is
-    // admitted by the catalog and served over a real listening Gateway socket
-    // (real transport, not the fake request/response harness), and stops being
-    // served once the owning plugin is retired.
-    const fixture = activateFixture("bundled");
-    const sharedPath = path.join(fixture.rootDir, "shared.js");
-    fs.writeFileSync(sharedPath, firstSource);
-    const entryPath = path.join(fixture.directory, "index.js");
-    fs.unlinkSync(entryPath);
-    fs.linkSync(sharedPath, entryPath);
-    const catalog = await listControlUiPluginCatalog();
-    expect(catalog.plugins.map((plugin) => plugin.pluginId)).toEqual(["native-ui"]);
-    expect(catalog.diagnostics).toEqual([]);
-    const entry = catalog.plugins[0]!;
-    await withGatewayServer({
-      prefix: "native-ui-hardlink-listen-",
-      resolvedAuth: AUTH_TOKEN,
-      overrides: { controlUiEnabled: true, controlUiBasePath: "" },
-      run: async (server) => {
-        await new Promise<void>((resolve) => {
-          server.listen(0, "127.0.0.1", resolve);
-        });
-        try {
-          const address = server.address();
-          if (!address || typeof address === "string") {
-            throw new Error("gateway listener did not expose a port");
-          }
-          const url = `http://127.0.0.1:${address.port}${entry.entryUrl}`;
-          const cookie = cookieForGrant();
-          const served = await fetch(url, { headers: { cookie } });
-          expect(served.status).toBe(200);
-          expect(await served.text()).toBe(firstSource);
-          // Retiring the owning plugin must retire its served assets.
-          fixture.record.enabled = false;
-          const retired = await fetch(url, { headers: { cookie } });
-          expect(retired.status).toBe(404);
-        } finally {
-          await new Promise<void>((resolve, reject) => {
-            server.close((error) => {
-              if (error) {
-                reject(error);
-              } else {
-                resolve();
-              }
-            });
-          });
-        }
+  it("rejects a hardlinked workspace manifest on reload and retains the working build", async () => {
+    await withTempConfig({
+      cfg: { gateway: { controlUi: { experimental: { customPlugins: true } } } },
+      run: async () => {
+        const fixture = activateFixture("workspace");
+        const first = await listControlUiPluginCatalog();
+        expect(first.plugins).toHaveLength(1);
+        fs.linkSync(
+          path.join(fixture.rootDir, "openclaw.plugin.json"),
+          path.join(fixture.rootDir, "linked-manifest.json"),
+        );
+        const reloaded = await reloadControlUiPluginCatalog("native-ui");
+        expect(reloaded.plugins).toEqual(first.plugins);
+        expect(reloaded.diagnostics).toEqual([
+          { pluginId: "native-ui", message: expect.stringContaining("Build the plugin") },
+        ]);
       },
     });
-  });
-
-  it("reloads a bundled plugin whose manifest is hardlinked", async () => {
-    // #170409 also covered explicit UI reload: the manifest reader must use the
-    // same trusted-root hardlink policy as browser-asset capture.
-    const fixture = activateFixture("bundled");
-    const manifestPath = path.join(fixture.rootDir, "openclaw.plugin.json");
-    const linkedPath = path.join(fixture.rootDir, "openclaw.plugin.linked.json");
-    fs.writeFileSync(linkedPath, fs.readFileSync(manifestPath));
-    fs.unlinkSync(manifestPath);
-    fs.linkSync(linkedPath, manifestPath);
-    const reloaded = await reloadControlUiPluginCatalog("native-ui");
-    expect(reloaded.plugins.map((plugin) => plugin.pluginId)).toEqual(["native-ui"]);
-    expect(reloaded.diagnostics).toEqual([]);
   });
 
   it("refreshes UI declarations and retires receipts when browser bytes stay unchanged", async () => {

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type {
   PluginControlUiActivation,
   PluginControlUiDiagnostic,
@@ -7,7 +8,6 @@ import type {
   PluginsControlUiCatalog,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   readPluginControlUiAssets,
@@ -41,7 +41,7 @@ import {
 import { authorizeOperatorScopesForRequiredScope, READ_SCOPE } from "./method-scopes.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
-const log = createSubsystemLogger("control-ui");
+const log = createSubsystemLogger("gateway/control-ui");
 
 const MAX_CONTROL_UI_PLUGINS = 64;
 const MAX_CONTROL_UI_CATALOG_BYTES = 64 * 1024 * 1024;
@@ -149,9 +149,6 @@ async function snapshotBrowserBuild(
     record.rootDir,
     declaration,
     {
-      // Reuse the plugin-file hardlink policy so bundled plugins and Nix-store
-      // roots can serve hardlinked browser assets, while user/config/workspace
-      // roots keep rejecting them.
       rejectHardlinks: shouldRejectHardlinkedPluginFiles({
         origin: record.origin,
         rootDir: record.rootDir,
@@ -212,9 +209,6 @@ async function refreshBrowserCatalog(
       if (reloadManifest) {
         // Explicit UI reload owns a fresh metadata read without replacing the
         // backend's process-stable manifest, imports, or registration authority.
-        // Reuse the same trusted-root hardlink policy so bundled/Nix roots can
-        // reload hardlinked manifests too. Narrow the optional rootDir once,
-        // before it flows into the policy and manifest readers.
         const rootDir = record.rootDir;
         if (!rootDir) {
           throw new Error("plugin is no longer active");
@@ -226,7 +220,10 @@ async function refreshBrowserCatalog(
         const loaded = withPluginCache(createPluginCache(), () =>
           loadPluginManifest(rootDir, rejectManifestHardlinks, rootDir),
         );
-        if (!loaded.ok || loaded.manifest.id !== record.id || !loaded.manifest.controlUi) {
+        if (!loaded.ok) {
+          throw new Error(loaded.error);
+        }
+        if (loaded.manifest.id !== record.id || !loaded.manifest.controlUi) {
           throw new Error("active plugin browser declaration is missing or invalid");
         }
         declaration = loaded.manifest.controlUi;
@@ -264,11 +261,8 @@ async function refreshBrowserCatalog(
       state.build = build;
       delete state.diagnostic;
     } catch (error) {
-      // Surface the underlying admission failure (e.g. "hardlink: hardlinked
-      // path not allowed") instead of only the generic panel message, so the
-      // real reason is diagnosable from the Gateway log.
       log.warn(
-        `[control-ui] browser assets unavailable for plugin ${record.id}: ${formatErrorMessage(error)}`,
+        `Browser assets unavailable for plugin ${record.id}: ${formatErrorMessage(error, { includeCode: true })}`,
       );
       state.diagnostic = {
         pluginId: record.id,
