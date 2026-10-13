@@ -13,7 +13,7 @@ import { repairAuthProfileMigration } from "./auth-profile-repair.js";
 
 const prompter = { shouldRepair: false, confirmAutoFix: async () => false };
 
-function loadConfigWithEnvFacts(raw: object, env: Record<string, string>): OpenClawConfig {
+function loadConfigWithEnvFacts(raw: object, env: NodeJS.ProcessEnv): OpenClawConfig {
   const resolution = resolveConfigForRead(raw, env);
   const cfg = resolution.resolvedConfigRaw as OpenClawConfig;
   setConfigResolutionFacts(cfg, resolution.resolutionFacts);
