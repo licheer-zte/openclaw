@@ -7,10 +7,13 @@ import type {
   PluginsControlUiCatalog,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   readPluginControlUiAssets,
   type PluginControlUiAsset,
 } from "../plugins/control-ui-assets.js";
+import { shouldRejectHardlinkedPluginFiles } from "../plugins/hardlink-policy.js";
 import { loadPluginManifest, type PluginManifestControlUi } from "../plugins/manifest.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
@@ -37,6 +40,8 @@ import {
 } from "./http-request-authority.js";
 import { authorizeOperatorScopesForRequiredScope, READ_SCOPE } from "./method-scopes.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
+
+const log = createSubsystemLogger("control-ui");
 
 const MAX_CONTROL_UI_PLUGINS = 64;
 const MAX_CONTROL_UI_CATALOG_BYTES = 64 * 1024 * 1024;
@@ -143,6 +148,15 @@ async function snapshotBrowserBuild(
   const { entryName, styles, assets, bytes } = await readPluginControlUiAssets(
     record.rootDir,
     declaration,
+    {
+      // Reuse the plugin-file hardlink policy so bundled plugins and Nix-store
+      // roots can serve hardlinked browser assets, while user/config/workspace
+      // roots keep rejecting them.
+      rejectHardlinks: shouldRejectHardlinkedPluginFiles({
+        origin: record.origin,
+        rootDir: record.rootDir,
+      }),
+    },
   );
   const digest = createHash("sha256").update(JSON.stringify({ declaration, uiCapabilities }));
   for (const [name, asset] of [...assets].toSorted(([left], [right]) =>
@@ -238,7 +252,13 @@ async function refreshBrowserCatalog(
       state.revisions.set(revisionKey, build);
       state.build = build;
       delete state.diagnostic;
-    } catch {
+    } catch (error) {
+      // Surface the underlying admission failure (e.g. "hardlink: hardlinked
+      // path not allowed") instead of only the generic panel message, so the
+      // real reason is diagnosable from the Gateway log.
+      log.warn(
+        `[control-ui] browser assets unavailable for plugin ${record.id}: ${formatErrorMessage(error)}`,
+      );
       state.diagnostic = {
         pluginId: record.id,
         message: "Control UI assets could not be loaded. Build the plugin and reload its UI.",

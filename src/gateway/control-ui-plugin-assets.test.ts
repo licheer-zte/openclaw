@@ -871,24 +871,55 @@ describe("native Control UI browser assets", () => {
     });
   });
 
-  it.each(["symlink", "hardlink"])(
-    "rejects %s browser files outside their built owner",
-    async (kind) => {
-      const fixture = activateFixture();
-      const privatePath = path.join(fixture.rootDir, "private.js");
-      fs.writeFileSync(privatePath, "private source");
-      const entry = path.join(fixture.directory, "index.js");
-      fs.unlinkSync(entry);
-      if (kind === "symlink") {
-        fs.symlinkSync(privatePath, entry);
-      } else {
+  it("rejects symlink browser files outside their built owner", async () => {
+    const fixture = activateFixture();
+    const privatePath = path.join(fixture.rootDir, "private.js");
+    fs.writeFileSync(privatePath, "private source");
+    const entry = path.join(fixture.directory, "index.js");
+    fs.unlinkSync(entry);
+    fs.symlinkSync(privatePath, entry);
+    const catalog = await listControlUiPluginCatalog();
+    expect(catalog.plugins).toEqual([]);
+    expect(catalog.diagnostics).toEqual([{ pluginId: "native-ui", message: expect.any(String) }]);
+  });
+
+  it("rejects hardlink browser files for untrusted plugin roots", async () => {
+    await withTempConfig({
+      cfg: {},
+      run: async () => {
+        const fixture = activateFixture("workspace");
+        setRuntimeConfigSnapshot({
+          gateway: { controlUi: { experimental: { customPlugins: true } } },
+        });
+        const privatePath = path.join(fixture.rootDir, "private.js");
+        fs.writeFileSync(privatePath, "private source");
+        const entry = path.join(fixture.directory, "index.js");
+        fs.unlinkSync(entry);
         fs.linkSync(privatePath, entry);
-      }
-      const catalog = await listControlUiPluginCatalog();
-      expect(catalog.plugins).toEqual([]);
-      expect(catalog.diagnostics).toEqual([{ pluginId: "native-ui", message: expect.any(String) }]);
-    },
-  );
+        const catalog = await listControlUiPluginCatalog();
+        expect(catalog.plugins).toEqual([]);
+        expect(catalog.diagnostics).toEqual([
+          { pluginId: "native-ui", message: expect.any(String) },
+        ]);
+      },
+    });
+  });
+
+  it("admits bundled hardlinked browser assets under the trusted-root policy", async () => {
+    // Regression for #170409: bundled plugins (and /nix/store roots in Nix mode)
+    // legitimately ship hardlinked browser assets. The reader must consult the
+    // plugin-file hardlink policy instead of unconditionally rejecting hardlinks,
+    // which blanked the panel for every auto-optimise-store NixOS host.
+    const fixture = activateFixture("bundled");
+    const sharedPath = path.join(fixture.rootDir, "shared.js");
+    fs.writeFileSync(sharedPath, "hardlinked bundled asset");
+    const entry = path.join(fixture.directory, "index.js");
+    fs.unlinkSync(entry);
+    fs.linkSync(sharedPath, entry);
+    const catalog = await listControlUiPluginCatalog();
+    expect(catalog.plugins.map((plugin) => plugin.pluginId)).toEqual(["native-ui"]);
+    expect(catalog.diagnostics).toEqual([]);
+  });
 
   it("refreshes UI declarations and retires receipts when browser bytes stay unchanged", async () => {
     const fixture = activateFixture();

@@ -16,12 +16,17 @@ export function isPluginControlUiAssetPath(relativePath: string): boolean {
 
 // Serving and packing must capture the same bounded browser directory, including
 // dependent chunks, without exposing package sources or unrelated files.
+// `rejectHardlinks` defaults to the strict policy; the Gateway passes the
+// trusted-root hardlink decision for the owning PluginRecord so bundled
+// plugins and Nix-store roots can serve hardlinked browser assets, while
+// external CLI packing keeps rejecting hardlinks.
 export async function readPluginControlUiAssets(
   rootDir: string,
   declaration: PluginManifestControlUi,
+  options: { rejectHardlinks?: boolean } = {},
 ) {
   const pluginRoot = await root(rootDir, {
-    hardlinks: "reject",
+    hardlinks: options.rejectHardlinks === false ? "allow" : "reject",
     symlinks: "reject",
     maxBytes: CONTROL_UI_PLUGIN_MAX_ASSET_BYTES,
   });
