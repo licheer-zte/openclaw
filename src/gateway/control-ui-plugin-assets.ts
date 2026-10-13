@@ -213,13 +213,18 @@ async function refreshBrowserCatalog(
         // Explicit UI reload owns a fresh metadata read without replacing the
         // backend's process-stable manifest, imports, or registration authority.
         // Reuse the same trusted-root hardlink policy so bundled/Nix roots can
-        // reload hardlinked manifests too.
+        // reload hardlinked manifests too. Narrow the optional rootDir once,
+        // before it flows into the policy and manifest readers.
+        const rootDir = record.rootDir;
+        if (!rootDir) {
+          throw new Error("plugin is no longer active");
+        }
         const rejectManifestHardlinks = shouldRejectHardlinkedPluginFiles({
           origin: record.origin,
-          rootDir: record.rootDir,
+          rootDir,
         });
         const loaded = withPluginCache(createPluginCache(), () =>
-          loadPluginManifest(record.rootDir!, rejectManifestHardlinks, record.rootDir),
+          loadPluginManifest(rootDir, rejectManifestHardlinks, rootDir),
         );
         if (!loaded.ok || loaded.manifest.id !== record.id || !loaded.manifest.controlUi) {
           throw new Error("active plugin browser declaration is missing or invalid");
