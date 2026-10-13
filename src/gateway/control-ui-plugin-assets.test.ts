@@ -921,6 +921,36 @@ describe("native Control UI browser assets", () => {
     expect(catalog.diagnostics).toEqual([]);
   });
 
+  it("serves hardlinked bundled browser assets end to end and retires them with the owner", async () => {
+    // End-to-end proof for #170409: the hardlinked bundled asset must be served
+    // through the authenticated Gateway HTTP path, and must stop being served
+    // once the owning plugin is retired.
+    const fixture = activateFixture("bundled");
+    const sharedPath = path.join(fixture.rootDir, "shared.js");
+    fs.writeFileSync(sharedPath, firstSource);
+    const entryPath = path.join(fixture.directory, "index.js");
+    fs.unlinkSync(entryPath);
+    fs.linkSync(sharedPath, entryPath);
+    const catalog = await listControlUiPluginCatalog();
+    expect(catalog.plugins.map((plugin) => plugin.pluginId)).toEqual(["native-ui"]);
+    const entry = catalog.plugins[0]!;
+    await withGatewayServer({
+      prefix: "native-ui-hardlink-http-",
+      resolvedAuth: AUTH_TOKEN,
+      overrides: { controlUiEnabled: true, controlUiBasePath: "" },
+      run: async (server) => {
+        const cookie = cookieForGrant();
+        const served = await sendRequest(server, { path: entry.entryUrl, headers: { cookie } });
+        expect(served.res.statusCode).toBe(200);
+        expect(served.end.mock.calls[0]?.[0]?.toString()).toBe(firstSource);
+        // Retiring the owning plugin must retire its served assets.
+        fixture.record.enabled = false;
+        const retired = await sendRequest(server, { path: entry.entryUrl, headers: { cookie } });
+        expect(retired.res.statusCode).toBe(404);
+      },
+    });
+  });
+
   it("refreshes UI declarations and retires receipts when browser bytes stay unchanged", async () => {
     const fixture = activateFixture();
     const first = await listControlUiPluginCatalog();
