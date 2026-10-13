@@ -905,26 +905,11 @@ describe("native Control UI browser assets", () => {
     });
   });
 
-  it("admits bundled hardlinked browser assets under the trusted-root policy", async () => {
-    // Regression for #170409: bundled plugins (and /nix/store roots in Nix mode)
-    // legitimately ship hardlinked browser assets. The reader must consult the
-    // plugin-file hardlink policy instead of unconditionally rejecting hardlinks,
-    // which blanked the panel for every auto-optimise-store NixOS host.
-    const fixture = activateFixture("bundled");
-    const sharedPath = path.join(fixture.rootDir, "shared.js");
-    fs.writeFileSync(sharedPath, "hardlinked bundled asset");
-    const entry = path.join(fixture.directory, "index.js");
-    fs.unlinkSync(entry);
-    fs.linkSync(sharedPath, entry);
-    const catalog = await listControlUiPluginCatalog();
-    expect(catalog.plugins.map((plugin) => plugin.pluginId)).toEqual(["native-ui"]);
-    expect(catalog.diagnostics).toEqual([]);
-  });
-
-  it("serves hardlinked bundled browser assets end to end and retires them with the owner", async () => {
-    // End-to-end proof for #170409: the hardlinked bundled asset must be served
-    // through the authenticated Gateway HTTP path, and must stop being served
-    // once the owning plugin is retired.
+  it("serves hardlinked bundled browser assets through a listening Gateway and denies them after retirement", async () => {
+    // End-to-end proof for #170409: a genuine hardlinked bundled asset is
+    // admitted by the catalog and served over a real listening Gateway socket
+    // (real transport, not the fake request/response harness), and stops being
+    // served once the owning plugin is retired.
     const fixture = activateFixture("bundled");
     const sharedPath = path.join(fixture.rootDir, "shared.js");
     fs.writeFileSync(sharedPath, firstSource);
@@ -933,22 +918,57 @@ describe("native Control UI browser assets", () => {
     fs.linkSync(sharedPath, entryPath);
     const catalog = await listControlUiPluginCatalog();
     expect(catalog.plugins.map((plugin) => plugin.pluginId)).toEqual(["native-ui"]);
+    expect(catalog.diagnostics).toEqual([]);
     const entry = catalog.plugins[0]!;
     await withGatewayServer({
-      prefix: "native-ui-hardlink-http-",
+      prefix: "native-ui-hardlink-listen-",
       resolvedAuth: AUTH_TOKEN,
       overrides: { controlUiEnabled: true, controlUiBasePath: "" },
       run: async (server) => {
-        const cookie = cookieForGrant();
-        const served = await sendRequest(server, { path: entry.entryUrl, headers: { cookie } });
-        expect(served.res.statusCode).toBe(200);
-        expect(served.end.mock.calls[0]?.[0]?.toString()).toBe(firstSource);
-        // Retiring the owning plugin must retire its served assets.
-        fixture.record.enabled = false;
-        const retired = await sendRequest(server, { path: entry.entryUrl, headers: { cookie } });
-        expect(retired.res.statusCode).toBe(404);
+        await new Promise<void>((resolve) => {
+          server.listen(0, "127.0.0.1", resolve);
+        });
+        try {
+          const address = server.address();
+          if (!address || typeof address === "string") {
+            throw new Error("gateway listener did not expose a port");
+          }
+          const url = `http://127.0.0.1:${address.port}${entry.entryUrl}`;
+          const cookie = cookieForGrant();
+          const served = await fetch(url, { headers: { cookie } });
+          expect(served.status).toBe(200);
+          expect(await served.text()).toBe(firstSource);
+          // Retiring the owning plugin must retire its served assets.
+          fixture.record.enabled = false;
+          const retired = await fetch(url, { headers: { cookie } });
+          expect(retired.status).toBe(404);
+        } finally {
+          await new Promise<void>((resolve, reject) => {
+            server.close((error) => {
+              if (error) {
+                reject(error);
+              } else {
+                resolve();
+              }
+            });
+          });
+        }
       },
     });
+  });
+
+  it("reloads a bundled plugin whose manifest is hardlinked", async () => {
+    // #170409 also covered explicit UI reload: the manifest reader must use the
+    // same trusted-root hardlink policy as browser-asset capture.
+    const fixture = activateFixture("bundled");
+    const manifestPath = path.join(fixture.rootDir, "openclaw.plugin.json");
+    const linkedPath = path.join(fixture.rootDir, "openclaw.plugin.linked.json");
+    fs.writeFileSync(linkedPath, fs.readFileSync(manifestPath));
+    fs.unlinkSync(manifestPath);
+    fs.linkSync(linkedPath, manifestPath);
+    const reloaded = await reloadControlUiPluginCatalog("native-ui");
+    expect(reloaded.plugins.map((plugin) => plugin.pluginId)).toEqual(["native-ui"]);
+    expect(reloaded.diagnostics).toEqual([]);
   });
 
   it("refreshes UI declarations and retires receipts when browser bytes stay unchanged", async () => {

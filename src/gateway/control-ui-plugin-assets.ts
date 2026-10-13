@@ -212,8 +212,14 @@ async function refreshBrowserCatalog(
       if (reloadManifest) {
         // Explicit UI reload owns a fresh metadata read without replacing the
         // backend's process-stable manifest, imports, or registration authority.
+        // Reuse the same trusted-root hardlink policy so bundled/Nix roots can
+        // reload hardlinked manifests too.
+        const rejectManifestHardlinks = shouldRejectHardlinkedPluginFiles({
+          origin: record.origin,
+          rootDir: record.rootDir,
+        });
         const loaded = withPluginCache(createPluginCache(), () =>
-          loadPluginManifest(record.rootDir!, true, record.rootDir),
+          loadPluginManifest(record.rootDir!, rejectManifestHardlinks, record.rootDir),
         );
         if (!loaded.ok || loaded.manifest.id !== record.id || !loaded.manifest.controlUi) {
           throw new Error("active plugin browser declaration is missing or invalid");
