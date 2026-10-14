@@ -47,6 +47,14 @@ vi.mock("../infra/net/undici-runtime.js", () => ({
   }),
 }));
 
+const { ensureDefaultGlobalUndiciStreamTimeoutsMock } = vi.hoisted(() => ({
+  ensureDefaultGlobalUndiciStreamTimeoutsMock: vi.fn(),
+}));
+
+vi.mock("../infra/net/undici-global-dispatcher.js", () => ({
+  ensureDefaultGlobalUndiciStreamTimeouts: ensureDefaultGlobalUndiciStreamTimeoutsMock,
+}));
+
 vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
   StreamableHTTPClientTransport: function MockStreamableHTTPClientTransport(
     this: unknown,
@@ -137,6 +145,33 @@ describe("resolveMcpTransport", () => {
     oauthBearerMock.mockClear();
     streamableTransportConstructorMock.mockClear();
     sseTransportConstructorMock.mockClear();
+    ensureDefaultGlobalUndiciStreamTimeoutsMock.mockClear();
+  });
+
+  it("applies the default stream timeout floor for HTTP transports only", () => {
+    // Streamable HTTP and SSE bodies stream via the guarded fetch dispatchers;
+    // without a stream timeout, undici's 300 s default bodyTimeout cuts silent
+    // servers regardless of requestTimeoutMs (#172488).
+    resolveMcpTransport("http-probe", {
+      url: "https://mcp.example.com/mcp",
+      transport: "streamable-http",
+    });
+    expect(ensureDefaultGlobalUndiciStreamTimeoutsMock).toHaveBeenCalledTimes(1);
+
+    ensureDefaultGlobalUndiciStreamTimeoutsMock.mockClear();
+    resolveMcpTransport("sse-probe", {
+      url: "https://mcp.example.com/sse",
+      transport: "sse",
+    });
+    expect(ensureDefaultGlobalUndiciStreamTimeoutsMock).toHaveBeenCalledTimes(1);
+
+    ensureDefaultGlobalUndiciStreamTimeoutsMock.mockClear();
+    resolveMcpTransport("stdio-probe", {
+      command: "openclaw",
+      args: ["mcp", "serve"],
+      transport: "stdio",
+    });
+    expect(ensureDefaultGlobalUndiciStreamTimeoutsMock).not.toHaveBeenCalled();
   });
 
   it("scrubs custom headers when streamable HTTP follows a cross-origin redirect", async () => {

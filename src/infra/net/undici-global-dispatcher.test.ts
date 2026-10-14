@@ -162,6 +162,8 @@ import {
 } from "./proxy/active-proxy-state.js";
 import { globalUndiciStreamTimeoutMs } from "./undici-dispatcher-options.js";
 let ensureGlobalUndiciDispatcherStreamTimeouts: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciDispatcherStreamTimeouts;
+let ensureDefaultGlobalUndiciStreamTimeouts: typeof import("./undici-global-dispatcher.js").ensureDefaultGlobalUndiciStreamTimeouts;
+let DEFAULT_UNDICI_STREAM_TIMEOUT_MS: typeof import("./undici-global-dispatcher.js").DEFAULT_UNDICI_STREAM_TIMEOUT_MS;
 let ensureGlobalUndiciEnvProxyDispatcher: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciEnvProxyDispatcher;
 let forceResetGlobalDispatcher: typeof import("./undici-global-dispatcher.js").forceResetGlobalDispatcher;
 let resetGlobalUndiciStreamTimeoutsForTests: typeof import("./undici-global-dispatcher.js").resetGlobalUndiciStreamTimeoutsForTests;
@@ -176,6 +178,8 @@ describe("ensureGlobalUndiciDispatcherStreamTimeouts", () => {
     undiciGlobalDispatcherModule = await import("./undici-global-dispatcher.js");
     ({
       ensureGlobalUndiciDispatcherStreamTimeouts,
+      ensureDefaultGlobalUndiciStreamTimeouts,
+      DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
       ensureGlobalUndiciEnvProxyDispatcher,
       forceResetGlobalDispatcher,
       resetGlobalUndiciStreamTimeoutsForTests,
@@ -220,6 +224,30 @@ describe("ensureGlobalUndiciDispatcherStreamTimeouts", () => {
 
     expect(setGlobalDispatcher).not.toHaveBeenCalled();
     expect(globalUndiciStreamTimeoutMs).toBe(1_900_000);
+  });
+
+  it("applies the default stream timeout floor only when none is configured", () => {
+    ensureDefaultGlobalUndiciStreamTimeouts();
+
+    expect(globalUndiciStreamTimeoutMs).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
+    expect(next.options).toMatchObject({
+      bodyTimeout: DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
+      headersTimeout: DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
+    });
+
+    // A later, larger attempt-scoped timeout still replaces the floor.
+    setGlobalDispatcher.mockClear();
+    ensureGlobalUndiciDispatcherStreamTimeouts({ timeoutMs: 1_900_000 });
+    expect(globalUndiciStreamTimeoutMs).toBe(1_900_000);
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+
+    // Once configured, the default floor must not shorten it.
+    setGlobalDispatcher.mockClear();
+    ensureDefaultGlobalUndiciStreamTimeouts();
+    expect(globalUndiciStreamTimeoutMs).toBe(1_900_000);
+    expect(setGlobalDispatcher).not.toHaveBeenCalled();
   });
 
   it("wraps Proxyline managed dispatcher with timed dispatch options", () => {

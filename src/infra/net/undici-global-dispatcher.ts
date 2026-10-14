@@ -6,7 +6,10 @@ import {
   type EnvHttpProxyAgentProxyOptions,
 } from "./proxy-env.js";
 import { resolveActiveManagedProxyTlsOptions } from "./proxy/managed-proxy-undici.js";
-import { setGlobalUndiciStreamTimeoutMs } from "./undici-dispatcher-options.js";
+import {
+  globalUndiciStreamTimeoutMs,
+  setGlobalUndiciStreamTimeoutMs,
+} from "./undici-dispatcher-options.js";
 import {
   createUndiciAutoSelectFamilyConnectOptions,
   resolveUndiciAutoSelectFamily,
@@ -253,6 +256,18 @@ export function resetGlobalUndiciStreamTimeoutsForTests(): void {
   lastAppliedTimeoutKey = null;
   lastAppliedProxyBootstrapKey = null;
   setGlobalUndiciStreamTimeoutMs(undefined);
+}
+
+/**
+ * Applies the default long-stream timeout floor for surfaces that stream via
+ * the global dispatcher (for example MCP Streamable HTTP/SSE resource bodies)
+ * without overriding a longer timeout already configured by an embedded
+ * attempt, and without shortening one applied later.
+ */
+export function ensureDefaultGlobalUndiciStreamTimeouts(): void {
+  if (globalUndiciStreamTimeoutMs === undefined) {
+    ensureGlobalUndiciDispatcherStreamTimeouts();
+  }
 }
 
 /**

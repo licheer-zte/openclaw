@@ -8,6 +8,7 @@ import { StringDecoder } from "node:string_decoder";
 import type { SSEClientTransportOptions } from "@modelcontextprotocol/sdk/client/sse.js";
 import type { FetchLike, Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { ensureDefaultGlobalUndiciStreamTimeouts } from "../infra/net/undici-global-dispatcher.js";
 import { logDebug } from "../logger.js";
 import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 import type { SessionMcpRequesterScope } from "./agent-bundle-mcp-types.js";
@@ -160,6 +161,12 @@ export function resolveMcpTransport(
     };
   }
   const authProfileId = resolveMcpAuthProfileId(rawServer);
+  // MCP HTTP bodies (streamable-HTTP POST responses, standalone SSE GET
+  // streams) stream through the guarded fetch's pinned dispatchers. Without a
+  // configured stream timeout, undici's 300 s default bodyTimeout cuts silent
+  // servers even when requestTimeoutMs allows longer waits. The default floor
+  // only applies when no attempt-scoped timeout has been configured yet.
+  ensureDefaultGlobalUndiciStreamTimeouts();
   const requesterScope = options?.requesterScope;
   let oauthIdentity;
   if (resolved.oauth?.identity === "per-requester") {
