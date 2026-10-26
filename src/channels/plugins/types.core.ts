@@ -842,6 +842,7 @@ export type ChannelPollContext = Pick<
   | "silent"
   | "isAnonymous"
   | "gatewayClientScopes"
+  | "signal"
   | "onPlatformSendDispatch"
   | "assertDirectAdapterHandoff"
 > & {
