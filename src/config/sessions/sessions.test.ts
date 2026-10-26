@@ -7,7 +7,6 @@ import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import type { SessionConfig } from "../types.base.js";
 import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import { resolveSessionWorkStartError } from "./lifecycle.js";
-import { createRestartRecoveryTombstoneFixture } from "./main-session-recovery-fixtures.test-support.js";
 import {
   resolveSessionFilePathCore,
   resolveSessionFilePathOptions,
@@ -342,7 +341,16 @@ it("fails closed while trusted session initialization is pending", () => {
 it("keeps restart-recovery tombstones terminal when archive metadata is missing", () => {
   const entry = {
     sessionId: "failed-session",
-    mainRestartRecovery: createRestartRecoveryTombstoneFixture(),
+    mainRestartRecovery: {
+      cycleId: "cycle-1",
+      revision: 4,
+      chargedAttempts: 3,
+      tombstone: {
+        reason: "automatic recovery exhausted",
+        recoveredSessionId: "dashboard-successor",
+        recoveredSessionKey: "agent:main:dashboard:successor",
+      },
+    },
   };
 
   const key = "agent:main:matrix:channel:room-a";

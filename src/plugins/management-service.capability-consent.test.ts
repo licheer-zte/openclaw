@@ -58,13 +58,11 @@ vi.mock("./installed-plugin-index-records.js", async (importOriginal) => ({
   },
 }));
 
-vi.mock("./plugin-lifecycle-lease.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./plugin-lifecycle-lease.js")>()),
-  withPluginLifecycleLeaseAsync: async (
+vi.mock("./plugin-lifecycle-lease.js", () => ({
+  withPluginLifecycleLease: async (
     _options: unknown,
     run: (lease: {
       assertOwned: () => void;
-      assertCurrent: () => void;
       assertOwnedInTransaction: () => void;
       signal: AbortSignal;
       databasePath: string;
@@ -72,7 +70,6 @@ vi.mock("./plugin-lifecycle-lease.js", async (importOriginal) => ({
   ) =>
     run({
       assertOwned: () => undefined,
-      assertCurrent: () => undefined,
       assertOwnedInTransaction: () => undefined,
       signal: new AbortController().signal,
       databasePath: "/tmp/managed-capability-consent.sqlite",

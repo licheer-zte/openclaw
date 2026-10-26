@@ -54,7 +54,7 @@ export async function createWorkspaceAttachmentFixture(directory: string) {
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(directory, "state"));
   await fs.mkdir(gatewayRoot);
   await fs.mkdir(remoteRoot);
-  const bridge = {
+  const bridge: AgentWorkspaceAccess["bridge"] = {
     readFile: ({ filePath }) => fs.readFile(path.join(remoteRoot, filePath)),
     writeFile: async () => {
       throw new Error("Attachment staging must use exclusive creation");
@@ -64,38 +64,43 @@ export async function createWorkspaceAttachmentFixture(directory: string) {
       if (mkdir) {
         await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
       }
-      const exists = await fs
-        .writeFile(destination, data, { flag: "wx", mode: 0o600 })
-        .catch(fsFallback("EEXIST", true));
-      return exists ? "exists" : "created";
+      try {
+        await fs.writeFile(destination, data, { flag: "wx", mode: 0o600 });
+        return "created";
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+          return "exists";
+        }
+        throw error;
+      }
     },
     async stat({ filePath }) {
-      const stat = await fs.stat(path.join(remoteRoot, filePath)).catch(fsFallback("ENOENT", null));
-      return (
-        stat && {
+      try {
+        const stat = await fs.stat(path.join(remoteRoot, filePath));
+        return {
           type: stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "other",
           size: stat.size,
           mtimeMs: stat.mtimeMs,
+        };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return null;
         }
-      );
+        throw error;
+      }
     },
-  } satisfies AgentWorkspaceAccess["bridge"];
+  };
   const release = registerAgentWorkspaceAccess(gatewayRoot, {
     bridge,
     prepareTurnAttachments: createWorkspaceAttachmentPreparer({
       remoteRoot,
-      createBridge: () => bridge,
+      createBridge: () => ({
+        readFile: bridge.readFile,
+        stat: bridge.stat,
+        createFileExclusive: bridge.createFileExclusive!,
+      }),
     }),
   });
   onTestFinished(release);
   return { gatewayRoot, remoteRoot, release };
-}
-
-function fsFallback<T>(code: string, fallback: T) {
-  return (error: NodeJS.ErrnoException) => {
-    if (error.code !== code) {
-      throw error;
-    }
-    return fallback;
-  };
 }

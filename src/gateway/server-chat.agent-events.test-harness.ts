@@ -32,7 +32,6 @@ export function answerCandidate(
   itemId: string,
   progressText: string,
   status: "candidate" | "selected" | "superseded" = "candidate",
-  source = "codex-app-server",
 ) {
   return {
     itemId,
@@ -41,7 +40,7 @@ export function answerCandidate(
     phase: "update",
     status,
     progressText,
-    source,
+    source: "codex-app-server",
     hideFromChannelProgress: true,
   };
 }

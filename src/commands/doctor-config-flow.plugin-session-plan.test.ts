@@ -31,6 +31,7 @@ it.each([false, true])(
   (existingOwner) =>
     withHome(async (home) => {
       const bundledRoot = path.join(home, "bundled");
+      fs.mkdirSync(bundledRoot, { recursive: true });
       const stateDir = path.join(home, ".openclaw");
       const writePlugin = (pluginId: string) => {
         const root = path.join(bundledRoot, pluginId);
@@ -78,10 +79,13 @@ module.exports = { stateMigrations: [{
           agents: { entries: { main: { workspace: path.join(home, "workspace") } } },
           plugins: { allow: pluginIds },
         });
-        vi.spyOn(pluginInstalls, "repairMissingConfiguredPluginInstalls").mockImplementationOnce(
-          async ({ cfg, env, beforePersistentEffect }) => {
-            // Warm the old inventory before installation invalidates its metadata scope.
-            resolveMigrations({ config: cfg, env: env ?? process.env });
+        const install = vi
+          .spyOn(pluginInstalls, "repairMissingConfiguredPluginInstalls")
+          .mockImplementationOnce(async ({ cfg, env, beforePersistentEffect }) => {
+            const inventory = resolveMigrations({ config: cfg, env: env ?? process.env });
+            expect(inventory.descriptors.map(({ pluginId }) => pluginId)).toEqual(
+              existingOwner ? ["early-owner"] : [],
+            );
             return await withPluginLifecycleLease({ env }, async (lease) => {
               const indexOptions = { config: cfg, env, filePath: lease.databasePath, lease };
               const records = (await readInstallRecords(indexOptions)) ?? {};
@@ -97,20 +101,25 @@ module.exports = { stateMigrations: [{
                 records,
               };
             });
-          },
-        );
+          });
 
         await using ctx = await prepareDoctorContext(configPath);
+        expect(install).toHaveBeenCalledOnce();
         const markers = pluginIds.map((id) => path.join(stateDir, `${id}-migrated`));
         expect(markers.map((file) => fs.existsSync(file))).toEqual(pluginIds.map(() => false));
         assert.ok(ctx.runWithPluginMetadataSnapshot);
         await ctx.runWithPluginMetadataSnapshot({ config: ctx.cfg }, () =>
           runSessionTranscriptsHealth(ctx),
         );
-        const receipt = ctx.configResult.stateMigrationStepReceipts?.at(-1);
-        expect(receipt?.outcome).toBe("completed");
-        expect(receipt?.changes).toEqual(pluginIds.map((pluginId) => `migrated ${pluginId}`));
-        expect(receipt?.warnings).toEqual([]);
+        expect(ctx.configResult.stateMigrationStepReceipts?.at(-1)).toMatchObject({
+          id: "plugin-doctor-post-session-state",
+          outcome: "completed",
+          changes: pluginIds.map((pluginId) => `migrated ${pluginId}`),
+          warnings: [],
+        });
+        expect(ctx.configResult.postSessionPluginMigration?.plannedActions).toEqual(
+          pluginIds.map((pluginId) => ({ pluginId, id: "session-state" })),
+        );
         expect(markers.map((file) => fs.readFileSync(file, "utf8"))).toEqual(
           pluginIds.map(() => "migrated"),
         );

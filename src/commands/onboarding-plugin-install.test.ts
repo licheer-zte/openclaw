@@ -107,12 +107,11 @@ vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) =
   loadInstalledPluginIndexInstallRecords: async () => ({}),
 }));
 
-const withPluginLifecycleLeaseAsync = vi.hoisted(() =>
+const withPluginLifecycleLease = vi.hoisted(() =>
   vi.fn(async (_options: unknown, run: () => Promise<unknown>) => await run()),
 );
-vi.mock("../plugins/plugin-lifecycle-lease.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/plugin-lifecycle-lease.js")>()),
-  withPluginLifecycleLeaseAsync,
+vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
+  withPluginLifecycleLease,
 }));
 
 const withTimeout = vi.hoisted(() => vi.fn(async <T>(promise: Promise<T>) => await promise));
@@ -134,12 +133,10 @@ vi.mock("../plugins/capability-consent.js", async (importOriginal) => ({
 import { ensureChannelSetupPluginInstalled } from "./channel-setup/plugin-install.js";
 import { ensureOnboardingPluginInstalled } from "./onboarding-plugin-install.js";
 import {
-  bundledDirectory,
   clawHubRecord,
   installEntry,
   installedPlugin,
   installPolicyConfig,
-  localWorkspace,
   notInstalled,
 } from "./onboarding-plugin-install.test-fixtures.js";
 import type { OnboardingPluginInstallOptions } from "./onboarding-plugin-install.types.js";
@@ -237,6 +234,20 @@ async function useArtifactConsent() {
 const skipOption = { value: "skip", label: "Skip for now" };
 function localOption(hint: string) {
   return { value: "local", label: "Use local plugin path", hint };
+}
+
+async function localWorkspace(root: string) {
+  const workspaceDir = path.join(root, "workspace");
+  const pluginDir = path.join(workspaceDir, "plugins", "demo");
+  await fs.mkdir(path.join(workspaceDir, ".git"), { recursive: true });
+  await fs.mkdir(pluginDir, { recursive: true });
+  return { workspaceDir, realPluginDir: await fs.realpath(pluginDir) };
+}
+
+async function bundledDirectory(root: string, pluginId: string) {
+  const dir = path.join(root, "dist", "extensions", pluginId);
+  await fs.mkdir(dir, { recursive: true });
+  return fs.realpath(dir);
 }
 
 function blockEnablement(pluginId: string) {
@@ -576,7 +587,7 @@ describe("ensureOnboardingPluginInstalled", () => {
 
     expect(installProgress).toHaveBeenCalledWith("正在安装 Demo Plugin 插件...");
     expect(note).toHaveBeenCalledWith("无法启用 Demo Plugin：blocked by allowlist。", "插件安装");
-    expect(withPluginLifecycleLeaseAsync).toHaveBeenCalledOnce();
+    expect(withPluginLifecycleLease).toHaveBeenCalledOnce();
   });
 
   it("refuses non-skipped installs in Nix mode before package work", async () => {
@@ -779,7 +790,7 @@ describe("ensureOnboardingPluginInstalled", () => {
     let leaseActive = false;
     const cleanup = createDeferredCore();
     const aborted = createDeferredCore();
-    withPluginLifecycleLeaseAsync.mockImplementationOnce(async (_options, run) => {
+    withPluginLifecycleLease.mockImplementationOnce(async (_options, run) => {
       leaseActive = true;
       try {
         return await run();

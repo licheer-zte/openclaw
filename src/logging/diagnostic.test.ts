@@ -7,6 +7,7 @@ import {
   setDiagnosticsEnabledForProcess,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import { emitCoreSemanticRunProgressDiagnosticEvent } from "../infra/diagnostic-semantic-run-progress.js";
 import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -284,7 +285,9 @@ describe("stuck session diagnostics threshold", () => {
         {
           recoverStuckSession,
           ...(isModel
-            ? { testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 90_000 } }
+            ? {
+                testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 90_000 },
+              }
             : {}),
         },
       );
@@ -392,6 +395,32 @@ describe("stuck session diagnostics threshold", () => {
       expect(recover).not.toHaveBeenCalled();
     },
   );
+
+  it("does not recover repeated requests after semantic output resets the clock", async () => {
+    const stuckSessionAbortMs = 90_000;
+    startHeartbeat({
+      recoverStuckSession,
+      testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs },
+    });
+    const ref = { ...session, runId: "run-1" };
+    logSessionStateChange({ ...ref, state: "processing" });
+    markDiagnosticEmbeddedRunStarted(ref);
+    startModel(repeatedRequest);
+    vi.advanceTimersByTime(30_000);
+    startModel(repeatedRequest);
+    emitCoreSemanticRunProgressDiagnosticEvent({ ...ref, reason: "assistant:progress" });
+    await vi.advanceTimersByTimeAsync(0);
+
+    for (let elapsedMs = 0; elapsedMs < stuckSessionAbortMs; elapsedMs += 30_000) {
+      vi.advanceTimersByTime(30_000);
+      markDiagnosticRunProgress({ ...ref, reason: "model_call:stream_progress" });
+    }
+
+    expect(eventsOf("session.stalled")).not.toContainEqual(
+      expect.objectContaining({ reason: "repeated_model_requests_without_progress" }),
+    );
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+  });
 
   it.each([true, false])(
     "reconciles idle queued work only without an embedded owner (%s)",
@@ -547,8 +576,14 @@ describe("stuck session diagnostics threshold", () => {
     vi.advanceTimersByTime(30_000);
 
     expectLoggerMessageContaining(warnSpy, "degradedFor=60s");
-    expect(lastEvent("diagnostic.liveness.warning")).toMatchObject({ degradedSinceMs: 60_000 });
-    expectStability({ type: "diagnostic.liveness.warning", level: "warning", durationMs: 60_000 });
+    expect(lastEvent("diagnostic.liveness.warning")).toMatchObject({
+      degradedSinceMs: 60_000,
+    });
+    expectStability({
+      type: "diagnostic.liveness.warning",
+      level: "warning",
+      durationMs: 60_000,
+    });
 
     vi.advanceTimersByTime(90_000);
     expect(eventsOf("diagnostic.liveness.warning")).toHaveLength(1);

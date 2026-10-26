@@ -6,7 +6,6 @@ import {
   readPositiveIntegerParam,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
-import type { DecisionRuntimeV2 } from "openclaw/plugin-sdk/decisions";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import {
   asNullableRecord,
@@ -16,7 +15,6 @@ import {
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import type { createBrowserToolSessionTabs } from "./browser-tool-session-tabs.js";
-import { judgeBrowserPage } from "./browser-tool.judge.js";
 import type { BrowserToolCapabilities } from "./browser-tool.schema.js";
 import {
   executeScreenshotAction,
@@ -30,7 +28,7 @@ import {
   wrapBrowserExternalText,
 } from "./browser-tool.snapshot.js";
 import { BROWSER_ACT_KIND_FACTS } from "./browser/act-kinds.js";
-import type { BrowserActionOk } from "./browser/client-actions-types.js";
+import type { BrowserActionOk, BrowserBatchAbort } from "./browser/client-actions-types.js";
 import {
   browserAct,
   browserArmDialog,
@@ -111,6 +109,24 @@ function formatAgentTab(source: BrowserTab): Record<string, unknown> {
   };
 }
 
+function formatTabsToolResult(result: {
+  running: boolean;
+  tabs: BrowserTab[];
+}): AgentToolResult<unknown> {
+  const formattedTabs = result.tabs.map(formatAgentTab);
+  const wrapped = wrapBrowserExternalJson({
+    kind: "tabs",
+    payload: { running: result.running, tabs: formattedTabs },
+    includeWarning: false,
+  });
+  return textResult(wrapped.wrappedText, {
+    ...wrapped.safeDetails,
+    running: result.running,
+    tabCount: formattedTabs.length,
+    tabs: formattedTabs,
+  });
+}
+
 /** Protect page-controlled model text while preserving the shipped structured result contract. */
 function formatBrowserExternalToolResult(params: {
   kind: "act" | "download" | "tabs";
@@ -154,6 +170,26 @@ function actObservedNavigation(result: BrowserActResponse): boolean {
   );
 }
 
+function formatActToolResult(
+  result: unknown,
+  aborted: BrowserBatchAbort | undefined,
+): AgentToolResult<unknown> {
+  const formatted = formatBrowserExternalToolResult({ kind: "act", payload: result });
+  if (!aborted) {
+    return formatted;
+  }
+  // Navigation aborts get fresh page state (or an unavailable hint) appended by
+  // finishActResult, so only the closed case tells the model to snapshot manually.
+  const note =
+    aborted.reason === "navigation"
+      ? `Batch aborted after action ${aborted.afterAction} because the page navigated; ${aborted.skipped} remaining action(s) skipped. Earlier refs are stale.`
+      : `Batch aborted after action ${aborted.afterAction} because the page or browser context closed; ${aborted.skipped} remaining action(s) skipped. Take a new snapshot before continuing.`;
+  return {
+    ...formatted,
+    content: [...formatted.content, { type: "text", text: note }],
+  };
+}
+
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
   const targetId = normalizeOptionalString(params.targetId);
   const timeoutMs = readPositiveIntegerParam(params, "timeoutMs", {
@@ -186,7 +222,6 @@ export async function executeBrowserTabAction(context: {
   requestedTimeoutMs?: number;
   signal?: AbortSignal;
   opts?: BrowserScreenshotOptions;
-  judgment?: { decisions: DecisionRuntimeV2; agentId: string };
   onTabActivity: (targetId: string | undefined, openedProfile?: string) => void | Promise<void>;
 }): Promise<AgentToolResult<unknown>> {
   const {
@@ -227,19 +262,7 @@ export async function executeBrowserTabAction(context: {
     const tabs = result.tabs.filter(
       (tab) => !context.boundTargetId || readStringValue(tab.targetId) === context.boundTargetId,
     );
-    const running = result.running;
-    const formattedTabs = tabs.map(formatAgentTab);
-    const wrapped = wrapBrowserExternalJson({
-      kind: "tabs",
-      payload: { running, tabs: formattedTabs },
-      includeWarning: false,
-    });
-    return textResult(wrapped.wrappedText, {
-      ...wrapped.safeDetails,
-      running,
-      tabCount: formattedTabs.length,
-      tabs: formattedTabs,
-    });
+    return formatTabsToolResult({ running: result.running, tabs });
   }
 
   async function executeConsoleAction(): Promise<AgentToolResult<unknown>> {
@@ -396,19 +419,7 @@ export async function executeBrowserTabAction(context: {
           ? sessionTabs.untrack
           : touchTab;
       await onTabResult(resolvedTargetId);
-      let formatted = formatBrowserExternalToolResult({ kind: "act", payload: result });
-      if (aborted) {
-        // Navigation aborts get fresh page state (or an unavailable hint) appended by
-        // finishActResult, so only the closed case tells the model to snapshot manually.
-        const note =
-          aborted.reason === "navigation"
-            ? `Batch aborted after action ${aborted.afterAction} because the page navigated; ${aborted.skipped} remaining action(s) skipped. Earlier refs are stale.`
-            : `Batch aborted after action ${aborted.afterAction} because the page or browser context closed; ${aborted.skipped} remaining action(s) skipped. Take a new snapshot before continuing.`;
-        formatted = {
-          ...formatted,
-          content: [...formatted.content, { type: "text", text: note }],
-        };
-      }
+      const formatted = formatActToolResult(result, aborted);
       if (!actObservedNavigation(result)) {
         return formatted;
       }
@@ -587,21 +598,6 @@ export async function executeBrowserTabAction(context: {
       const canonicalTargetId = readStringValue(asNullableRecord(result.details)?.targetId);
       await touchTab(canonicalTargetId ?? targetId);
       return result;
-    }
-    case "judge": {
-      if (!context.judgment) {
-        throw new Error("Browser judgment requires this agent's bound Decision runtime.");
-      }
-      const result = await judgeBrowserPage({
-        target,
-        targetId: normalizeOptionalString(params.targetId),
-        profile,
-        signal,
-        ...context.judgment,
-      });
-      await touchTab(result.targetId);
-      const wrapped = wrapBrowserExternalJson({ kind: "judge", payload: result });
-      return textResult(wrapped.wrappedText, { ...wrapped.safeDetails, ...result });
     }
     case "requests":
     case "errors":

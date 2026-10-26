@@ -57,9 +57,13 @@ const { feed, record, library } = vi.hoisted(() => {
             .slice(0, limit),
       ),
       listWorkshopArchive: vi.fn(async () => [
-        { name: "deploy", versions: [{ id: "v-before-review" }] },
+        { name: "deploy", versions: [{ id: "v-before-review" }, { id: "v-after-first-patch" }] },
       ]),
-      listWorkshopSkills: vi.fn(async () => [{ name: "release" }]),
+      listWorkshopSkills: vi.fn(async () =>
+        [...new Map(changes.map(({ skillName, action }) => [skillName, action]))]
+          .filter(([, action]) => action !== "archive")
+          .map(([name]) => ({ name })),
+      ),
       restoreWorkshopSkill: vi.fn(mutate("restore")),
       archiveWorkshopSkill: vi.fn(mutate("archive")),
     },
@@ -235,18 +239,13 @@ describe("postWorkshopChangeNotice", () => {
             presentation: { blocks: [{ type: "buttons", buttons: [button] }] },
           },
         ],
-        session: expect.objectContaining({ key: sessionKey }),
-        deliveryIntentId: expect.stringMatching(/^skill-workshop-notice:/),
+        mirror: expect.objectContaining({ sessionKey, deliveryMirror: marker(true) }),
       }),
       undefined,
       undefined,
       generation(sessionKey),
     );
-    // The session records its own notice once, with the marker the Control UI renders.
-    expect(mocks.append).toHaveBeenCalledOnce();
-    expect(mocks.append).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionKey, deliveryMirror: marker(true) }),
-    );
+    expect(mocks.append).not.toHaveBeenCalled();
     expect(mocks.enqueue).toHaveBeenCalledTimes(1);
     expect(mocks.enqueue).toHaveBeenCalledWith(
       expect.stringContaining("skill_workshop action=restore name=budget version=v1;"),
@@ -289,6 +288,7 @@ describe("postWorkshopChangeNotice", () => {
   });
 
   it.each([
+    ["reset", { ...sessionEntry, lifecycleRevision: "reset-revision" }],
     ["replacement", { ...sessionEntry, sessionId: "replacement-session" }],
     ["deletion", undefined],
   ])("leaves a conversation untouched after %s", async (_change, entry) => {

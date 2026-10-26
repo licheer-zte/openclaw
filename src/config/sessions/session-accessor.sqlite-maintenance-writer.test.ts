@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterAll, afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
@@ -14,11 +15,13 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   applySessionEntryLifecycleMutation,
   loadSessionEntry,
   loadTranscriptEventsSync,
+  patchSessionEntryCore,
   replaceSessionEntrySync,
 } from "./session-accessor.js";
 import {
@@ -145,6 +148,28 @@ function createPlannerStore(entryCount = 0, updatedAt?: number, prefix = "planne
   return { database, storePath, key, scope, set, load, prepare, statistics, archived, transcript };
 }
 
+function trackReads(
+  database: ReturnType<typeof openOpenClawAgentDatabase>,
+  name: string,
+  matches: (sql: string) => boolean,
+) {
+  const tracker = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    [name],
+    (sql) => (matches(sql) ? name : null),
+  );
+  onTestFinished(tracker.restore);
+  return tracker;
+}
+
+function trackProtection(database: ReturnType<typeof openOpenClawAgentDatabase>) {
+  return trackReads(database, "protection", (sql) =>
+    sql.includes(
+      'select "current_session_id", "parent_session_key", "session_key", "updated_at" from "session_nodes"',
+    ),
+  );
+}
+
 function expectUnarchived(entry: SessionEntry | undefined, expected: Partial<SessionEntry> = {}) {
   expect(entry).toMatchObject(expected);
   expect(entry?.archivedAt).toBeUndefined();
@@ -169,6 +194,11 @@ it("returns bounded finalization outcomes while preserving conflicts and duplica
     expectedEntry: { ...entries[0]!.expectedEntry, label: "stale duplicate" },
   });
   replaceSessionEntrySync(scope(2), { ...changed.expectedEntry, label: "newer" });
+  const snapshots = trackReads(
+    database,
+    "snapshot",
+    (sql) => /^select\b/i.test(sql) && /\bsession_entry_snapshots\b/i.test(sql),
+  );
   const result = await withSqliteSessionDeletions(
     options,
     entries.map(({ sessionKey, expectedEntry }) => ({ sessionKey, entry: expectedEntry })),
@@ -187,6 +217,9 @@ it("returns bounded finalization outcomes while preserving conflicts and duplica
   );
   expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(1024);
   expect(result.value.committedEntryIndices).toEqual([0, 1]);
+  expect(snapshots.rowCounts.snapshot).toBeLessThanOrEqual(
+    entries.length + result.value.committedEntryIndices.length,
+  );
   for (const index of [0, 1]) {
     expect(load(index)).toBeUndefined();
   }
@@ -194,14 +227,31 @@ it("returns bounded finalization outcomes while preserving conflicts and duplica
   expect(database.db.prepare("SELECT count(*) AS count FROM session_windows").get()?.count).toBe(3);
 });
 
-it("preserves current provider keys", async () => {
+it("avoids inventory projection for sequential writes with no retention candidates", async () => {
+  const { database, scope, load, prepare } = createPlannerStore(32, Date.now());
+  const target = scope(0);
+  const maintain = await prepare();
+  const inventory = trackProtection(database);
+  for (let index = 0; index < 3; index += 1) {
+    await patchSessionEntryCore(target, () => ({ label: `updated-${index}` }), {
+      skipMaintenance: true,
+    });
+    const plan = maintain({ activeSessionKey: target.sessionKey });
+    expect(plan).toMatchObject({ archived: 0, capped: 0, pruned: 0, entryRemovals: [] });
+  }
+  expect(load(0)?.label).toBe("updated-2");
+  expect(inventory.rowCounts.protection).toBe(0);
+});
+
+it("preserves current provider keys without loading unrelated protection rows", async () => {
   const now = freezeTime();
   const expired = now - 40 * day;
-  const { key, set, load, prepare, archived } = createPlannerStore(3, expired);
+  const { database, key, set, load, prepare, archived } = createPlannerStore(3, expired);
   set(2, { updatedAt: now });
   let protectedKey = key(0);
   preserveKeys(() => [protectedKey]);
   const maintain = await prepare();
+  const inventory = trackProtection(database);
   expect(maintain({ forceMaintenance: true }).archivedEntries).toEqual(archived(1));
   expectUnarchived(load(0), { sessionId: "planner-0" });
 
@@ -209,13 +259,14 @@ it("preserves current provider keys", async () => {
   set(2, { updatedAt: expired });
   expect(maintain({ forceMaintenance: true }).archivedEntries).toEqual(archived(0));
   expectUnarchived(load(2), { sessionId: "planner-2", updatedAt: expired });
+  expect(inventory.rowCounts.protection).toBe(0);
 });
 
 it.each([false, true])(
   "loads only age-due maintenance candidates while preserving recent dashboard activity (forced capacity=%s)",
   async (forceMaintenance) => {
     const now = freezeTime();
-    const { key, set, load, prepare } = createPlannerStore(0, undefined, "");
+    const { database, key, set, load, prepare } = createPlannerStore(0, undefined, "");
     const oldModel = "explicit:model-run-00000000-0000-0000-0000-000000000001";
     const pressureModel = "explicit:model-run-00000000-0000-0000-0000-000000000002";
     const fixtures: Array<[string, number, Partial<SessionEntry>?]> = [
@@ -231,6 +282,11 @@ it.each([false, true])(
       set(name, { sessionId: `age-candidate-${index}`, updatedAt: now - ageDays * day, ...entry });
     }
     const maintain = await prepare();
+    const candidates = trackReads(
+      database,
+      "candidates",
+      (sql) => sql.includes("json_group_object") && sql.includes('"session_nodes"'),
+    );
     const plan = maintain({
       forceMaintenance,
       maintenanceConfig: { maxEntries: forceMaintenance ? 5 : 5_000 },
@@ -246,12 +302,13 @@ it.each([false, true])(
       expectUnarchived(load(name));
     }
     expect(load("dashboard:recent-activity")).toMatchObject({ lastActivityAt: now });
+    expect(candidates.rowCounts.candidates).toBe(forceMaintenance ? 5 : 4);
   },
 );
 
-it("preserves active ancestry and cyclic or missing parents", async () => {
+it("limits protection reads to active ancestry and preserves cyclic or missing parents", async () => {
   const now = freezeTime();
-  const { key, set, load, prepare } = createPlannerStore(32, now);
+  const { database, key, set, load, prepare } = createPlannerStore(32, now);
   const expired = now - 40 * day;
   // Root 0; child 1 -> 2; cycle 3 <-> 4; child 5 -> absent 32; unrelated victim 6.
   const parents = [undefined, 2, undefined, 4, 3, 32, undefined];
@@ -262,6 +319,7 @@ it("preserves active ancestry and cyclic or missing parents", async () => {
     });
   }
   const maintain = await prepare();
+  const inventory = trackProtection(database);
   const plan = maintain({
     activeSessionKeys: [key(0), key(1), key(3), key(5)],
   });
@@ -269,6 +327,7 @@ it("preserves active ancestry and cyclic or missing parents", async () => {
   for (const index of [0, 1, 2, 3, 4, 5]) {
     expectUnarchived(load(index), { sessionId: `planner-${index}` });
   }
+  expect(inventory.rowCounts.protection).toBe(6);
 });
 
 it("resolves protection once before capping aged candidates", async () => {
@@ -306,10 +365,11 @@ it("resolves protection once before capping aged candidates", async () => {
   }
 });
 
-it("caps only the oldest eligible activity ties", async () => {
+it("caps only the oldest eligible activity ties without decoding unrelated payloads", async () => {
   const { key, set, load, prepare } = createPlannerStore(0, undefined, "bounded");
   const now = freezeTime();
   const old = now - 10 * day;
+  const untouchedPayload = "unselected-maintenance-payload".repeat(1_000);
   const fixtures: Array<[string, Partial<SessionEntry>]> = [
     ["oldest", { updatedAt: old + 1 }],
     ["tie-\uE000", { updatedAt: old + 2, lastInteractionAt: old + 10 }],
@@ -335,11 +395,13 @@ it("caps only the oldest eligible activity ties", async () => {
     set(name, {
       sessionId: `bounded-${index}`,
       updatedAt: old,
+      label: victims.includes(key(name)) ? name : untouchedPayload,
       ...entry,
     });
   }
   preserveKeys(() => [key("live")]);
   const maintain = await prepare();
+  const parse = vi.spyOn(JSON, "parse");
   const plan = maintain({
     maintenanceConfig: {
       archiveDashboardAfterMs: null,
@@ -352,6 +414,10 @@ it("caps only the oldest eligible activity ties", async () => {
     { sessionKey: key("tie-\u{10000}"), sessionId: "bounded-2" },
   ]);
   expect(plan).toMatchObject({ archived: 2, capArchived: 2, capped: 2 });
+  expect(parse.mock.calls.some(([serialized]) => serialized.includes(untouchedPayload))).toBe(
+    false,
+  );
+  parse.mockRestore();
   for (const [name] of fixtures) {
     expect(load(name)?.archivedAt !== undefined).toBe(victims.includes(key(name)));
   }
@@ -391,9 +457,10 @@ it.each(["session-key", "session-id"] as const)(
   },
 );
 
-it("preserves unrelated rows when a requested lifecycle removal does not match", async () => {
+it("does not rescan unrelated rows when a requested lifecycle removal does not match", async () => {
   const { storePath, load, transcript } = createPlannerStore(2);
   const { target: retained, events } = transcript(1, "retained");
+  const parseSpy = vi.spyOn(JSON, "parse");
   await expect(
     applySessionEntryLifecycleMutation({
       storePath,
@@ -412,6 +479,11 @@ it("preserves unrelated rows when a requested lifecycle removal does not match",
     archivedTranscriptDirectories: [],
   });
 
+  // Allow the builder snapshot and before/after counts, but no unused deletion scans.
+  expect(
+    parseSpy.mock.calls.filter(([serialized]) => serialized.includes('"planner-1"')).length,
+  ).toBeLessThanOrEqual(3);
+  parseSpy.mockRestore();
   expect(load(0)?.label).toBe("updated");
   expect(loadSessionEntry(retained)?.sessionId).toBe(retained.sessionId);
   expect(loadTranscriptEventsSync(retained)).toEqual(events);

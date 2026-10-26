@@ -42,9 +42,6 @@ const mocks = vi.hoisted(() => {
     databasePath: "/tmp/openclaw-plugin-index.sqlite",
     signal: new AbortController().signal,
     assertOwned: vi.fn(),
-    assertCurrent: (): void => {
-      lease.assertOwned();
-    },
     assertOwnedInTransaction: vi.fn(),
   };
   return {
@@ -56,7 +53,7 @@ const mocks = vi.hoisted(() => {
         typeof import("./installed-plugin-index-store-write.js").restorePersistedInstalledPluginIndexIfCurrent
       >(),
     transformConfigFileWithRetry: vi.fn(),
-    withPluginLifecycleLeaseAsync: vi.fn(
+    withPluginLifecycleLease: vi.fn(
       async (_options: unknown, run: (activeLease: typeof lease) => Promise<unknown>) =>
         await run(lease),
     ),
@@ -96,9 +93,8 @@ vi.mock("./installed-plugin-index-store-write.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./plugin-lifecycle-lease.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./plugin-lifecycle-lease.js")>()),
-  withPluginLifecycleLeaseAsync: mocks.withPluginLifecycleLeaseAsync,
+vi.mock("./plugin-lifecycle-lease.js", () => ({
+  withPluginLifecycleLease: mocks.withPluginLifecycleLease,
 }));
 
 import {
@@ -260,12 +256,9 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     }
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
       nextConfig: strippedConfig,
-      ...(pending ? { baseHash: "config-1" } : {}),
-      writeOptions: {
-        assertConfigPathForWrite: expect.any(Function),
-        beforeCommit: expect.any(Function),
-        ...(pending ? { unsetPaths: [["plugins", "installs"]] } : {}),
-      },
+      ...(pending
+        ? { baseHash: "config-1", writeOptions: { unsetPaths: [["plugins", "installs"]] } }
+        : {}),
     });
     expect(result).toMatchObject({
       path: "/tmp/openclaw.json",
@@ -339,8 +332,6 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       nextConfig: {},
       snapshot,
       writeOptions: {
-        assertConfigPathForWrite: expect.any(Function),
-        beforeCommit: expect.any(Function),
         unsetPaths: [["plugins", "installs"]],
       },
     });

@@ -7,7 +7,6 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers
 import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
 import * as sandboxWorkspace from "../../agents/sandbox/context.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
-import * as workspace from "../../agents/workspace.js";
 import { initializeGitFixture } from "../../agents/worktrees/git-fixture.test-support.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { insertRegistryWorktree, updateRegistryWorktree } from "../../agents/worktrees/registry.js";
@@ -107,10 +106,8 @@ it.for(["off", "all"] as const)(
   "prepares both owners' global attachments with sandbox %s",
   async (mode, { state }) => {
     const cfg = attachmentConfig(state, { mode, global: true });
-    const preparation = vi.spyOn(workspace, "ensureSandboxWorkspace");
     const paths: string[] = [];
     for (const agentId of ["main", "work"]) {
-      preparation.mockClear();
       const bytes = `${agentId} attachment contents`;
       const fileName = "notes café 雪 🦞.txt";
       const { result, respond } = await prepareAttachmentFixture({
@@ -126,7 +123,6 @@ it.for(["off", "all"] as const)(
       expect(media.fileName).toBe(fileName);
       const file = path.resolve(media.workspaceDir!, media.path!);
       expect(await fs.readFile(file, "utf8")).toBe(bytes);
-      expect(preparation).toHaveBeenCalledTimes(mode === "all" ? 1 : 0);
       paths.push(file);
       if (mode === "all") {
         expect(file.startsWith(state.path("sandboxes"))).toBe(true);
@@ -171,34 +167,17 @@ it("stages managed session follow-ups in their projection and rejects unrelated 
     worktree: { id: worktree.id, branch: worktree.branch, repoRoot: repository },
   };
   await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
-  for (const selection of ["cwd", "workspace", "unrelated", "revoked", "removed"] as const) {
+  for (const selection of ["cwd", "workspace", "unrelated", "removed"] as const) {
     if (selection === "removed") {
       await updateRegistryWorktree(process.env, worktree.id, { removedAt: 2 });
     }
     const selectedEntry = {
       ...entry,
-      spawnedCwd:
-        selection === "unrelated" || selection === "workspace" ? state.workspaceDir : checkout,
+      spawnedCwd: selection === "cwd" || selection === "removed" ? checkout : state.workspaceDir,
       ...(selection === "workspace"
         ? { spawnedBy: "agent:main:parent", spawnedWorkspaceDir: checkout }
         : {}),
     };
-    const projectionBefore = await readLocalWorkspaceProjection(worktree.id);
-    const filesBefore =
-      selection === "revoked" && projectionBefore
-        ? await fs.readdir(path.join(projectionBefore.projection_path, "media", "inbound"))
-        : undefined;
-    const prepare = sandboxWorkspace.prepareSandboxWorkspaceForSession;
-    const revokePreparation =
-      selection === "revoked"
-        ? vi
-            .spyOn(sandboxWorkspace, "prepareSandboxWorkspaceForSession")
-            .mockImplementationOnce(async (...args) => {
-              const prepared = await prepare(...args);
-              await updateRegistryWorktree(process.env, worktree.id, { removedAt: 2 });
-              return prepared;
-            })
-        : undefined;
     const { result, respond } = await prepareAttachmentFixture({
       params: attachmentParams(`managed-${selection}`, "comment.txt", "Comment", { sessionKey }),
       session: {
@@ -211,17 +190,6 @@ it("stages managed session follow-ups in their projection and rejects unrelated 
       abortCleanup() {},
       context: { logGateway: createSubsystemLogger("test/managed-media") },
     });
-    revokePreparation?.mockRestore();
-    if (selection === "revoked") {
-      expect(result.ok).toBe(false);
-      expectRpcError(respond, { code: "UNAVAILABLE" });
-      expect(
-        (
-          await fs.readdir(path.join(projectionBefore!.projection_path, "media", "inbound"))
-        ).toSorted(),
-      ).toEqual(filesBefore?.toSorted());
-      continue;
-    }
     if (selection === "unrelated" || selection === "removed") {
       expect(result.ok).toBe(false);
       expectRpcError(respond, {
@@ -272,7 +240,7 @@ it.for([
   if (stopped) {
     release();
   }
-  const sandboxSpy = vi.spyOn(sandboxWorkspace, "prepareSandboxWorkspaceForSession");
+  const sandboxSpy = vi.spyOn(sandboxWorkspace, "ensureSandboxWorkspaceForSession");
   try {
     const prepared = await upload.prepare();
     if (canTransfer && stopped) {
@@ -349,7 +317,7 @@ it.for([
     const cleanupRelease = createDeferred();
     const discard = attachments.discardPreparedInboundMedia;
     const parse = attachments.parseMessageWithAttachments;
-    const ensureSandbox = sandboxWorkspace.prepareSandboxWorkspaceForSession;
+    const ensureSandbox = sandboxWorkspace.ensureSandboxWorkspaceForSession;
     const preparationEntered = createDeferred();
     const parseSpy = vi
       .spyOn(attachments, "parseMessageWithAttachments")
@@ -365,7 +333,7 @@ it.for([
     const sandboxSpy =
       preparation === "sandbox-null"
         ? vi
-            .spyOn(sandboxWorkspace, "prepareSandboxWorkspaceForSession")
+            .spyOn(sandboxWorkspace, "ensureSandboxWorkspaceForSession")
             .mockImplementation(async (...args) => {
               const result = await ensureSandbox(...args);
               if (result !== null) {

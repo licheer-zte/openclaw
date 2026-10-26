@@ -44,7 +44,6 @@ function fixture(
       },
     ],
     context: { config, agentId: "main", sessionKey: "agent:main:cron:probe" },
-    scheduledToolPolicy: undefined,
   }));
   const runtime = createCronScriptRuntime({
     config,

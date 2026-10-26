@@ -180,9 +180,8 @@ function codeUrl(url: string, packageRoot: string | null): string | undefined {
   if (dependency) {
     return `node_modules/${dependency}`;
   }
-  return /^(?:packages\/[a-zA-Z0-9_@.+-]+\/)?(?:src|dist)\/[a-zA-Z0-9_@./+-]+\.[cm]?js$/.test(
-    relative,
-  ) || /^(?:packages\/[a-zA-Z0-9_@.+-]+\/)?src\/[a-zA-Z0-9_@./+-]+\.ts$/.test(relative)
+  return /^(?:src|dist)\/[a-zA-Z0-9_@./+-]+\.[cm]?js$/.test(relative) ||
+    /^src\/[a-zA-Z0-9_@./+-]+\.ts$/.test(relative)
     ? `openclaw:${relative}`
     : undefined;
 }

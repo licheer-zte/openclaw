@@ -57,7 +57,11 @@ it("keeps A offline input with A when a same-client B hello replaces the pane be
     admitStoredChatComposerQueueItemResult(
       state,
       captureChatOutboxAdmission(state, state.sessionKey),
-      { id: "a-queue", text: "A queued work", createdAt: 1 },
+      {
+        id: "a-queue",
+        text: "A queued work",
+        createdAt: 1,
+      },
     ),
   ).toBe("admitted");
   const attachment: ChatAttachment = {
@@ -96,7 +100,8 @@ it("keeps A offline input with A when a same-client B hello replaces the pane be
   b.start();
   b.persistChangedState();
   await settle();
-  expect(destination).toMatchObject({ chatMessage: "", chatAttachments: [] });
+  expect(destination.chatMessage).toBe("");
+  expect(destination.chatAttachments).toEqual([]);
   expect(loadChatComposerState(destination, destination.sessionKey).snapshot?.draft ?? "").toBe("");
   expect(
     write.mock.calls

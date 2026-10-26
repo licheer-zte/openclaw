@@ -19,20 +19,13 @@ function setup(runId: string) {
   });
   return {
     ...harness,
-    endText: (message: AssistantMessage, text: string) =>
-      harness.update(message, {
-        type: "text_end",
-        contentIndex: 0,
-        content: text,
-        partial: message,
-      }),
     texts: () => harness.onBlockReply.mock.calls.map(([payload]) => payload.text),
   };
 }
 
 describe("native Ollama pre-tool narration", () => {
   it("streams two narrated tool rounds and the final answer exactly once", async () => {
-    const { emit, update, endText, subscription, texts } = setup("run-ollama-stream");
+    const { emit, update, subscription, texts } = setup("run-ollama-stream");
     const expected: string[] = [];
 
     for (const [index, path] of ["README.md", "NOTES.md"].entries()) {
@@ -52,7 +45,12 @@ describe("native Ollama pre-tool narration", () => {
       expect(texts()).toEqual(expected);
 
       // Native Ollama keeps the same unsigned text through the tool boundary.
-      endText(unsigned, narration);
+      update(unsigned, {
+        type: "text_end",
+        contentIndex: 0,
+        content: narration,
+        partial: unsigned,
+      });
       await subscription.waitForPendingEvents();
       expect(texts()).toEqual(expected);
 
@@ -94,7 +92,12 @@ describe("native Ollama pre-tool narration", () => {
     const finalMessage = { ...ollamaAssistant(answer), stopReason: "stop" as const };
     emit({ type: "message_start", message: ollamaAssistant("") });
     update(finalMessage, { type: "text_delta", contentIndex: 0, delta: answer });
-    endText(finalMessage, answer);
+    update(finalMessage, {
+      type: "text_end",
+      contentIndex: 0,
+      content: answer,
+      partial: finalMessage,
+    });
     await subscription.waitForPendingEvents();
     expected.push(answer);
     expect(texts()).toEqual(expected);

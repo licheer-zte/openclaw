@@ -46,7 +46,6 @@ export const GatewayErrorDetailCodes = {
   CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED: "CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED",
   CLAW_REVIEW_REQUIRED: "CLAW_REVIEW_REQUIRED",
   PENDING_INPUT_NOT_RETIRED: "PENDING_INPUT_NOT_RETIRED",
-  OPENCLAW_CONFIG_READONLY: "OPENCLAW_CONFIG_READONLY",
 } as const;
 
 /** Missing cron automation identified by its exact store key. */
@@ -143,8 +142,7 @@ export type GatewayErrorDetails =
   | ClawHubRiskAcknowledgementRequiredErrorDetails
   | ClawReviewRequiredErrorDetails
   | PendingInputNotRetiredErrorDetails
-  | { code: typeof GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY }
-  | { code: typeof GatewayErrorDetailCodes.OPENCLAW_CONFIG_READONLY };
+  | { code: typeof GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY };
 
 export function readClawHubRiskAcknowledgementRequiredError(
   error: unknown,

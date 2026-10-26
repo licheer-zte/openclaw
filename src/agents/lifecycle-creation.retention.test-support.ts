@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { once } from "node:events";
-import { MessageChannel } from "node:worker_threads";
+import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import { collectForRetentionCheck } from "../test-utils/retention.js";
 import type { ProviderLocalServiceLease } from "./provider-local-service-target.js";
 import {
@@ -12,11 +12,14 @@ import { createProviderLocalServiceTestFixture } from "./provider-local-service.
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const callerContext = new AsyncLocalStorage<{ label: string; prompt: Buffer }>();
-const references: WeakRef<object>[] = [];
+const references: { label: string; reference: WeakRef<object> }[] = [];
 
 async function completedCaller(label: string, operation: () => Promise<void> | void) {
   const caller = { label, prompt: Buffer.alloc(1024 * 1024, "synthetic") };
-  references.push(new WeakRef(caller), new WeakRef(caller.prompt));
+  references.push(
+    { label, reference: new WeakRef(caller) },
+    { label: `${label} prompt`, reference: new WeakRef(caller.prompt) },
+  );
   await callerContext.run(caller, async () => {
     await operation();
     assert.equal(callerContext.getStore(), caller, "Caller authority must survive its operation");
@@ -26,9 +29,12 @@ async function completedCaller(label: string, operation: () => Promise<void> | v
 const { complete } = await import("../llm/stream.js");
 const model = makeProviderModelFixture<"openai-completions">({
   id: "synthetic",
+  name: "Synthetic",
   api: "openai-completions",
   provider: "synthetic",
   baseUrl: "http://127.0.0.1:1",
+  contextWindow: 4096,
+  maxTokens: 128,
 });
 await completedCaller("LLM initialization", async () => {
   const stopped = new Error("synthetic request finished after host initialization");
@@ -42,12 +48,19 @@ await completedCaller("LLM initialization", async () => {
 });
 
 const { nativePortIsOpen } = await import("../infra/worker-native-port.js");
-const { port1, port2 } = new MessageChannel();
-const closed = once(port1, "close");
-port1.close();
-port2.close();
-await closed;
-assert.equal(nativePortIsOpen(port1), false);
+const channel = new MessageChannel();
+try {
+  assert.equal(nativePortIsOpen(channel.port1), true);
+  channel.port1.postMessage("still owned");
+  assert.deepEqual(receiveMessageOnPort(channel.port2), { message: "still owned" });
+  const closed = once(channel.port1, "close");
+  channel.port1.close();
+  await closed;
+  assert.equal(nativePortIsOpen(channel.port1), false);
+} finally {
+  channel.port1.close();
+  channel.port2.close();
+}
 
 const fixture = createProviderLocalServiceTestFixture();
 try {
@@ -78,10 +91,10 @@ try {
     lease = undefined;
   });
   await collectForRetentionCheck("lifecycle-creation");
-  assert.ok(
-    references.every((reference) => reference.deref() === undefined),
-    "Lifecycle resources retained completed callers",
-  );
+  const retained = references
+    .filter(({ reference }) => reference.deref())
+    .map(({ label }) => label);
+  assert.deepEqual(retained, [], "Lifecycle resources retained completed callers");
   const reused = await ensureProviderLocalService(target);
   assert.ok(reused, "The managed service must remain reusable after caller collection");
   assert.equal(getManagedProviderLocalServiceDiagnosticsForTest()[0]?.pid, pid);

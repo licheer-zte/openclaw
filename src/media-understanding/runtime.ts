@@ -46,6 +46,7 @@ export type {
   DescribePreparedImageWithModelParams,
   DescribeImageFileParams,
   DescribeImageFileWithModelParams,
+  PreparedImageDescriptionInput,
   PrepareImageDescriptionInputParams,
   DescribeVideoFileParams,
   ExtractStructuredWithModelParams,

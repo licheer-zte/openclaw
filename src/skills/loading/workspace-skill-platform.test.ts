@@ -30,8 +30,13 @@ async function createPlatformSkills() {
     ["always", { os: [" MacOS "], always: true, requires: { bins: ["missing-tool"] } }],
     ["unsupported", { os: ["unsupported-platform"], always: true }],
   ] as const;
-  const install = ["macos", "linux"].map((os) => ({
-    id: os === "macos" ? "mac-recipe" : "linux-recipe",
+  const install = (
+    [
+      ["mac-recipe", "macos"],
+      ["linux-recipe", "linux"],
+    ] as const
+  ).map(([id, os]) => ({
+    id,
     kind: "download",
     os: [os],
     url: "https://example.com/tool",

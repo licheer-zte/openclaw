@@ -189,7 +189,6 @@ function maintenance(
     }
     return {
       kind: "transcript-maintenance",
-      version: { ...window.hot.transcript.version },
       events: navigation.readCustomBranch(request.leafEntryId, request.customType, (seq) =>
         asOptionalRecord(events.get(seq)),
       ),

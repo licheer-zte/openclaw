@@ -127,6 +127,17 @@ export async function readChromeVersionWithCredentialFallback(
   }
 }
 
+type CdpHealthDiagnostic =
+  | { ok: true; version?: ChromeVersion }
+  | {
+      ok: false;
+      code:
+        | "websocket_handshake_failed"
+        | "websocket_health_command_failed"
+        | "websocket_health_command_timeout";
+      message: string;
+    };
+
 function readObjectString(value: unknown, key: string): string | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
@@ -144,7 +155,7 @@ async function diagnoseCdpHealthCommand(
   timeoutMs = CHROME_WS_READY_TIMEOUT_MS,
   lookup?: CdpEndpointPin["lookup"],
   signal?: AbortSignal,
-) {
+): Promise<CdpHealthDiagnostic> {
   signal?.throwIfAborted();
   const timeout = normalizeBrowserTimerDelayMs(timeoutMs);
   const timerDelayMs = normalizeBrowserTimerDelayMs(timeout + Math.min(25, timeout));
@@ -172,10 +183,10 @@ async function diagnoseCdpHealthCommand(
       },
     );
     return result && typeof result === "object"
-      ? { ok: true as const, version: chromeVersionFromCdpResult(result) }
+      ? { ok: true, version: chromeVersionFromCdpResult(result) }
       : {
-          ok: false as const,
-          code: "websocket_health_command_failed" as const,
+          ok: false,
+          code: "websocket_health_command_failed",
           message: "Browser.getVersion returned no result object",
         };
   } catch (error) {
@@ -198,28 +209,31 @@ async function diagnoseCdpHealthCommand(
             : kind === "protocol"
               ? "Browser.getVersion returned no result object"
               : safeChromeCdpErrorMessage(error),
-    } as const;
+    };
   } finally {
     clearTimeout(timer);
   }
 }
 
-function classifyChromeVersionError(error: unknown) {
+function classifyChromeVersionError(error: unknown): {
+  code: ChromeCdpDiagnosticCode;
+  message: string;
+} {
   const message = safeChromeCdpErrorMessage(error);
   if (error instanceof BrowserCdpEndpointBlockedError) {
-    return { code: "ssrf_blocked", message } as const;
+    return { code: "ssrf_blocked", message };
   }
   if (/^HTTP \d+/.test(message)) {
-    return { code: "http_status_failed", message } as const;
+    return { code: "http_status_failed", message };
   }
   if (
     error instanceof SyntaxError ||
     message.includes("cdp-version: malformed JSON response") ||
     message.includes("non-object JSON")
   ) {
-    return { code: "invalid_json", message } as const;
+    return { code: "invalid_json", message };
   }
-  return { code: "http_unreachable", message } as const;
+  return { code: "http_unreachable", message };
 }
 
 export function formatChromeCdpDiagnostic(diagnostic: ChromeCdpDiagnostic): string {

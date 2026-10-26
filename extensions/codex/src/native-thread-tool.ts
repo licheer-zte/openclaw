@@ -4,7 +4,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { AnyAgentTool, PluginRuntime } from "openclaw/plugin-sdk/core";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readStringParam } from "openclaw/plugin-sdk/param-readers";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
@@ -31,24 +30,6 @@ import {
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
 import { assertCodexArchiveDescendantsUnowned } from "./app-server/thread-archive-guard.js";
 import type { codexControlRequest, CodexControlRequestOptions } from "./command-rpc.js";
-
-const loadSessionBindingRuntime = createLazyRuntimeModule(
-  () => import("openclaw/plugin-sdk/session-binding-runtime"),
-);
-const loadCommandRpc = createLazyRuntimeModule(() => import("./command-rpc.js"));
-const loadModelSessionRuntime = createLazyRuntimeModule(
-  () => import("openclaw/plugin-sdk/model-session-runtime"),
-);
-const loadBindingConnection = createLazyRuntimeModule(
-  () => import("./app-server/binding-connection.js"),
-);
-const loadConfigRuntime = createLazyRuntimeModule(() => import("./app-server/config-runtime.js"));
-const loadThreadOwnership = createLazyRuntimeModule(
-  () => import("./app-server/thread-ownership.js"),
-);
-const loadAttemptClientCleanup = createLazyRuntimeModule(
-  () => import("./app-server/attempt-client-cleanup.js"),
-);
 
 function threadActionSchema<Action extends string, Properties extends TProperties>(
   action: Action,
@@ -237,7 +218,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
       }
       const run = async (archiveThreadId?: string) => {
         const { captureSessionEntryCurrentCheckAsync, composeSessionEntryCommitGuards } =
-          await loadSessionBindingRuntime();
+          await import("openclaw/plugin-sdk/session-binding-runtime");
         prepared =
           sessionKey && agentId
             ? await captureSessionEntryCurrentCheckAsync({
@@ -262,12 +243,13 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
                 identity: currentIdentity(archiveSession.sessionId),
               }
             : undefined;
-        const request = options.request ?? (await loadCommandRpc()).codexControlRequest;
+        const request = options.request ?? (await import("./command-rpc.js")).codexControlRequest;
         const { isModelSelectionLocked, ModelSelectionLockedError } =
-          await loadModelSessionRuntime();
+          await import("openclaw/plugin-sdk/model-session-runtime");
         const { codexBindingConnectionSelection, resolveCodexBindingAppServerConnection } =
-          await loadBindingConnection();
-        const { resolveCodexSupervisionAppServerRuntimeOptions } = await loadConfigRuntime();
+          await import("./app-server/binding-connection.js");
+        const { resolveCodexSupervisionAppServerRuntimeOptions } =
+          await import("./app-server/config-runtime.js");
         const requestOptions = async (): Promise<CodexControlRequestOptions> => {
           const base = {
             agentId,
@@ -448,8 +430,9 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
         const {
           retainCodexAppServerBindingSubscription,
           rollbackCodexAppServerBindingSubscription,
-        } = await loadThreadOwnership();
-        const { closeCodexStartupClientBestEffort } = await loadAttemptClientCleanup();
+        } = await import("./app-server/thread-ownership.js");
+        const { closeCodexStartupClientBestEffort } =
+          await import("./app-server/attempt-client-cleanup.js");
         if (attach) {
           assertCodexBindingMayBeReplaced(binding, "attaching a different native fork");
           // Codex can snapshot an active source as interrupted. Attached forks require a known-safe

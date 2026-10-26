@@ -9,17 +9,32 @@ import {
   makeCall,
   makeTool,
   model as baseModel,
-  reply,
   user,
 } from "./agent-loop.test-support.js";
 import { Agent } from "./agent.js";
 import { getAgentToolExecutionContext } from "./tool-execution-context.js";
+import type { AgentMessage } from "./types.js";
+
+export type ContextRetentionResult = {
+  calls: number;
+  replacements: number;
+  observedHistories: number;
+  retained: number[];
+  completed: boolean;
+  settledToolContext: {
+    snapshots: number;
+    agentRetained: boolean;
+    historyRetained: boolean;
+    attributionPreserved: boolean;
+    pendingInput: boolean;
+  };
+};
 
 const gc = globalThis.gc;
 assert.ok(gc, "The retention child requires --expose-gc");
 const model = { ...baseModel, contextWindow: 1_000_000 };
-const histories: WeakRef<ReturnType<typeof user>>[] = [];
-function history() {
+const histories: WeakRef<AgentMessage>[] = [];
+function history(): AgentMessage {
   const message = user(`old-history-${histories.length}:` + "x".repeat(1024 * 1024), 0);
   histories.push(new WeakRef(message));
   return message;
@@ -37,10 +52,15 @@ const agent = new Agent({
       held.resolve();
       return parked;
     }
-    return reply(finalMessage());
+    const response = createAssistantMessageEventStream();
+    response.push({ type: "done", reason: "stop", message: finalMessage() });
+    response.end();
+    return response;
   },
   prepareNextTurnWithContext: (turn, signal) => {
-    assert.ok(!runSignal || signal === runSignal);
+    if (runSignal) {
+      assert.equal(signal, runSignal);
+    }
     runSignal = signal;
     if (replacements === 4) {
       return undefined;
@@ -79,17 +99,21 @@ try {
 assert.equal(agent.state.errorMessage, undefined);
 
 const snapshots: ReturnType<typeof AsyncLocalStorage.snapshot>[] = [];
-const contextCapturingTool = makeTool("capture_context");
-contextCapturingTool.execute = async () => {
-  assert.ok(getAgentToolExecutionContext()?.pendingInput);
-  snapshots.push(AsyncLocalStorage.snapshot());
-  return { content: [{ type: "text", text: "captured" }], details: {} };
-};
+function createContextCapturingTool() {
+  return {
+    ...makeTool("capture_context"),
+    execute: async () => {
+      assert.ok(getAgentToolExecutionContext()?.pendingInput);
+      snapshots.push(AsyncLocalStorage.snapshot());
+      return { content: [{ type: "text" as const, text: "captured" }], details: {} };
+    },
+  };
+}
 
 async function completeToolRun() {
   const oldHistory = user("settled-history:" + "x".repeat(1024 * 1024), 0);
   const completedAgent = new Agent({
-    initialState: { model, messages: [oldHistory], tools: [contextCapturingTool] },
+    initialState: { model, messages: [oldHistory], tools: [createContextCapturingTool()] },
     streamFn: createTurnSequenceStream([
       [makeCall("capture_context", "retained-tool-call")],
       [{ type: "text", text: "complete" }],
@@ -109,8 +133,16 @@ for (let pass = 0; pass < 8; pass += 1) {
   await setImmediate();
 }
 assert.equal(unowned.deref(), undefined, "The unowned GC control must collect");
-const restoredContext = snapshots[0]?.(getAgentToolExecutionContext);
-const result = {
+const restoredContext = snapshots[0]?.(() => {
+  const context = getAgentToolExecutionContext();
+  return {
+    attributionPreserved:
+      context?.toolCall.id === "retained-tool-call" &&
+      context.assistantMessage.content.includes(context.toolCall),
+    pendingInput: context?.pendingInput?.hasPending() ?? false,
+  };
+});
+const result: ContextRetentionResult = {
   calls,
   replacements,
   observedHistories: histories.length,
@@ -120,11 +152,8 @@ const result = {
     snapshots: snapshots.length,
     agentRetained: settled.agent.deref() !== undefined,
     historyRetained: settled.history.deref() !== undefined,
-    attributionPreserved:
-      restoredContext?.toolCall.id === "retained-tool-call" &&
-      restoredContext.assistantMessage.content.includes(restoredContext.toolCall),
-    pendingInput: restoredContext?.pendingInput?.hasPending() ?? false,
+    attributionPreserved: restoredContext?.attributionPreserved === true,
+    pendingInput: restoredContext?.pendingInput ?? false,
   },
 };
-export type ContextRetentionResult = typeof result;
 process.stdout.write(JSON.stringify(result));

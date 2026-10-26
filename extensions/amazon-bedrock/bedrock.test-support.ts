@@ -36,8 +36,6 @@ export const wireUser = (...content: Record<string, unknown>[]) => ({ role: "use
 export const checkpoint = { cachePoint: { type: "default" } };
 export const png =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
-// Any declared tool makes toolConfig present for native-block replay tests.
-export const readTool = { name: "read", description: "Read a file", parameters: {} };
 export function toolResult(
   toolCallId: string,
   content: ToolResultMessage["content"],
@@ -91,9 +89,22 @@ export async function capturePayload(
   model: BedrockModel,
   context: Context,
   options: BedrockOptions = {},
+  validate?: (input: ConverseStreamCommand["input"]) => void,
 ) {
   const send = mockStream();
-  await streamBedrockForTest(model, context, options).result();
+  if (validate) {
+    send.mockImplementation((command) => {
+      validate(commandInput(command));
+      return {
+        $metadata: { httpStatusCode: 200 },
+        stream: streamEvents([startEvent, stopEvent]),
+      } as never;
+    });
+  }
+  const result = await streamBedrockForTest(model, context, options).result();
+  if (validate) {
+    expect(result.stopReason, result.errorMessage).toBe("stop");
+  }
   return commandInput(send.mock.calls.at(-1)?.[0]);
 }
 export async function collectStream(stream: ReturnType<typeof streamSimpleBedrock>) {

@@ -469,7 +469,7 @@ export async function steerTalkRealtimeRelayAgentRun(params: {
   relaySessionId: string;
   connId: string;
   sessionKey?: string;
-  authority?: import("../client-tool-authority.js").TalkAgentConsultAuthority;
+  authority?: import("../client-gateway-control.js").TalkAgentConsultAuthority;
   text: string;
   mode?: string;
   assertCurrent?: () => void;

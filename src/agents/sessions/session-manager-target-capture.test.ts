@@ -120,6 +120,7 @@ it.each([
         if (entry === "openBounded" || entry === "openBoundedAsync") {
           const limits = { cwd: firstDir, maxEvents: 1, maxBytes: 4096, onTruncated };
           manager = await SessionManager[entry](relative, limits);
+          expect(onTruncated).toHaveBeenCalledOnce();
         } else if (entry === "setSessionTargetAsync" || entry === "setSessionTarget") {
           manager = SessionManager.inMemory(firstDir);
           const pending = manager[entry](relative);
@@ -136,12 +137,11 @@ it.each([
           ...first,
           env: { OPENCLAW_STATE_DIR: state.stateDir },
         });
+        const firstAfter = await loadTranscriptEvents(first);
+        expect(firstAfter.slice(0, firstBefore.length)).toEqual(firstBefore);
         expect
-          .soft(await loadTranscriptEvents(first))
-          .toEqual([
-            ...firstBefore,
-            expect.objectContaining({ type: "thinking_level_change", id, thinkingLevel: "high" }),
-          ]);
+          .soft(firstAfter.slice(firstBefore.length))
+          .toMatchObject([{ type: "thinking_level_change", id, thinkingLevel: "high" }]);
         expect.soft(await loadTranscriptEvents(second)).toEqual(secondBefore);
       } finally {
         process.chdir(previousCwd);

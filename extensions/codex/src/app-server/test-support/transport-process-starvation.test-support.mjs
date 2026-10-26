@@ -28,17 +28,29 @@ if (fixtureProcfs) {
     mapped.set(file, target);
   }
 }
-const { open: originalOpen, readdir: originalReaddir } = fsPromises;
-const result = { inspectionDeadlineMs: 1_000, inspectionSpawns: 0 };
+const originalOpen = fsPromises.open;
+const originalReaddir = fsPromises.readdir;
+let inspectionSpawns = 0;
 installProcfsFixture({
   open: (file, ...args) => originalOpen(mapped.get(file) ?? file, ...args),
-  readdir: (file) =>
+  readdir: (file, options) =>
     fixtureProcfs && file === "/proc"
       ? Promise.resolve([String(process.pid)])
-      : originalReaddir(file, { recursive: false }),
-  onSpawn: () => (result.inspectionSpawns += 1),
+      : originalReaddir(file, {
+          ...(typeof options === "string" ? { encoding: options } : options),
+          // Procfs observations enumerate one directory, never a recursive inventory.
+          recursive: false,
+        }),
+  onSpawn: () => {
+    inspectionSpawns += 1;
+  },
 });
-const [own] = await readCodexAppServerProcessSnapshot(performance.now() + 10_000, [process.pid]);
+const own = (
+  await readCodexAppServerProcessSnapshot(performance.now() + 10_000, [process.pid])
+).find((row) => row.pid === process.pid);
+if (!own) {
+  throw new Error("The observer identity is unavailable.");
+}
 const fifo = path.join(scratch, "worker-blocker");
 execFileSync("mkfifo", [fifo]);
 const fd = fs.openSync(fifo, "r+");
@@ -69,18 +81,28 @@ try {
           ? { commandBytes: Buffer.byteLength(outcome.value) }
           : { observerPresent: outcome.value.some((row) => row.pid === process.pid) }),
     }));
+  const inspectionDeadlineMs = 1_000;
   const started = performance.now();
   const heartbeat = delay(100).then(() => performance.now() - started);
   release = setTimeout(releaseWorker, 5_000);
-  const outcomes = await inspect(started + result.inspectionDeadlineMs);
-  result.inspectionMs = performance.now() - started;
-  result.filesystemWorkerHeldAtInspection = !workerReleased;
+  const outcomes = await inspect(started + inspectionDeadlineMs);
+  const inspectionMs = performance.now() - started;
+  const filesystemWorkerHeldAtInspection = !workerReleased;
+  clearTimeout(release);
   releaseWorker();
   await held;
-  result.outcomes = summarize(outcomes);
-  result.recovered = summarize(await inspect(performance.now() + 10_000));
-  result.firstHeartbeatMs = await heartbeat;
-  console.log(JSON.stringify(result));
+  const recovered = await inspect(performance.now() + 10_000);
+  console.log(
+    JSON.stringify({
+      inspectionDeadlineMs,
+      inspectionMs,
+      firstHeartbeatMs: await heartbeat,
+      filesystemWorkerHeldAtInspection,
+      inspectionSpawns,
+      outcomes: summarize(outcomes),
+      recovered: summarize(recovered),
+    }),
+  );
 } finally {
   clearTimeout(release);
   fs.closeSync(fd);

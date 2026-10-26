@@ -5,6 +5,7 @@ import { assertMemoryAudienceCurrent, delegateMemoryAudience } from "./memory-au
 import {
   AUDIENCE_CHILD_KEY,
   AUDIENCE_ROOT_KEY,
+  NATIVE_PROVIDER_ID,
   childMemoryContext,
   withChildAudience,
   withNativeMemoryProvider,
@@ -25,16 +26,21 @@ const providerOptions = (audience: MemoryAudience) => ({
 // Check live authority after async work, immediately before reading.
 function partitionedProvider(
   context: MemoryCallerContext,
-  reads: boolean[],
+  reads: string[],
   beforeRead: () => Promise<void> = async () => {},
 ): MemoryProviderHandle {
+  const audience = context.authority.kind === "session" ? context.authority.audience : undefined;
   return {
     capabilities: { sources: ["memory"], pagination: false, candidates: [], projectFilter: false },
     search: async () => {
       await beforeRead();
       context.assertCurrent();
-      reads.push(true);
-      return { hits: [] };
+      reads.push(audience?.kind ?? "none");
+      return {
+        hits: audience
+          ? [{ reference: { providerId: NATIVE_PROVIDER_ID, id: audience.kind }, excerpt: "fact" }]
+          : [],
+      };
     },
     get: async () => ({ status: "not_found" }),
     health: async () => ({ status: "ready" }),
@@ -48,7 +54,7 @@ it.each(["child reset", "parent lifecycle change"] as const)(
     withChildAudience(true, async ({ audience, root, child, write }) => {
       const reachedRead = createDeferredCore();
       const releaseRead = createDeferredCore();
-      const reads: boolean[] = [];
+      const reads: string[] = [];
       const openProvider = (context: MemoryCallerContext) =>
         partitionedProvider(context, reads, async () => {
           reachedRead.resolve();
@@ -79,13 +85,16 @@ it("gives a conversation caller its host-minted conversation audience at open", 
       sessionKey: AUDIENCE_ROOT_KEY,
       sessionId: root.sessionId,
     });
+    const reads: string[] = [];
     const opened: Array<MemoryAudience | undefined> = [];
     const openProvider = (context: MemoryCallerContext) => {
       opened.push(context.authority.kind === "session" ? context.authority.audience : undefined);
-      return partitionedProvider(context, []);
+      return partitionedProvider(context, reads);
     };
     await withNativeMemoryProvider(openProvider, async () => {
       const { provider } = await getActiveMemoryProviderCore(providerOptions(audience));
+      const page = await provider!.search({ query: "orders" });
+      expect(page.hits.map((entry) => entry.reference.id)).toEqual(["conversation"]);
       expect(opened).toEqual([audience]);
       await provider!.close();
     });

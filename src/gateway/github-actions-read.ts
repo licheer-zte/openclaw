@@ -140,22 +140,26 @@ export async function readBoardGitHubActions(
       // must not inherit that widget's lifetime; every caller gates delivery below.
       return cache.results.read(key, () =>
         context.trackExecution(async () => {
-          const { value: raw } = await gitHubPublicApi.fetchGitHubJsonPage(
+          const response = await gitHubPublicApi.fetchGitHubApi(
             request.url,
             fetch,
             identity.token,
-            {
-              beforeRedirect: async () => {
-                // A redirect is a new target, not authority to read another repository or operation.
-                throw new BoardValidationError(
-                  "invalid_operation",
-                  "GitHub Actions redirected the request; verify the repository/workflow, update the widget grant if needed, and retry.",
-                );
-              },
-              signal: getAsyncWorkSignal(),
-              apiBaseUrl: gitHubPublicApi.GITHUB_API_ORIGIN,
-              maxBytes: ACTIONS_MAX_RESPONSE_BYTES,
+            async () => {
+              // A redirect is a new target, not authority to read another repository or operation.
+              throw new BoardValidationError(
+                "invalid_operation",
+                "GitHub Actions redirected the request; verify the repository/workflow, update the widget grant if needed, and retry.",
+              );
             },
+            undefined,
+            undefined,
+            getAsyncWorkSignal(),
+            undefined,
+            gitHubPublicApi.GITHUB_API_ORIGIN,
+          );
+          const raw = await gitHubPublicApi.readGitHubJsonResponse(
+            response,
+            ACTIONS_MAX_RESPONSE_BYTES,
           );
           const parsed = runsSchema.safeParse(raw);
           if (

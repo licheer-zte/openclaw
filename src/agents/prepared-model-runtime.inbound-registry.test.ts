@@ -799,10 +799,7 @@ describe("catalog-worker replacement demand", () => {
     async (outcome) => {
       const { input, failure } = await failReplacement();
       mocks.resolveAmbientCredentials.mockClear();
-      await expect(prepareModelRuntimeSnapshot(input)).rejects.toMatchObject({
-        message: failure.message,
-        stack: failure.stack,
-      });
+      await expect(prepareModelRuntimeSnapshot(input)).rejects.toBe(failure);
       expect(mocks.resolveAmbientCredentials).not.toHaveBeenCalled();
       const started = createDeferred();
       const finish = createDeferred();

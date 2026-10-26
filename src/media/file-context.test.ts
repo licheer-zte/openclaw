@@ -3,6 +3,13 @@ import { describe, expect, it } from "vitest";
 import { renderFileContextBlock } from "./file-context.js";
 
 describe("renderFileContextBlock", () => {
+  function expectRenderedContextCase(params: {
+    renderParams: Parameters<typeof renderFileContextBlock>[0];
+    expected: string;
+  }) {
+    expect(renderFileContextBlock(params.renderParams)).toBe(params.expected);
+  }
+
   it.each([
     {
       name: "strips injected filename markup and escapes file tag markers in content",
@@ -32,7 +39,7 @@ describe("renderFileContextBlock", () => {
       },
       expected: '<file name="file-1" mime="text/plain&quot; bad">\nhello\n</file>',
     },
-  ] as const)("$name", ({ renderParams, expected }) => {
-    expect(renderFileContextBlock(renderParams)).toBe(expected);
+  ] as const)("$name", (testCase) => {
+    expectRenderedContextCase(testCase);
   });
 });

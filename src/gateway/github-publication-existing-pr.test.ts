@@ -10,10 +10,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { SessionGitHubPullRequestBinding } from "../config/sessions/types.js";
 import { syncCanonicalGitHubIdentity } from "../state/user-profile-writes.js";
-import {
-  createPublicationRepositories,
-  createRequesterPublicationFixture,
-} from "./github-publication-requester.test-support.js";
+import { createRequesterPublicationFixture } from "./github-publication-requester.test-support.js";
 import {
   commandResult,
   githubPublicationTestMocks,
@@ -37,7 +34,23 @@ async function fixture(fork = false, linked = true) {
   await local.git("add", "original.txt");
   await local.git("commit", "-m", "Original contributor work");
   const originalHead = await local.git("rev-parse", "HEAD");
-  const { baseRepo, headRepo } = createPublicationRepositories(fork);
+  const baseRepo = {
+    id: 10,
+    full_name: "openclaw/openclaw",
+    private: false,
+    archived: false,
+    owner: { type: "Organization" },
+    permissions: { push: true },
+  };
+  const headRepo = fork
+    ? {
+        ...baseRepo,
+        id: 20,
+        full_name: "contributor/openclaw",
+        owner: { type: "User" },
+        permissions: { push: false },
+      }
+    : baseRepo;
   const pr = {
     number: 7,
     html_url: "https://github.com/openclaw/openclaw/pull/7",

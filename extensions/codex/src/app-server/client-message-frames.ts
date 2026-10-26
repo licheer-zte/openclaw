@@ -66,11 +66,9 @@ export function listenCodexAppServerLines(
     input.pause();
   };
   const deliver = (tail: Buffer): boolean => {
-    let line = tail;
-    if (fragments.length) {
-      fragments.push(tail);
-      line = Buffer.concat(fragments, length + tail.length);
-    }
+    const line = fragments.length
+      ? Buffer.concat([...fragments, tail], length + tail.length)
+      : tail;
     fragments.length = 0;
     length = 0;
     const completion = onLine(line);

@@ -1,12 +1,23 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
-import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { SecretsPageState } from "./state.ts";
 import { SecretsStore } from "./view.tsx";
+
+const mounts: ReturnType<typeof mountSolid>[] = [];
+
+afterEach(() => {
+  for (const view of mounts.splice(0)) {
+    view.unmount();
+  }
+});
 
 function mount(
   entries: SecretStoreEntry[],
@@ -17,14 +28,15 @@ function mount(
   source.publish({
     ...source.gateway.snapshot,
     phase: "connected",
-    client: createTestGatewayClient(async () => ({})),
+    client: createTestGatewayClient(createGatewayRequestMock()),
     hello: gatewayHelloForMethods(methods),
   });
   // SAFETY: this unbound view owner only reads the Gateway capability for permissions.
   const context = { gateway: source.gateway } as ApplicationContext;
-  const state = Object.assign(new SecretsPageState(context, vi.fn()), overrides);
+  const state = new SecretsPageState(context, vi.fn());
   state.store.entries = entries;
-  return mountSolid(() => (
+  Object.assign(state, overrides);
+  const view = mountSolid(() => (
     <SecretsStore
       state={state}
       scope={state.store}
@@ -36,53 +48,64 @@ function mount(
       bulkEntryCount={0}
       bulkInvalidNames={[]}
     />
-  )).container;
+  ));
+  mounts.push(view);
+  return view.container;
 }
 
-it("never renders a secret value even when hostile input carries one", () => {
-  const env: SecretStoreEntry = {
-    name: "SERVICE_URL",
-    kind: "env",
-    value: "https://service.test",
-    scopeKind: "team",
-    scopeId: "",
-    createdAtMs: 1,
-    updatedAtMs: 2,
-    updatedBy: "Operator",
-  };
-  const secret = {
-    ...env,
-    name: "SERVICE_API_KEY",
-    kind: "secret" as const,
-    value: "must-never-render",
-    allowedHosts: ["api.example.com"],
-  };
-  const container = mount([secret, env]);
-  expect(container.innerHTML).not.toContain("must-never-render");
-  expect(container.textContent).toContain("••••••••");
-  expect(container.textContent).toContain("https://service.test");
-  expect(container.textContent).toContain("api.example.com");
-  expect(container.textContent).toContain("Protected secret");
-  expect(container.textContent).toContain("Agent-readable environment");
-});
-
-it("shows the allowed-host field for secret add and edit dialogs", () => {
-  const container = mount([], {
-    dialogMode: "edit",
-    draft: {
+describe("secrets store view", () => {
+  it("never renders a secret value even when hostile input carries one", () => {
+    const secret = {
       name: "SERVICE_API_KEY",
-      value: "replacement",
       kind: "secret",
-      allowedHosts: "api.example.com",
-    },
-  });
-  const field = container.querySelector<HTMLTextAreaElement>('textarea[name="allowed-hosts"]');
-  expect(field?.value).toBe("api.example.com");
-  expect(container.textContent).toContain("Exact hostnames only");
-});
+      value: "must-never-render",
+      scopeKind: "team",
+      scopeId: "",
+      createdAtMs: 1,
+      updatedAtMs: 2,
+      updatedBy: "Operator",
+      allowedHosts: ["api.example.com"],
+    } as unknown as SecretStoreEntry;
+    const env: SecretStoreEntry = {
+      name: "SERVICE_URL",
+      kind: "env",
+      value: "https://service.test",
+      scopeKind: "team",
+      scopeId: "",
+      createdAtMs: 1,
+      updatedAtMs: 2,
+      updatedBy: "Operator",
+    };
+    const container = mount([secret, env]);
 
-it("hides mutation controls when the gateway does not advertise them", () => {
-  const container = mount([], {}, ["secrets.store.list"]);
-  expect(container.querySelector("button")).toBeNull();
-  expect(container.textContent).toContain("Secrets");
+    expect(container.innerHTML).not.toContain("must-never-render");
+    expect(container.textContent).toContain("••••••••");
+    expect(container.textContent).toContain("https://service.test");
+    expect(container.textContent).toContain("api.example.com");
+    expect(container.textContent).toContain("Protected secret");
+    expect(container.textContent).toContain("Agent-readable environment");
+  });
+
+  it("shows the allowed-host field for secret add and edit dialogs", () => {
+    const container = mount([], {
+      dialogMode: "edit",
+      draft: {
+        name: "SERVICE_API_KEY",
+        value: "replacement",
+        kind: "secret",
+        allowedHosts: "api.example.com",
+      },
+    });
+
+    const field = container.querySelector<HTMLTextAreaElement>('textarea[name="allowed-hosts"]');
+    expect(field?.value).toBe("api.example.com");
+    expect(container.textContent).toContain("Exact hostnames only");
+  });
+
+  it("hides mutation controls when the gateway does not advertise them", () => {
+    const container = mount([], {}, ["secrets.store.list"]);
+
+    expect(container.querySelector("button")).toBeNull();
+    expect(container.textContent).toContain("Secrets");
+  });
 });

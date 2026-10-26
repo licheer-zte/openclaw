@@ -11,10 +11,11 @@ const rawToolError = {
   kind: "result",
   errorText: expect.stringContaining("raw tool protocol appeared as assistant text"),
 };
-const parseFrame = (event: Record<string, unknown>) =>
-  backend.parseJsonlEvent?.(JSON.stringify(event), context);
 function parseResult(...lines: string[]) {
-  return parseFrame({ type: "result", subtype: "success", result: lines.join("\n") });
+  return backend.parseJsonlEvent?.(
+    JSON.stringify({ type: "result", subtype: "success", result: lines.join("\n") }),
+    context,
+  );
 }
 
 it("classifies the native Claude refresh-lock diagnostic as contention", () => {
@@ -32,15 +33,21 @@ it.each([
   expect(backend.classifyErrorCode?.(message)).toBeUndefined();
 });
 
-const statusEvent = (fields: Record<string, unknown>) => ({
-  type: "system",
-  subtype: "status",
-  ...fields,
-});
+const status = { type: "system", subtype: "status" };
 const end = { kind: "compaction", phase: "end" };
 const lifecycleCases = [
-  [statusEvent({ status: "compacting" }), { kind: "compaction", phase: "start" }],
-  [statusEvent({ status: null, compact_result: "failed" }), { ...end, completed: false }],
+  [
+    { ...status, status: "compacting" },
+    { kind: "compaction", phase: "start" },
+  ],
+  [
+    { ...status, status: null, compact_result: "success" },
+    { ...end, completed: true },
+  ],
+  [
+    { ...status, status: null, compact_result: "failed" },
+    { ...end, completed: false },
+  ],
   [{ compact_result: "success" }, { ...end, completed: true }],
   [{ type: "system", subtype: "compact_boundary" }, null],
 ];
@@ -102,5 +109,10 @@ it.each([
 
 it("ignores malformed and non-terminal JSONL frames", () => {
   expect(backend.parseJsonlEvent?.("not json <invoke <parameter", context)).toBeNull();
-  expect(parseFrame({ type: "assistant", result: MOCK_RAW_TOOL_OUTPUT })).toBeNull();
+  expect(
+    backend.parseJsonlEvent?.(
+      JSON.stringify({ type: "assistant", result: MOCK_RAW_TOOL_OUTPUT }),
+      context,
+    ),
+  ).toBeNull();
 });

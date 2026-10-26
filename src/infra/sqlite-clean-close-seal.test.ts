@@ -10,7 +10,11 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const verifiedAt = Date.parse("2026-10-11T12:00:00Z");
-const proof = { schemaIdentity: "state:20", verifiedAt, facts: true };
+const proof = {
+  schemaIdentity: "state:20",
+  verifiedAt,
+  facts: { readiness: true, schemaVersion: 20 },
+};
 
 beforeEach(() => {
   vi.spyOn(Date, "now").mockReturnValue(verifiedAt);
@@ -33,6 +37,14 @@ function fixture() {
   return { pathname, read, write, reject };
 }
 
+it("persists validated facts until the first write invalidates them", () => {
+  const { pathname, read, reject } = fixture();
+  expect(read()).toEqual(proof);
+  invalidate(pathname);
+  reject("no-proof");
+  expect(() => invalidate(pathname)).not.toThrow();
+});
+
 function editSeal(pathname: string, edit: (contents: string) => string) {
   const seal = `${pathname}.seal`;
   fs.writeFileSync(seal, edit(fs.readFileSync(seal, "utf8")));
@@ -43,7 +55,7 @@ it.each([
   [
     "changed-payload",
     "malformed-proof",
-    (p: string) => editSeal(p, (s) => s.replace('facts\\":true', 'facts\\":false')),
+    (p: string) => editSeal(p, (s) => s.replace('readiness\\":true', 'readiness\\":false')),
   ],
   ["invalid-envelope", "malformed-proof", (p: string) => editSeal(p, () => "[]")],
   ["contents", "file-mismatch", (p: string) => fs.appendFileSync(p, " changed")],
@@ -72,8 +84,9 @@ it.each(["-wal", "-journal"])("requires absent or empty %s files", (suffix) => {
   expect(fs.existsSync(`${pathname}.seal`)).toBe(false);
 });
 
-it("requires periodic full verification", () => {
+it("returns the identity for admission and requires periodic full verification", () => {
   const { read, reject } = fixture();
+  expect(read()?.schemaIdentity).toBe("state:20");
   vi.mocked(Date.now).mockReturnValue(verifiedAt + 7 * 24 * 60 * 60 * 1_000);
   expect(read()).toEqual(proof);
   vi.mocked(Date.now).mockReturnValue(verifiedAt + 7 * 24 * 60 * 60 * 1_000 + 1);
@@ -83,10 +96,8 @@ it("requires periodic full verification", () => {
 });
 
 it("treats publication failure as a miss but refuses failed write invalidation", () => {
-  const { pathname, write, read, reject } = fixture();
-  invalidate(pathname);
-  reject("no-proof");
-  invalidate(pathname);
+  const { pathname, write, read } = fixture();
+  fs.unlinkSync(`${pathname}.seal`);
   fs.mkdirSync(`${pathname}.seal`);
   expect(write()).toBe(false);
   expect(read()).toBeUndefined();

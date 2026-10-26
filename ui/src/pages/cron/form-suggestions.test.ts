@@ -2,7 +2,6 @@
 
 import type { ConversationListItem } from "@openclaw/gateway-protocol";
 import { expect, it } from "vitest";
-import { createChannelCapability } from "../../lib/channels/index.ts";
 import { cronListResponse, operatorHello, waitForCronPage } from "./cron-page.test-support.tsx";
 import { cronRpc, mountCronPage } from "./cron-rpc.test-support.ts";
 import { createCronViewJob } from "./view.test-support.ts";
@@ -60,7 +59,7 @@ async function mountSuggestions(conversations: ConversationListItem[]) {
     }),
     { render: true, scopeId: "writer" },
   );
-  mounted.context.acquireChannels(createChannelCapability).state.channelsSnapshot = {
+  mounted.context.channels.state.channelsSnapshot = {
     ts: 0,
     channelOrder: ["telegram", "discord"],
     channelLabels: { telegram: "Telegram", discord: "Discord" },

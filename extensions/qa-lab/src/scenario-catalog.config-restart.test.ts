@@ -1,16 +1,33 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { expect, it, vi } from "vitest";
+import { createQaBusState } from "./bus-state.js";
 import { readQaScenarioById } from "./scenario-catalog.js";
-import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
+import { runScenarioFlow } from "./scenario-flow-runner.js";
 import { applyQaMergePatch } from "./suite-merge-patch.js";
 
 function runConfigFlow(scenarioId: string, api: Record<string, unknown>) {
-  return runLoadedScenarioFlow(scenarioId, {
+  const scenario = readQaScenarioById(scenarioId);
+  if (scenario.execution.kind !== "flow" || !scenario.execution.flow) {
+    throw new Error("config restart scenario must be a flow");
+  }
+  return runScenarioFlow({
+    scenarioTitle: scenario.title,
+    flow: scenario.execution.flow,
     api: {
+      state: createQaBusState(),
+      scenario,
+      config: scenario.execution.config ?? {},
       env: {},
       randomUUID,
       createSession: vi.fn(),
+      liveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,
+      runScenario: async (name, steps) => {
+        for (const step of steps) {
+          await step.run();
+        }
+        return { name, status: "pass", steps: [] };
+      },
       ...api,
     },
   });

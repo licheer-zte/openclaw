@@ -39,7 +39,7 @@ function holdGitContext(context = testGitContext) {
   const release = createDeferred();
   const spy = vi.spyOn(gitWorker, "runGitWorkerOperation").mockImplementation(async (operation) => {
     if (operation.type === "checkout.revision") {
-      return { key: "held-context" };
+      return "held-context";
     }
     if (operation.type === "checkout.context") {
       entered.resolve();

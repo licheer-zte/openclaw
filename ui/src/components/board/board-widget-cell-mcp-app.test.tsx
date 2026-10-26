@@ -486,15 +486,10 @@ describe("board MCP App cell lifecycle", () => {
     expect(refreshWidgetAppView).toHaveBeenCalledOnce();
   });
 
-  it("creates an MCP App owner from a native cell and cleans up visibility on HTML", async () => {
+  it("cleans up visibility when an MCP App cell becomes HTML", async () => {
     const visibility = stubVisibility(() => true);
     const widgetAppView = vi.fn(async () => readyAppView("converted-view"));
-    const cell = await mount(
-      { widgetAppView },
-      { widget: widget({ contentKind: "plugin", pluginKind: "fixture:native" }) },
-    );
-    expect(widgetAppView).not.toHaveBeenCalled();
-    expect(visibility.observed()).toBe(0);
+    const cell = await mount({ widgetAppView }, { widget: htmlWidget() });
     await update(cell, { widget: widget() });
     await vi.waitFor(() => expect(widgetAppView).toHaveBeenCalledOnce());
     expect(visibility.observed()).toBe(1);

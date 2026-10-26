@@ -10,8 +10,6 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({
   name: "Tool output fidelity",
-  // Native clipboard contents are shared across contexts in the same browser.
-  browserLaunchOptions: { headless: true },
   startServerBeforeBrowser: true,
 });
 const timestamp = Date.UTC(2026, 8, 19, 12);
@@ -52,13 +50,8 @@ const history = prepareChatHistoryFixture([
   },
   { role: "assistant", content: "Output is ready for inspection.", timestamp: timestamp + 3 },
 ]);
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const capture = (page: Page, dir: string | undefined, name: string) => {
-  if (dir && captureUiProof) {
-    return page.screenshot({ path: path.join(dir, name + ".png"), animations: "disabled" });
-  }
-  return undefined;
-};
+const capture = (page: Page, dir: string, name: string) =>
+  page.screenshot({ path: path.join(dir, name + ".png"), animations: "disabled" });
 async function expandGroups(page: Page, reply: string) {
   await page.getByText(reply, { exact: true }).waitFor();
   for (const group of await page
@@ -70,9 +63,7 @@ async function expandGroups(page: Page, reply: string) {
 
 suite.define(() => {
   it("renders native Code Mode results without transport envelopes", async () => {
-    const artifacts = captureUiProof
-      ? createControlUiE2eArtifactDir("code-mode-output")
-      : undefined;
+    const artifacts = createControlUiE2eArtifactDir("code-mode-output");
     const source =
       'text(await tools.exec_command({cmd: "check-service", max_output_tokens: 1000}));';
     const payload =

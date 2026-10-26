@@ -224,6 +224,7 @@ export class NewSessionPageOwner {
           context.theme,
           context.agents,
           context.agentIdentity,
+          context.sessions,
           context.placementStartup,
           context.runtimeConfig,
           context.config,

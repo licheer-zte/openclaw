@@ -1,4 +1,6 @@
 import fsSync from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { loadEnabledBundleLspConfig } from "../plugins/bundle-lsp.js";
 import { loadEnabledBundleMcpConfig } from "../plugins/bundle-mcp.js";
@@ -30,12 +32,12 @@ afterEach(async () => {
 
 async function createBundle() {
   const rootDir = await tempHarness.createTempDir("openclaw-bundle-metadata-cache-");
-  const write = (file: string, data: object) =>
-    writeBundleTextFiles(rootDir, { [file]: JSON.stringify(data) });
-  await write(".claude-plugin/plugin.json", { name: "cache-bundle" });
-  await write(".mcp.json", { mcpServers: { bundled: { command: "original" } } });
-  await write(".lsp.json", { lspServers: { language: { command: "language" } } });
-  await write("settings.json", { hideThinkingBlock: true, shellPath: "/blocked" });
+  await writeBundleTextFiles(rootDir, {
+    ".claude-plugin/plugin.json": JSON.stringify({ name: "cache-bundle" }),
+    ".mcp.json": JSON.stringify({ mcpServers: { bundled: { command: "original" } } }),
+    ".lsp.json": JSON.stringify({ lspServers: { language: { command: "language" } } }),
+    "settings.json": JSON.stringify({ hideThinkingBlock: true, shellPath: "/blocked" }),
+  });
   const cache = createPluginCache();
   const snapshot = cachedSnapshot(
     [
@@ -55,7 +57,7 @@ async function createBundle() {
     withPluginMetadataSnapshotScope(current, read, { config: cfg, trustConfigIdentity: true });
   const params = { workspaceDir: rootDir, cfg, manifestRegistry: snapshot.manifestRegistry };
   const settingsParams = { cwd: rootDir, cfg, pluginMetadataSnapshot: snapshot };
-  return { write, cache, snapshot, cfg, scope, params, settingsParams };
+  return { rootDir, cache, snapshot, cfg, scope, params, settingsParams };
 }
 
 it.each(["provided", "current"] as const)("isolates %s caches", async (registrySource) => {
@@ -67,7 +69,10 @@ it.each(["provided", "current"] as const)("isolates %s caches", async (registryS
   const read = () => loadSessionMcpConfig(params).loaded.mcpServers.bundled?.command;
   const readOriginal = () => bundle.scope(bundle.snapshot, read);
   expect(readOriginal()).toBe("original");
-  await bundle.write(".mcp.json", { mcpServers: { bundled: { command: "replacement" } } });
+  await fs.writeFile(
+    path.join(bundle.rootDir, ".mcp.json"),
+    JSON.stringify({ mcpServers: { bundled: { command: "replacement" } } }),
+  );
   const candidate = cachedSnapshot([...bundle.snapshot.plugins]);
   expect([bundle.scope(candidate, read), readOriginal()]).toEqual(["replacement", "original"]);
 });
@@ -109,6 +114,9 @@ it("reads explicitly supplied settings snapshots from their original plugin cach
   const read = (cache: typeof bundle.cache) =>
     withPluginCache(cache, () => loadEnabledBundleAgentSettingsSnapshot(params).hideThinkingBlock);
   expect(read(bundle.cache)).toBe(true);
-  await bundle.write("settings.json", { hideThinkingBlock: false });
+  await fs.writeFile(
+    path.join(bundle.rootDir, "settings.json"),
+    JSON.stringify({ hideThinkingBlock: false }),
+  );
   expect(read(createPluginCache())).toBe(true);
 });

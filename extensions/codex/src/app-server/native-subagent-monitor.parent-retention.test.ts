@@ -92,9 +92,6 @@ it("keeps an interrupted assignment resumable without pinning its restored paren
   runtime.captureAgentHarnessCompletionCustody.mockImplementation(async () =>
     custody.root.retain(),
   );
-  const bindingGuard = await store.prepareNativeSubagentGuard(identity, historyOwner);
-  expect(bindingGuard).toBeDefined();
-  onTestFinished(() => bindingGuard?.release());
   const parent = await monitor.registerParent({
     parentThreadId: binding.threadId,
     agentId: "main",
@@ -103,7 +100,7 @@ it("keeps an interrupted assignment resumable without pinning its restored paren
     historyOwner,
     assignmentStore: createNativeSubagentAssignmentStore({
       bindingStore: store,
-      assertBindingCurrent: bindingGuard!.assertCurrent,
+      readBinding: () => binding,
       identity,
       owner: historyOwner,
     }),

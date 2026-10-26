@@ -96,7 +96,9 @@ try {
         throw new Error("Benchmark must not invoke a model");
       },
     },
-    runtime: { logger },
+    runtime: {
+      logger,
+    },
     onRoster: () => {},
   };
   const statuses = runner

@@ -40,11 +40,8 @@ beforeEach(async () => {
   workspace = (await exec(["node", "-e", ""])).workspaceDir;
 });
 
-it("stores fresh snapshots outside state and replaces the whole workspace on apply", async () => {
+it("stores a snapshot outside state and replaces the whole workspace on apply", async () => {
   await expect(fsp.stat(path.dirname(seeds))).rejects.toMatchObject({ code: "ENOENT" });
-  await write("stale.txt", "stale");
-  expect((await seed("apply")).stdout).toBe("absent\n");
-  expect(await fsp.readdir(workspace)).toEqual([]);
   const git = async (...args: string[]) => {
     const result = await exec(["git", ...args]);
     expect(result.code).toBe(0);
@@ -58,7 +55,6 @@ it("stores fresh snapshots outside state and replaces the whole workspace on app
   const commit = await git("rev-parse", "HEAD");
   expect((await seed("store")).stdout).toBe("stored\n");
   await write("tracked.txt", "changed");
-  expect((await seed("store")).stdout).toBe("fresh\n");
   await write("session-only.txt", "private");
   const old = await age(path.join(seeds, key), 60_000);
   expect(await seed("apply")).toMatchObject({
@@ -75,9 +71,24 @@ it("stores fresh snapshots outside state and replaces the whole workspace on app
   expect(await git("status", "--porcelain")).toBe("");
   await write("tracked.txt", "later edit");
   expect(await read((await seed("apply", "session-2")).workspaceDir)).toBe("original");
-  await age(path.join(seeds, key), maxAgeMs + 1_000);
+});
+
+it("returns absent and empties an existing workspace when no seed exists", async () => {
+  await write("stale.txt", "stale");
+  expect((await seed("apply")).stdout).toBe("absent\n");
+  expect(await fsp.readdir(workspace)).toEqual([]);
+});
+
+it("keeps a fresh seed and replaces it only after its freshness window", async () => {
+  const seedDir = path.join(seeds, key);
+  await write("tracked.txt", "original");
+  await seed("store");
+  await write("tracked.txt", "updated");
+  expect((await seed("store")).stdout).toBe("fresh\n");
+  expect(await read(seedDir)).toBe("original");
+  await age(seedDir, maxAgeMs + 1_000);
   expect((await seed("store")).stdout).toBe("stored\n");
-  expect(await read(path.join(seeds, key))).toBe("later edit");
+  expect(await read(seedDir)).toBe("updated");
 });
 
 it("prunes old and excess seeds while preserving recent temporary copies", async () => {

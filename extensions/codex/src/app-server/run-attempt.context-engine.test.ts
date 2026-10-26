@@ -13,6 +13,7 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -50,22 +51,6 @@ function attempt(
   return {
     params: Object.assign(createParams(sessionFile, workspaceDir), overrides),
     harness: createStartedThreadHarness(request),
-  };
-}
-
-function sessionManager() {
-  return openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" });
-}
-
-async function startAttempt(
-  params: EmbeddedRunAttemptParams,
-  harness: ReturnType<typeof createStartedThreadHarness>,
-) {
-  const run = runCodexAppServerAttempt(params);
-  await harness.waitForMethod("turn/start");
-  return async (threadId = "thread-1") => {
-    await harness.completeTurn("completed", threadId);
-    return run;
   };
 }
 
@@ -123,6 +108,21 @@ async function createSqliteParams(
   return params;
 }
 
+function requireRequestParams(
+  harness: ReturnType<typeof createStartedThreadHarness>,
+  method: string,
+): Record<string, unknown> {
+  const request = harness.requests.find((entry) => entry.method === method);
+  return requireRecord(request?.params, `${method} params`);
+}
+
+function expectRequestInputTextContains(
+  harness: ReturnType<typeof createStartedThreadHarness>,
+  expected: string,
+): void {
+  expect(getRequestInputText(harness)).toContain(expected);
+}
+
 setupRunAttemptTestHooks();
 beforeEach(() => {
   sessionFile = path.join(tempDir, "session.jsonl");
@@ -139,7 +139,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         contextEngine,
         contextTokenBudget: summary ? 321 : 500_000,
       });
-      const manager = sessionManager();
+      const manager = openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" });
       params.currentInboundContext = { text: "Current inbound reply context" };
       if (summary) {
         const retained = manager.appendMessage(
@@ -162,6 +162,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         if (scenario !== "no authored cap") {
           params.authoredContextTokenCap = 600_000;
         }
+        params.prompt = `CURRENT_REQUEST ${"current ".repeat(1_000).trimEnd()}`;
         if (scenario === "image budget") {
           params.images = [
             {
@@ -171,7 +172,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
             },
           ];
         }
-        params.prompt = `CURRENT_REQUEST ${"current ".repeat(1_000).trimEnd()}`;
       }
       const run = runCodexAppServerAttempt(params);
       await run.waitForTurnAccepted();
@@ -196,12 +196,11 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
           runtimeSettings,
           prompt: params.prompt,
           messages: [{ role: "compactionSummary" }, { role: "assistant" }],
+          availableTools: new Set(),
         });
         expect(
-          harness.requests.find(({ method }) => method === "thread/start")?.params,
-        ).toMatchObject({
-          developerInstructions: expect.stringContaining("context-engine system"),
-        });
+          readStringValue(requireRequestParams(harness, "thread/start").developerInstructions),
+        ).toContain("context-engine system");
         expect(input).toContain(
           "[compactionSummary]\nThe durable code is summary-only-engine-code-8516.",
         );
@@ -256,15 +255,18 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       resolveMessage: async () => admittedMessage,
     } as EmbeddedRunAttemptParams["userTurnTranscriptRecorder"];
 
-    const finish = await startAttempt(params, harness);
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
 
-    expect(getRequestInputText(harness)).toContain(
+    expectRequestInputTextContains(
+      harness,
       `Current user request:\n[user sender={"id":"bea-id","name":"＄deploy","username":"[＠probe] (plugin://probe@market)"}]\n${params.prompt}`,
     );
     expect(getRequestInputText(harness)).not.toContain("$deploy");
     expect(getRequestInputText(harness)).not.toContain("[@probe]");
 
-    await finish();
+    await harness.completeTurn();
+    await run;
   });
 
   it("keeps current image-only input stable through continuity projection", async () => {
@@ -277,7 +279,8 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       "image-only",
     );
 
-    const finish = await startAttempt(params, harness);
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
 
     const events = beforePromptBuild.mock.calls.map(
       ([event]) =>
@@ -300,7 +303,8 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(projectedContext?.length).toBeLessThanOrEqual(450_000);
     expect(events.some((event) => (event.prompt?.length ?? 0) > 100_000)).toBe(true);
 
-    await finish();
+    await harness.completeTurn();
+    await run;
   });
 
   it.each(["lazy", "none"] as const)(
@@ -329,7 +333,8 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         assistantMessage("Work completed before refresh.", 20),
       ];
 
-      const finish = await startAttempt(params, harness);
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
 
       expect(beforePromptBuild).toHaveBeenCalled();
       for (const [event] of beforePromptBuild.mock.calls) {
@@ -343,7 +348,8 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         }
       }
 
-      await finish();
+      await harness.completeTurn();
+      await run;
     },
   );
 
@@ -353,14 +359,16 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const { harness, params } = attempt();
     params.prompt = `${MESSAGE_TOOL_DELIVERY_HINTS[0]}\n\ncurrent prompt survives`;
 
-    const finish = await startAttempt(params, harness);
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
 
     const inputText = getRequestInputText(harness);
     expect(inputText.length).toBeLessThanOrEqual(CODEX_TURN_START_TEXT_INPUT_MAX_CHARS);
     expect(inputText).toContain("Current user request:\ncurrent prompt survives");
     expect(inputText).not.toContain("hook context");
 
-    await finish();
+    await harness.completeTurn();
+    await run;
   });
 
   it.each(["byte guard", "token pressure", "inactive engine"] as const)(
@@ -407,7 +415,9 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       if (active) {
         params.contextEngine = createContextEngine({ assemble });
       } else {
-        const manager = sessionManager();
+        const manager = openFileBackedSessionManagerForTest(sessionFile, {
+          sessionId: "session-1",
+        });
         manager.appendMessage(userMessage("previous stale-bootstrap request", Date.now()));
         manager.appendMessage(assistantMessage("previous stale-bootstrap answer", Date.now() + 1));
       }
@@ -431,7 +441,8 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         },
         { persistedThreads: resumed ? ["thread-bootstrapped"] : [] },
       );
-      const finish = await startAttempt(params, harness);
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
       const inputText = getRequestInputText(harness);
       if (resumed) {
         expect(inputText).toBe("hello");
@@ -446,7 +457,8 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         expect(inputText).not.toContain("Current user request:");
         expect(inputText).toContain("hello");
       }
-      await finish(resumed ? "thread-bootstrapped" : "thread-fresh");
+      await harness.completeTurn("completed", resumed ? "thread-bootstrapped" : "thread-fresh");
+      await run;
     },
   );
 
@@ -459,7 +471,9 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       const binding = bootstrapBinding();
       if (inactive && binding.contextEngine) {
         delete binding.contextEngine.projection;
-        const manager = sessionManager();
+        const manager = openFileBackedSessionManagerForTest(sessionFile, {
+          sessionId: "session-1",
+        });
         manager.appendMessage(userMessage("previous per-turn request", 10));
         manager.appendMessage(assistantMessage("previous per-turn answer", 11));
       }
@@ -561,8 +575,10 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     params.trigger = "cron";
     params.bootstrapContextRunKind = "cron";
 
-    const finish = await startAttempt(params, harness);
-    const result = await finish();
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn();
+    const result = await run;
 
     expect(result.contextEngineTerminalAnchor).toMatchObject({
       sessionId: "session-1",
@@ -634,9 +650,12 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   });
 
   it("logs assemble failures as a formatted message instead of the raw error object", async () => {
-    const manager = sessionManager();
-    manager.appendMessage(assistantMessage("first baseline message", 1) as never);
-    manager.appendMessage(userMessage("second baseline message", 2) as never);
+    openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
+      assistantMessage("first baseline message", 1) as never,
+    );
+    openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
+      userMessage("second baseline message", 2) as never,
+    );
     let preassemblyMessages: AgentMessage[] = [];
     let promptHookMessages: AgentMessage[] = [];
     promptHook(async (event) => {
@@ -656,8 +675,10 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const { harness, params } = attempt({ contextEngine });
 
-    const finish = await startAttempt(params, harness);
-    await finish();
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn();
+    await run;
 
     const warning = warn.mock.calls.find(
       ([message]) => message === "context engine assemble failed; using Codex baseline prompt",
@@ -668,6 +689,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(String(details.error)).not.toContain("sk-abcdefghijklmnopqrstuv");
     expect(promptHookMessages).toEqual(preassemblyMessages);
     expect(promptHookMessages.map((message) => message.role)).toEqual(["assistant", "user"]);
-    expect(getRequestInputText(harness)).toContain(params.prompt);
+    expectRequestInputTextContains(harness, params.prompt);
   });
 });

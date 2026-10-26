@@ -9,9 +9,11 @@ import { inspectLinuxProcessGroupStats as inspectStats } from "./posix-process-s
 const procFs = vi.hoisted(() => ({ readFileSync: vi.fn(), readdirSync: vi.fn() }));
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
-  procFs.readFileSync.mockImplementation(actual.readFileSync);
-  procFs.readdirSync.mockImplementation(actual.readdirSync);
-  return { ...actual, ...procFs, default: { ...actual, ...procFs } };
+  const overrides = {
+    readFileSync: procFs.readFileSync.mockImplementation(actual.readFileSync),
+    readdirSync: procFs.readdirSync.mockImplementation(actual.readdirSync),
+  };
+  return { ...actual, ...overrides, default: { ...actual, ...overrides } };
 });
 
 afterEach(() => vi.restoreAllMocks());
@@ -23,7 +25,7 @@ function mockProcMembers(names: string[]) {
 }
 
 it("uses canonical death evidence only for members of the requested group", () => {
-  const isDead = () => true;
+  const isDead = vi.fn(() => true);
   const stats = ["123 (leader) Z 1 123", "124 (helper (worker)) X 1 123", "125 (x) S 1 999"];
   const inspection = inspectStats(123, stats, isDead);
   expect(inspection).toEqual({
@@ -31,6 +33,7 @@ it("uses canonical death evidence only for members of the requested group", () =
     diagnostics:
       'pgid=123 members=[pid=123 state=Z command="leader", pid=124 state=X command="helper (worker)"]',
   });
+  expect(isDead.mock.calls).toEqual([[123], [124]]);
 });
 
 it("bounds process group diagnostics", () => {

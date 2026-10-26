@@ -239,7 +239,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         log.debug(`experience review skipped: reason=errored-completion session=${sessionKey}`);
         return;
       }
-      if (resolveSkillWorkshopConfig(params.config).autonomous.mode === "off") {
+      if (resolveSkillWorkshopConfig(params.config).autonomous.mode !== "auto") {
         cancel(key);
         return;
       }

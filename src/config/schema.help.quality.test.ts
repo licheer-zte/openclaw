@@ -1,7 +1,19 @@
+// Checks config help text quality and coverage.
+
 import { describe, expect, it } from "vitest";
 import { computeBaseConfigSchemaResponse } from "./schema-base.js";
 import { buildBaseHints } from "./schema.hints.js";
-import type { ConfigJsonSchemaObject as JsonSchemaNode } from "./schema.shared.js";
+
+type JsonSchemaNode = {
+  title?: string;
+  description?: string;
+  properties?: Record<string, JsonSchemaNode>;
+  additionalProperties?: JsonSchemaNode | boolean;
+  items?: JsonSchemaNode | JsonSchemaNode[];
+  anyOf?: JsonSchemaNode[];
+  oneOf?: JsonSchemaNode[];
+  allOf?: JsonSchemaNode[];
+};
 
 function collectSchemaLeafPaths(
   schema: JsonSchemaNode,
@@ -9,29 +21,37 @@ function collectSchemaLeafPaths(
   leaves = new Set<string>(),
   visited = new WeakMap<object, Set<string>>(),
 ): Set<string> {
-  const priorPaths = visited.get(schema) ?? new Set<string>();
-  if (priorPaths.has(path)) {
+  const priorPaths = visited.get(schema);
+  if (priorPaths?.has(path)) {
     return leaves;
   }
-  priorPaths.add(path);
-  visited.set(schema, priorPaths);
+  if (priorPaths) {
+    priorPaths.add(path);
+  } else {
+    visited.set(schema, new Set([path]));
+  }
 
-  const children: [string, JsonSchemaNode][] = Object.entries(schema.properties ?? {}).map(
-    ([key, child]) => [path ? `${path}.${key}` : key, child],
-  );
-  const wildcard = path ? `${path}.*` : "*";
+  let hasChildren = false;
+  for (const [key, child] of Object.entries(schema.properties ?? {})) {
+    hasChildren = true;
+    collectSchemaLeafPaths(child, path ? `${path}.${key}` : key, leaves, visited);
+  }
   if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
-    children.push([wildcard, schema.additionalProperties]);
+    hasChildren = true;
+    collectSchemaLeafPaths(schema.additionalProperties, path ? `${path}.*` : "*", leaves, visited);
   }
   const items = Array.isArray(schema.items) ? schema.items : schema.items ? [schema.items] : [];
-  children.push(...items.map((item): [string, JsonSchemaNode] => [wildcard, item]));
+  for (const item of items) {
+    hasChildren = true;
+    collectSchemaLeafPaths(item, path ? `${path}.*` : "*", leaves, visited);
+  }
   for (const branches of [schema.anyOf, schema.oneOf, schema.allOf]) {
-    children.push(...(branches ?? []).map((branch): [string, JsonSchemaNode] => [path, branch]));
+    for (const branch of branches ?? []) {
+      hasChildren = true;
+      collectSchemaLeafPaths(branch, path, leaves, visited);
+    }
   }
-  for (const [childPath, child] of children) {
-    collectSchemaLeafPaths(child, childPath, leaves, visited);
-  }
-  if (path && children.length === 0) {
+  if (path && !hasChildren) {
     leaves.add(path);
   }
   return leaves;
@@ -39,7 +59,14 @@ function collectSchemaLeafPaths(
 
 function formatMissingTierFailure(paths: readonly string[]): string {
   const stubs = paths.map((path) => `  ${JSON.stringify(path)}: { advanced: true },`).join("\n");
-  return `${paths.length} config path(s) have no tier declaration in src/config/schema.tiers.ts:\n${stubs}`;
+  return [
+    `${paths.length} config path(s) have no tier declaration.`,
+    "Add common/advanced boundaries in src/config/schema.tiers.ts:",
+    "",
+    stubs,
+    "",
+    "New leaves inherit their nearest declared ancestor; use a leaf hint for exceptions.",
+  ].join("\n");
 }
 
 describe("config tier coverage", () => {

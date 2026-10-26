@@ -1,4 +1,4 @@
-import type { Context } from "@openclaw/ai";
+import type { Context, Model } from "@openclaw/ai";
 import { streamOpenAICompletions, streamOpenAIResponses } from "@openclaw/ai/internal/openai";
 import { afterEach, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
@@ -9,12 +9,14 @@ import "./stream.js";
 
 const mocks = vi.hoisted(() => ({ fetchWithSsrFGuard: vi.fn() }));
 
-vi.mock("../infra/net/fetch-guard.js", async () => ({
-  ...(await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
-    "../infra/net/fetch-guard.js",
-  )),
-  fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
-}));
+vi.mock("../infra/net/fetch-guard.js", async () => {
+  return {
+    ...(await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
+      "../infra/net/fetch-guard.js",
+    )),
+    fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
+  };
+});
 
 const originalEnv = captureEnv(["OPENAI_API_KEY"]);
 
@@ -25,7 +27,9 @@ afterEach(() => {
 
 const context = { messages: [{ role: "user", content: "hi", timestamp: 1 }] } satisfies Context;
 
-function createBaseModel<TApi extends "openai-completions" | "openai-responses">(api: TApi) {
+function createBaseModel<TApi extends "openai-completions" | "openai-responses">(
+  api: TApi,
+): Model<TApi> {
   return makeProviderModelFixture<TApi>({
     id: "custom-model",
     api,
@@ -53,20 +57,35 @@ it("sends explicit API keys as bearer auth for generic chat-completions provider
   let capturedHeaders: Headers | undefined;
   mocks.fetchWithSsrFGuard.mockImplementationOnce(async (params: { init?: RequestInit }) => {
     capturedHeaders = new Headers(params.init?.headers);
-    throw new Error("request captured");
+    return {
+      response: new Response(
+        [
+          'data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":0,"model":"custom-model","choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":null}]}',
+          'data: {"id":"chatcmpl-test","object":"chat.completion.chunk","created":0,"model":"custom-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}',
+          "data: [DONE]",
+          "",
+        ].join("\n\n"),
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+      release: async () => undefined,
+    };
   });
 
-  await expect(
-    streamOpenAICompletions(createBaseModel("openai-completions"), context, {
-      apiKey: "sk-third-party",
-    }).result(),
-  ).resolves.toMatchObject({ stopReason: "error", errorMessage: "Connection error." });
+  const stream = streamOpenAICompletions(createBaseModel("openai-completions"), context, {
+    apiKey: "sk-third-party",
+  });
+  const result = await stream.result();
+
+  expect(result.stopReason).toBe("stop");
   expect(capturedHeaders?.get("authorization")).toBe("Bearer sk-third-party");
 });
 
 it("does not replay Responses item ids for direct store-disabled requests", async () => {
   let capturedPayload: { store?: unknown; input?: Array<Record<string, unknown>> } | undefined;
-  const model = { ...createBaseModel("openai-responses"), reasoning: true };
+  const model = {
+    ...createBaseModel("openai-responses"),
+    reasoning: true,
+  } satisfies Model<"openai-responses">;
   const stream = streamOpenAIResponses(
     model,
     {
@@ -74,6 +93,8 @@ it("does not replay Responses item ids for direct store-disabled requests", asyn
         makeAgentAssistantMessage({
           provider: model.provider,
           model: model.id,
+          stopReason: "toolUse",
+          timestamp: 1,
           content: [
             {
               type: "thinking",
@@ -81,6 +102,12 @@ it("does not replay Responses item ids for direct store-disabled requests", asyn
               thinkingSignature:
                 '{"type":"reasoning","id":"rs_prior","encrypted_content":"ciphertext"}',
             },
+            {
+              type: "text",
+              text: "Checking.",
+              textSignature: JSON.stringify({ v: 1, id: "msg_prior", phase: "commentary" }),
+            },
+            { type: "toolCall", id: "call_abc|fc_prior", name: "lookup", arguments: {} },
           ],
         }),
       ],
@@ -94,12 +121,17 @@ it("does not replay Responses item ids for direct store-disabled requests", asyn
     },
   );
 
-  await expect(stream.result()).resolves.toMatchObject({
-    stopReason: "error",
-    errorMessage: "stop after payload",
-  });
+  const result = await stream.result();
+
+  expect(result).toMatchObject({ stopReason: "error", errorMessage: "stop after payload" });
   expect(capturedPayload?.store).toBe(false);
-  expect(capturedPayload?.input).toEqual([
+  for (const expected of [
     { type: "reasoning", encrypted_content: "ciphertext", summary: [] },
-  ]);
+    { type: "message", phase: "commentary" },
+    { type: "function_call", call_id: "call_abc" },
+  ]) {
+    const item = capturedPayload?.input?.find((candidate) => candidate.type === expected.type);
+    expect(item).toMatchObject(expected);
+    expect(item).not.toHaveProperty("id");
+  }
 });

@@ -40,33 +40,45 @@ function fixture() {
   return { db, identities, expiresAt };
 }
 
-it.each(["replacement", "expiry"] as const)("rechecks owners after admission (%s)", (change) => {
-  let now = 1_000;
-  vi.spyOn(Date, "now").mockImplementation(() => now);
-  const { db, identities, expiresAt } = fixture();
-  db.exec("BEGIN IMMEDIATE");
-  if (change === "replacement") {
-    assertOwned(db, identities);
-    db.prepare("INSERT INTO writes VALUES (?)").run("prepared");
-  }
-  vi.mocked(requestSqliteWorkerOperationAdmission).mockImplementationOnce(() => {
+it.each(["replacement", "expiry"] as const)(
+  "rechecks every owner after a host grant (%s)",
+  (change) => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { db, identities, expiresAt } = fixture();
+    db.exec("BEGIN IMMEDIATE");
     if (change === "replacement") {
-      db.prepare("UPDATE state_leases SET owner = ? WHERE lease_key = ?").run(
-        "replacement",
-        identities[1].key,
-      );
-    } else {
-      now = expiresAt;
+      assertOwned(db, identities);
+      expect(requestSqliteWorkerOperationAdmission).toHaveBeenCalledExactlyOnceWith({
+        stage: "transaction",
+        facts: {
+          kind: "state-leases",
+          leases: identities.map((identity) => ({ identity, expiresAt })),
+        },
+      });
+      db.prepare("INSERT INTO writes VALUES (?)").run("prepared");
     }
-  });
-  expect(() =>
-    assertOwned(db, identities, change === "replacement" ? "commit" : "transaction"),
-  ).toThrow("was lost");
-  if (change === "replacement") {
-    db.exec("ROLLBACK");
-    expect(db.prepare("SELECT count(*) AS count FROM writes").get()?.count).toBe(0);
-  }
-});
+    vi.mocked(requestSqliteWorkerOperationAdmission).mockImplementationOnce(() => {
+      if (change === "replacement") {
+        db.prepare("UPDATE state_leases SET owner = ? WHERE lease_key = ?").run(
+          "replacement",
+          identities[1].key,
+        );
+      } else {
+        now = expiresAt;
+      }
+    });
+    expect(() =>
+      assertOwned(db, identities, change === "replacement" ? "commit" : "transaction"),
+    ).toThrow("was lost");
+    if (change === "replacement") {
+      db.exec("ROLLBACK");
+      expect(db.prepare("SELECT count(*) AS count FROM writes").get()?.count).toBe(0);
+    } else {
+      expect(requestSqliteWorkerOperationAdmission).toHaveBeenCalledOnce();
+    }
+  },
+);
 
 it.each(["expired-first", "expired-second", "invalid-set"] as const)(
   "refuses %s before requesting authority",

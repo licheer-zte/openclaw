@@ -663,7 +663,6 @@ export async function refreshManagedGitHubProfile(params: {
   token: string;
   expectedAccountId: number;
   assertCurrent?: () => void;
-  prepareEffect?: () => Promise<void>;
 }): Promise<GitHubToolAccount> {
   if (!(await isPrivateManagedGitHubProfile(params.profileDir))) {
     throw new Error("The configured GitHub identity profile is unavailable.");
@@ -679,8 +678,6 @@ export async function refreshManagedGitHubProfile(params: {
     throw new Error("The configured GitHub identity profile is unavailable.");
   }
   const profile = await fsRoot(params.profileDir);
-  await params.prepareEffect?.();
-  params.assertCurrent?.();
   await profile.write(
     "hosts.yml",
     managedGitHubHosts({ login: account.login, token: credential }),
@@ -705,7 +702,6 @@ export async function installManagedGitHubProfile(params: {
   commitConfig: (account: GitHubToolAccount) => Promise<void>;
   retainProfileOnCommitFailure?: boolean;
   assertCurrent?: () => void;
-  prepareEffect?: () => Promise<void>;
 }): Promise<GitHubToolAccount> {
   const parent = path.dirname(params.profileDir);
   await fs.mkdir(parent, { recursive: true, mode: 0o700 });
@@ -720,11 +716,9 @@ export async function installManagedGitHubProfile(params: {
       login: account.login,
       token: credential,
     });
-    await params.prepareEffect?.();
     params.assertCurrent?.();
     await fs.rename(stagedProfile, params.profileDir);
     published = true;
-    await params.prepareEffect?.();
     params.assertCurrent?.();
     await params.commitConfig(account);
     clearNativeGitHubTokenCache();

@@ -16,31 +16,33 @@ const {
   respond,
 } = getSlackInteractionMocks();
 
-type SessionEvent = ReturnType<PluginRuntime["system"]["enqueueSessionEvent"]>;
-const interaction = () => ({
-  ack,
-  body: actionBody({ text: "Choose", blocks: singleButtonBlocks("choice", "pick") }),
-  action: button("pick", "choice", "yes", "Yes"),
-});
-
-function pauseDispatch() {
-  const started = createDeferred<void>();
-  const dispatch = createDeferred<DispatchPluginInteractiveHandlerResult>();
-  dispatchPluginInteractiveHandlerMock.mockImplementationOnce(() => {
-    started.resolve();
-    return dispatch.promise;
-  });
-  return { started, dispatch };
+function eventOptions() {
+  const options = enqueueSessionEventMock.mock.calls[0]?.[1];
+  if (!options) {
+    throw new Error("Expected session event options");
+  }
+  return options;
 }
 
 describe("Slack interaction lifecycle", () => {
   it.each(["accepted", "refused", "duplicate"] as const)(
     "keeps the captured destination through plugin dispatch and confirms only when %s",
     async (admission) => {
-      const { started, dispatch } = pauseDispatch();
-      const accepted = createDeferred<Awaited<SessionEvent["accepted"]>>();
-      const settled = createDeferred<Awaited<SessionEvent["settled"]>>();
+      const dispatchStarted = createDeferred<void>();
+      const dispatch = createDeferred<DispatchPluginInteractiveHandlerResult>();
+      const accepted =
+        createDeferred<
+          Awaited<ReturnType<PluginRuntime["system"]["enqueueSessionEvent"]>["accepted"]>
+        >();
+      const settled =
+        createDeferred<
+          Awaited<ReturnType<PluginRuntime["system"]["enqueueSessionEvent"]>["settled"]>
+        >();
       const enqueued = createDeferred<void>();
+      dispatchPluginInteractiveHandlerMock.mockImplementationOnce(() => {
+        dispatchStarted.resolve();
+        return dispatch.promise;
+      });
       enqueueSessionEventMock.mockImplementationOnce(() => {
         enqueued.resolve();
         if (admission === "duplicate") {
@@ -56,19 +58,23 @@ describe("Slack interaction lifecycle", () => {
         };
       });
       const { app, getHandler, resolveSessionKey, runtimeLog } = setupInteractions();
-      const handling = getHandler()({ ...interaction(), respond });
-      await started.promise;
+      const handling = getHandler()({
+        ack,
+        respond,
+        body: actionBody({ text: "Choose", blocks: singleButtonBlocks("choice", "pick") }),
+        action: button("pick", "choice", "yes", "Yes"),
+      });
+      await dispatchStarted.promise;
       const expectedTarget = await captureSessionEventTargetMock.mock.results[0]?.value;
       expect(captureSessionEventTargetMock).toHaveBeenCalledOnce();
       resolveSessionKey.mockResolvedValue({ agentId: "other", sessionKey: "session:replacement" });
       dispatch.resolve({ matched: false, handled: false, duplicate: false });
       await enqueued.promise;
-      const options = enqueueSessionEventMock.mock.calls[0]?.[1];
-      expect(options).toMatchObject({
+      expect(eventOptions()).toMatchObject({
         agentId: "ops",
         sessionKey: "agent:ops:slack:channel:C1",
       });
-      expect(options?.expectedTarget).toBe(expectedTarget);
+      expect(eventOptions().expectedTarget).toBe(expectedTarget);
       expect(app.client.chat.update).not.toHaveBeenCalled();
       accepted.resolve(
         admission === "accepted" ? { ok: true } : { ok: false, error: "session replaced" },
@@ -92,9 +98,18 @@ describe("Slack interaction lifecycle", () => {
   );
 
   it("drops an interaction when its policy retires during plugin dispatch", async () => {
-    const { started, dispatch } = pauseDispatch();
+    const started = createDeferred<void>();
+    const dispatch = createDeferred<DispatchPluginInteractiveHandlerResult>();
+    dispatchPluginInteractiveHandlerMock.mockImplementationOnce(() => {
+      started.resolve();
+      return dispatch.promise;
+    });
     const { ctx, app, getHandler } = setupInteractions();
-    const handling = getHandler()(interaction());
+    const handling = getHandler()({
+      ack,
+      body: actionBody({ text: "Choose", blocks: singleButtonBlocks("choice", "pick") }),
+      action: button("pick", "choice", "yes", "Yes"),
+    });
     await started.promise;
     Object.assign(ctx, { isRuntimePolicyCurrent: () => false });
     dispatch.resolve({ matched: false, handled: false, duplicate: false });

@@ -16,10 +16,8 @@ import {
 } from "../../packages/gateway-protocol/src/schema/users.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayAuthConfig, GatewayOperatorRolesConfig } from "../config/types.gateway.js";
-import {
-  loadOriginDeviceToken,
-  storeOriginDeviceToken as seedOriginDeviceToken,
-} from "../infra/device-auth-store.js";
+import { loadOriginDeviceToken } from "../infra/device-auth-store.js";
+import { seedOriginDeviceToken } from "../infra/device-auth-store.test-support.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
 import { connectUserModelAccount } from "../state/user-model-accounts.js";
@@ -576,7 +574,7 @@ test.each<[string, string | undefined, boolean]>([
     if (!initialAuth.deviceToken) {
       throw new Error("expected a Gateway-issued device token");
     }
-    await seedOriginDeviceToken({
+    seedOriginDeviceToken({
       ...cacheKey,
       token: initialAuth.deviceToken,
       scopes: initialAuth.scopes,

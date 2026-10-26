@@ -81,7 +81,6 @@ export function useMenuMachine(
   const parentRuntime = createMemo(() => parent?.runtime());
   let hover: PointerEvent | undefined;
   let runtime: MenuRuntime | undefined;
-  let virtualized = false;
   let stopRuntime: (() => void) | undefined;
   let mounted = false;
   let loading = false;
@@ -125,10 +124,9 @@ export function useMenuMachine(
         overlay,
         direction,
         parentRuntime()?.service,
-        { ...options, virtualized: () => virtualized },
+        options,
         items,
         notify,
-        onSelect,
       );
       stopRuntime = runtime.start();
       if (hover && overlay.trigger?.matches(":hover") && overlay.parent?.open) {
@@ -189,16 +187,8 @@ export function useMenuMachine(
   // Zag is an imperative widget; retain one live input snapshot once admitted.
   createEffect(
     () =>
-      [
-        inputRuntime(),
-        direction(),
-        options.items?.(),
-        options.value?.(),
-        options.virtualized?.() ?? false,
-        parentRuntime(),
-      ] as const,
-    ([loaded, dir, catalog, selected, nextVirtualized, loadedParent]) => {
-      virtualized = nextVirtualized;
+      [inputRuntime(), direction(), options.items?.(), options.value?.(), parentRuntime()] as const,
+    ([loaded, dir, catalog, selected, loadedParent]) => {
       if (loaded) {
         loaded.updateInputs(dir, catalog, selected);
       } else if (loadedParent) {

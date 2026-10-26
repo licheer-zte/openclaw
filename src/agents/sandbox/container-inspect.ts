@@ -38,7 +38,7 @@ export async function readDockerContainerLabel(
   return await readContainerLabel(DOCKER_SANDBOX_ENGINE, containerName, label);
 }
 
-async function readContainerLabel(
+export async function readContainerLabel(
   engine: SandboxContainerEngine,
   containerName: string,
   label: string,
@@ -107,16 +107,9 @@ export async function containerState(
   name: string,
   options: { strict?: boolean } = {},
 ) {
-  const result = await execContainer(
-    engine,
-    [
-      "inspect",
-      "-f",
-      '{{.Id}}\n{{.State.Running}}\n{{.HostConfig.ReadonlyRootfs}}\n{{ index .Config.Labels "openclaw.configHash" }}',
-      name,
-    ],
-    { allowFailure: true },
-  );
+  const result = await execContainer(engine, ["inspect", "-f", "{{.State.Running}}", name], {
+    allowFailure: true,
+  });
   if (result.code !== 0) {
     if (
       options.strict &&
@@ -128,20 +121,9 @@ export async function containerState(
         `Unable to inspect ${engine.displayName} sandbox ${name}: ${result.stderr.trim() || `exit ${result.code}`}`,
       );
     }
-    return { exists: false as const, running: false };
+    return { exists: false, running: false };
   }
-  const [id, running, readOnlyRoot, ...label] = result.stdout.trim().split(/\r?\n/u);
-  if (!id || !/^[a-f0-9]{64}$/u.test(id)) {
-    throw new Error("Container inspect did not return an immutable container ID.");
-  }
-  const configHash = label.join("\n").trim();
-  return {
-    exists: true as const,
-    running: running === "true",
-    id,
-    readOnlyRoot: readOnlyRoot === "true",
-    configHash: configHash && configHash !== "<no value>" ? configHash : null,
-  };
+  return { exists: true, running: result.stdout.trim() === "true" };
 }
 
 function isPodmanContainerNotFound(stderr: string): boolean {

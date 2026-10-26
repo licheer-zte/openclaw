@@ -1,6 +1,5 @@
 import { expect, it } from "vitest";
 import type { GatewayAgentRow } from "../api/types.ts";
-import { nativeRuntime } from "../test-helpers/chat-model.ts";
 import { modelSessionList } from "./chat-runtime-fixtures.test-support.ts";
 import {
   controlUiSessionPath,
@@ -18,7 +17,13 @@ suite.define(() => {
     (required) =>
       suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
         const sessionKey = "agent:main:worker-inference";
-        const runtime = nativeRuntime() satisfies NonNullable<GatewayAgentRow["agentRuntime"]>;
+        const runtime = {
+          id: "openclaw",
+          source: "model",
+          cloudPlacementSupported: true,
+          cloudPlacementExecutionMode: "worker-turn",
+          devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+        } satisfies NonNullable<GatewayAgentRow["agentRuntime"]>;
         const profile = {
           id: "studio-device",
           providerId: "device",

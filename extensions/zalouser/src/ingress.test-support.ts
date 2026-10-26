@@ -49,8 +49,13 @@ export function createRawZalouserMessage(params?: {
 
 export function createRawZalouserMessageFromNormalized(message: ZaloInboundMessage): Message {
   const raw = createRawZalouserMessage({
-    ...message,
+    msgId: message.msgId,
+    cliMsgId: message.cliMsgId,
+    senderId: message.senderId,
+    threadId: message.threadId,
+    content: message.content,
     timestamp: String(message.timestampMs),
+    isGroup: message.isGroup,
   });
   raw.data.testNormalizedMessage = message;
   return raw;
@@ -111,13 +116,16 @@ export async function observeZalouserIngressVerdict(
   eventId: string,
   expected: "completed" | "failed",
 ): Promise<void> {
-  const write = observeChannelIngressQueueWrite(
-    queue,
-    expected === "completed" ? "complete" : "fail",
-    eventId,
-  );
   await expect(
-    withTimeout(write, 5_000, `Zalouser ${expected} verdict for ${eventId}`),
+    withTimeout(
+      observeChannelIngressQueueWrite(
+        queue,
+        expected === "completed" ? "complete" : "fail",
+        eventId,
+      ),
+      5_000,
+      `Zalouser ${expected} verdict for ${eventId}`,
+    ),
   ).resolves.toBe(true);
   const verdict = await queue.enqueue(eventId, {
     version: 1,

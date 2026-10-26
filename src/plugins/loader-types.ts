@@ -45,7 +45,6 @@ export type PluginLoadOptions = {
   runtimeOptions?: CreatePluginRuntimeOptions;
   startupTrace?: {
     detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
-    run?: <T>(name: string, run: () => T) => T;
   };
   pluginSdkResolution?: PluginSdkResolutionPreference;
   cache?: boolean;

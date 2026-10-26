@@ -26,7 +26,7 @@ import {
   type NodeWorkerSupervisorNodeProof,
 } from "../node-registry-private.js";
 import { NodeRegistry } from "../node-registry.js";
-import { makeClient } from "../node-registry.test-helpers.js";
+import type { GatewayWsClient } from "../server/ws-types.js";
 import { sessionLog } from "../session-log.js";
 import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import type { EnvironmentRecipe } from "./environment-recipe.js";
@@ -283,12 +283,29 @@ async function preparedHarness(
   );
   const connectNode = () =>
     nodeRegistry.register(
-      makeClient(node.connId, node.nodeId, [], {
-        clientId: node.clientId,
-        version: "test",
-        platform: "linux",
-        commands: [...node.commands],
-      }),
+      {
+        connId: node.connId,
+        usesSharedGatewayAuth: false,
+        socket: {
+          readyState: 1,
+          bufferedAmount: 0,
+          send: vi.fn(),
+          close: vi.fn(),
+        } as unknown as GatewayWsClient["socket"],
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: { id: node.clientId, version: "test", platform: "linux", mode: node.clientMode },
+          device: {
+            id: node.nodeId,
+            publicKey: "fixture",
+            signature: "fixture",
+            signedAt: 1,
+            nonce: "fixture",
+          },
+          commands: [...node.commands],
+        },
+      },
       { pairingIdentity: node.pairingIdentity, pairingGeneration: node.pairingGeneration },
     );
   const setHostingAvailable = (available: boolean, reconnect = false) => {
@@ -345,7 +362,7 @@ describe("prepared worker dispatch", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
   function expectUnusedReserve(
-    fixture: Pick<Awaited<ReturnType<typeof preparedHarness>>, "harness" | "store" | "ready">,
+    fixture: Awaited<ReturnType<typeof preparedHarness>>,
     environmentId: string,
   ) {
     const { harness, store, ready } = fixture;
@@ -549,8 +566,11 @@ describe("prepared worker dispatch", () => {
 
       const active = await harness.service.dispatch(request);
 
-      expectUnusedReserve({ harness, store, ready }, active.environmentId);
+      expect(active.environmentId).toBe(harness.ready.environmentId);
       expect(active.environmentId).not.toBe(ready.environmentId);
+      expect(harness.environments.createWithRequest).toHaveBeenCalledOnce();
+      expect(store.get(ready.environmentId)?.preparation?.consumedAtMs).toBeNull();
+      expect(harness.environments.bindPreparedWorkspace).not.toHaveBeenCalled();
     },
   );
 

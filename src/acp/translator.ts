@@ -32,7 +32,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
 import type { SessionsListResult } from "../gateway/session-utils.js";
-import { createFixedWindowBudget } from "../infra/fixed-window-rate-limit.js";
+import {
+  createFixedWindowBudget,
+  type FixedWindowRateLimiter,
+} from "../infra/fixed-window-rate-limit.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { AcpEventLedger, AcpEventLedgerReplay } from "./event-ledger.js";
 import { parseSessionMeta } from "./session-mapper.js";
@@ -116,7 +119,7 @@ export class AcpGatewayAgent implements Agent {
   private readonly promptStream: AcpTranslatorPromptStream;
   private readonly sessionStore: AcpSessionStore;
   private readonly sessionState: AcpTranslatorSessionState;
-  private readonly sessionCreateRateLimiter: ReturnType<typeof createFixedWindowBudget>;
+  private readonly sessionCreateRateLimiter: FixedWindowRateLimiter;
   readonly prompt: AcpTranslatorPromptStream["prompt"];
   readonly cancel: AcpTranslatorPromptStream["cancel"];
   private readonly ownedSessionStore: ReturnType<typeof createInMemorySessionStore> | undefined;

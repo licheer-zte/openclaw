@@ -48,8 +48,7 @@ it(
         executablePath: process.execPath,
         argsPrefix: ["dist/entry.js"],
         cwd: process.cwd(),
-        // Pending-node delivery needs no packaged-install repair.
-        usePackagedPlugins: false,
+        usePackagedPlugins: true,
       },
       transportBaseUrl: "http://127.0.0.1",
       controlUiEnabled: false,

@@ -412,22 +412,21 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
         thinking !== null &&
         typeof thinking === "object" &&
         (thinking as { type?: unknown }).type === "adaptive";
-      const toolConfig = convertToolConfig(
-        context.tools,
-        fable5 || sendsAdaptiveThinking
-          ? normalizeAdaptiveClaudeToolChoice(options.toolChoice)
-          : options.toolChoice,
-      );
       let commandInput = {
         modelId: model.id,
-        messages: convertMessages(context, model, cachePoint, toolConfig !== undefined),
+        messages: convertMessages(context, model, cachePoint),
         system: buildSystemPrompt(context.systemPrompt, cacheRetention, cachePoint),
         inferenceConfig: {
           ...(options.maxTokens !== undefined && { maxTokens: options.maxTokens }),
           ...(options.temperature !== undefined &&
             !sendsAdaptiveThinking && { temperature: options.temperature }),
         },
-        toolConfig,
+        toolConfig: convertToolConfig(
+          context.tools,
+          fable5 || sendsAdaptiveThinking
+            ? normalizeAdaptiveClaudeToolChoice(options.toolChoice)
+            : options.toolChoice,
+        ),
         additionalModelRequestFields,
         ...(isClaude5BedrockModel(model)
           ? { additionalModelResponseFieldPaths: ["/stop_details"] }
@@ -827,43 +826,24 @@ function convertTextImageContent(
   return content;
 }
 
-function createBedrockToolResultContent(
-  message: ToolResultMessage,
-): Array<ContentBlock.TextMember | ContentBlock.ImageMember> {
-  const content = convertTextImageContent(message.content, true);
-  if (content.length === 0) {
-    content.push({ text: describeToolResultMediaPlaceholder(message.content) ?? "(no output)" });
-  }
-  return content;
-}
-
 function createBedrockToolResult(message: ToolResultMessage): ContentBlock.ToolResultMember {
+  const content = convertTextImageContent(message.content, true);
   return {
     toolResult: {
       toolUseId: message.toolCallId,
-      content: createBedrockToolResultContent(message),
+      content:
+        content.length > 0
+          ? content
+          : [{ text: describeToolResultMediaPlaceholder(message.content) ?? "(no output)" }],
       status: message.isError ? ToolResultStatus.ERROR : ToolResultStatus.SUCCESS,
     },
   };
-}
-
-// Converse rejects toolUse/toolResult blocks unless the request also sends a
-// toolConfig. Tool-free calls (settled-turn finalization runs with tools
-// disabled) still need the settled evidence, so it replays as plain text.
-function formatToolCallReplayText(call: ToolCall): string {
-  const args = JSON.stringify(coerceTransportToolCallArguments(call.arguments));
-  return `[Assistant tool call]: ${call.name}(${args})`;
-}
-
-function formatToolResultReplayHeader(message: ToolResultMessage): string {
-  return `[Tool result: ${message.toolName}${message.isError ? " (error)" : ""}]:`;
 }
 
 function convertMessages(
   context: Context,
   model: Model<"bedrock-converse-stream">,
   cachePoint: CachePointBlock | undefined,
-  includeToolBlocks: boolean,
 ): Message[] {
   const result: Message[] = [];
   let firstVolatileMessageIndex: number | undefined;
@@ -908,17 +888,13 @@ function convertMessages(
               contentBlocks.push({ text: sanitizeSurrogates(c.text) });
               break;
             case "toolCall":
-              contentBlocks.push(
-                includeToolBlocks
-                  ? {
-                      toolUse: {
-                        toolUseId: c.id,
-                        name: c.name,
-                        input: coerceTransportToolCallArguments(c.arguments) as DocumentType,
-                      },
-                    }
-                  : { text: formatToolCallReplayText(c) },
-              );
+              contentBlocks.push({
+                toolUse: {
+                  toolUseId: c.id,
+                  name: c.name,
+                  input: coerceTransportToolCallArguments(c.arguments) as DocumentType,
+                },
+              });
               break;
             case "thinking": {
               if (c.redacted) {
@@ -984,33 +960,18 @@ function convertMessages(
       case "toolResult": {
         // Collect all consecutive toolResult messages into a single user message
         // Bedrock requires all tool results to be in one message
-        const group: ToolResultMessage[] = [m];
+        const toolResults = [createBedrockToolResult(m)];
         let j = i + 1;
         while (true) {
           const nextMsg = transformedMessages.at(j);
           if (nextMsg?.role !== "toolResult") {
             break;
           }
-          group.push(nextMsg);
+          toolResults.push(createBedrockToolResult(nextMsg));
           j++;
         }
 
         i = j - 1;
-
-        if (!includeToolBlocks) {
-          const replayContent: ContentBlock[] = [];
-          for (const resultMessage of group) {
-            replayContent.push({ text: formatToolResultReplayHeader(resultMessage) });
-            replayContent.push(...createBedrockToolResultContent(resultMessage));
-          }
-          result.push({
-            role: ConversationRole.USER,
-            content: replayContent,
-          });
-          break;
-        }
-
-        const toolResults = group.map((resultMessage) => createBedrockToolResult(resultMessage));
 
         // GPT-5.6 Sol accepts user images but rejects images nested in tool results.
         // Keep all tool outputs contiguous before labeled images, without rewriting history.

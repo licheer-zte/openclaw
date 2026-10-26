@@ -17,7 +17,6 @@ import {
 } from "../../infra/update-failure-facts.js";
 import type { ManagedHandoffRepair } from "../../infra/update-managed-service-handoff-lease-types.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
-import { sendUpdateResultTelemetry } from "../../infra/update-result-telemetry.js";
 import { readUpdateRunDriver, type UpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
   adoptUpdateRun,
@@ -111,12 +110,12 @@ export class UpdateFinalizationLifecycle {
     return this.ownsRun;
   }
 
-  attachLedger(repair = false, reportResult = false): string {
+  attachLedger(repair = false): string {
     this.driver = readUpdateRunDriver();
     const inherited = process.env[UPDATE_RUN_ID_ENV]?.trim();
     this.ledgerOptions = { env: { ...process.env }, busyTimeoutMs: this.budget("preflight") };
     this.runId = createUpdateRun(
-      { runId: inherited || undefined, trigger: "cli", reportResult },
+      { runId: inherited || undefined, trigger: "cli" },
       this.ledgerOptions,
     ).runId;
     this.ownsRun = !inherited;
@@ -558,7 +557,6 @@ export class UpdateFinalizationLifecycle {
               : this.failureObservation,
           },
           this.ledgerOptions,
-          (payload) => void sendUpdateResultTelemetry(payload, { env: this.ledgerOptions?.env }),
         );
         this.unrecordedPhaseFailure = undefined;
       } catch {

@@ -22,6 +22,28 @@ type WhatsAppSendMessage = typeof import("./send.js").sendMessageWhatsApp;
 type WhatsAppSendOptions = Parameters<WhatsAppSendMessage>[2];
 type WhatsAppDispatchParams = Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0];
 
+const resolveQuotedMessageKey = (params: {
+  accountId: string;
+  to: string;
+  replyToId?: string | null;
+}) => {
+  const replyToId = params.replyToId?.trim();
+  if (!replyToId) {
+    return undefined;
+  }
+  const targetJid = toWhatsappJid(params.to);
+  const cachedMeta = lookupInboundMessageMetaForTarget(params.accountId, targetJid, replyToId);
+  return {
+    id: replyToId,
+    remoteJid: cachedMeta?.remoteJid ?? targetJid,
+    fromMe: cachedMeta?.fromMe ?? false,
+    participant: cachedMeta?.participant,
+    ...(cachedMeta && cachedMeta.remoteJid !== targetJid ? { lookupTargetJid: targetJid } : {}),
+    messageText: cachedMeta?.body,
+    media: cachedMeta?.media,
+  };
+};
+
 const dispatchMessage = async (
   params: WhatsAppDispatchParams,
   text: string | undefined,
@@ -37,21 +59,11 @@ const dispatchMessage = async (
 ) => {
   const lookupAccountId =
     normalizeOptionalAccountId(params.accountId) ?? resolveDefaultWhatsAppAccountId(params.cfg);
-  const replyToId = params.replyToId?.trim();
-  let quotedMessageKey: WhatsAppSendOptions["quotedMessageKey"];
-  if (replyToId) {
-    const targetJid = toWhatsappJid(params.to);
-    const cachedMeta = lookupInboundMessageMetaForTarget(lookupAccountId, targetJid, replyToId);
-    quotedMessageKey = {
-      id: replyToId,
-      remoteJid: cachedMeta?.remoteJid ?? targetJid,
-      fromMe: cachedMeta?.fromMe ?? false,
-      participant: cachedMeta?.participant,
-      ...(cachedMeta && cachedMeta.remoteJid !== targetJid ? { lookupTargetJid: targetJid } : {}),
-      messageText: cachedMeta?.body,
-      media: cachedMeta?.media,
-    };
-  }
+  const quotedMessageKey = resolveQuotedMessageKey({
+    accountId: lookupAccountId,
+    to: params.to,
+    replyToId: params.replyToId,
+  });
   const send = quotedMessageKey
     ? undefined
     : resolveOutboundSendDep<WhatsAppSendMessage>(params.deps, "whatsapp", {

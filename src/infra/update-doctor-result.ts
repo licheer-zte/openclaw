@@ -218,8 +218,6 @@ export function createUpdateDoctorDatabaseWriteCapture(
   }
   let expectedGenerations: UpdateDatabaseGenerations | undefined = { ...input };
   let fromGenerations: UpdateDatabaseGenerations | undefined;
-  let physical = false;
-  let admitted = false;
   let unchanged = true;
   let receipt: UpdateDatabaseWriteReceipt | undefined;
   const historicalScans = createUpdateDoctorHistoricalScanCapture(options);
@@ -227,11 +225,10 @@ export function createUpdateDoctorDatabaseWriteCapture(
     if (!expectedGenerations) {
       return undefined;
     }
-    let observation: import("./update-database-generations.js").UpdateDatabaseGenerationPair;
+    let generations: UpdateDatabaseGenerations;
     try {
-      const { readUpdateDatabaseGenerationPairIsolated } =
-        await import("./update-candidate-state.js");
-      observation = await readUpdateDatabaseGenerationPairIsolated(
+      const { readUpdateDatabaseGenerationsIsolated } = await import("./update-candidate-state.js");
+      generations = await readUpdateDatabaseGenerationsIsolated(
         Object.keys(expectedGenerations),
         options,
       );
@@ -248,18 +245,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
       return undefined;
     }
     options.assertCurrent?.();
-    return observation;
-  };
-  const acceptEmptyReaderTransitions = (
-    observation: import("./update-database-generations.js").UpdateDatabaseGenerationPair,
-  ) => {
-    // Share migration admission's no-write equivalence, from this same observation.
-    for (const [pathname, generation] of Object.entries(observation.committed)) {
-      const alternate = observation.emptyReaderAlternates[pathname];
-      if (alternate !== undefined && expectedGenerations?.[pathname] === alternate) {
-        expectedGenerations[pathname] = generation;
-      }
-    }
+    return generations;
   };
   return {
     get receipt() {
@@ -292,48 +278,34 @@ export function createUpdateDoctorDatabaseWriteCapture(
     async admit() {
       receipt = undefined;
       historicalScans.observe(Object.keys(expectedGenerations ?? {}));
-      const observation = await read();
-      if (observation && expectedGenerations) {
-        // Unversioned 9.33-line input is admitted only by an exact whole-inventory
-        // match. From here on, every migration and settlement uses committed proof.
-        if (
-          !admitted &&
-          !isDeepStrictEqual(observation.committed, expectedGenerations) &&
-          isDeepStrictEqual(observation.physical, expectedGenerations)
-        ) {
-          physical = true;
-          expectedGenerations = observation.committed;
-        }
-        admitted = true;
-        const generations = observation.committed;
+      const generations = await read();
+      if (generations && expectedGenerations) {
         historicalScans.admit(generations);
-        const incoming = physical ? observation.physical : { ...expectedGenerations };
-        acceptEmptyReaderTransitions(observation);
-        const matches = isDeepStrictEqual(generations, expectedGenerations);
-        fromGenerations ??= matches ? incoming : generations;
+        fromGenerations ??= generations;
         // Earlier receipts or another process's writes must never become our baseline.
-        unchanged &&= matches;
+        unchanged &&= Object.entries(expectedGenerations).every(
+          ([pathname, generation]) => generations[pathname] === generation,
+        );
       }
     },
     async settle() {
       let generations: UpdateDatabaseGenerations | undefined;
-      let observation: Awaited<ReturnType<typeof read>>;
       let cleanScans: ReturnType<typeof historicalScans.settle>;
       try {
-        observation = await read();
-        generations = observation?.committed;
+        generations = await read();
       } finally {
         cleanScans = historicalScans.settle(generations);
       }
       if (generations && expectedGenerations) {
         // Only native migration publications advance the expected generation.
         // Unattributed writes, including independent SQLite writers, remain unknown.
-        acceptEmptyReaderTransitions(observation!);
-        unchanged &&= isDeepStrictEqual(generations, expectedGenerations);
+        unchanged &&= Object.entries(expectedGenerations).every(
+          ([pathname, generation]) => generations[pathname] === generation,
+        );
         receipt = {
           unchanged,
           fromGenerations,
-          generations: physical ? observation!.physical : generations,
+          generations,
           ...(cleanScans.length ? { historicalScans: cleanScans } : {}),
         };
       }

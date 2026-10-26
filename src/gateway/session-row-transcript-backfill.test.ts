@@ -25,7 +25,6 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { terminalAssistantMessage } from "./session-row-terminal-message.test-support.js";
 import { backfillSessionRowTranscriptFields } from "./session-row-transcript-backfill.js";
 import { backfillSessionRowTranscriptFieldsInDatabase } from "./session-row-transcript-backfill.worker.js";
 
@@ -375,7 +374,14 @@ describe("session row transcript backfill", () => {
           await sessionAccessor.persistSessionTranscriptTurn(params, {
             messages: [
               {
-                message: terminalAssistantMessage("Next terminal reply", "next-fallback"),
+                message: {
+                  role: "assistant",
+                  content: "Next terminal reply",
+                  provider: "unit-test",
+                  model: "next-fallback",
+                  stopReason: "stop",
+                  __openclaw: { runId: "terminal-run" },
+                },
               },
             ],
             touchSessionEntry: false,
@@ -407,7 +413,16 @@ describe("session row transcript backfill", () => {
           reads.restore();
         }
       },
-      [terminalAssistantMessage("First terminal reply", "fallback")],
+      [
+        {
+          role: "assistant",
+          content: "First terminal reply",
+          provider: "unit-test",
+          model: "fallback",
+          stopReason: "stop",
+          __openclaw: { runId: "terminal-run" },
+        },
+      ],
       {
         lastRunId: "terminal-run",
         fallbackNotice: {
@@ -505,7 +520,14 @@ describe("session row transcript backfill", () => {
       },
       [
         { role: "assistant", content: "Older preview" },
-        terminalAssistantMessage("x".repeat(70 * 1024), "fallback"),
+        {
+          role: "assistant",
+          content: "x".repeat(70 * 1024),
+          provider: "unit-test",
+          model: "fallback",
+          stopReason: "stop",
+          __openclaw: { runId: "terminal-run" },
+        },
       ],
       {
         lastRunId: "terminal-run",

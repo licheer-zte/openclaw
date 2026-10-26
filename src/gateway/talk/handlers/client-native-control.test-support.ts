@@ -131,7 +131,11 @@ export function requireString(record: Record<string, unknown>, key: string): str
   return value;
 }
 
-function requireSuccessfulReply([ok, payload, error]: Parameters<RespondFn>) {
+function requireSuccessfulReply(respond: ReturnType<typeof vi.fn<RespondFn>>) {
+  const [ok, payload, error] = expectDefined(
+    respond.mock.calls.at(-1),
+    "Talk handler did not respond",
+  );
   // Report the public rejection, never the credential-bearing session payload.
   expect({ ok, error }).toEqual({ ok: true, error: undefined });
   if (!isRecord(payload)) {
@@ -146,10 +150,6 @@ type NativePluginFixture = {
     method: keyof typeof talkClientHandlers,
     params: Record<string, unknown>,
   ) => Promise<Record<string, unknown>>;
-  invokeResponse: (
-    method: keyof typeof talkClientHandlers,
-    params: Record<string, unknown>,
-  ) => Promise<Parameters<RespondFn>>;
   offer: (
     token: string,
     sdp: string,
@@ -166,7 +166,6 @@ export async function withNativePlugin(
   options: {
     model?: string;
     nativeEffects?: boolean;
-    operatorScopes?: string[];
     onConsult?: () => void;
     configure?: (config: OpenClawConfig) => void;
   } = {},
@@ -208,7 +207,7 @@ export async function withNativePlugin(
       const client = {
         ...sharingPolicyClient({
           user: profile.id,
-          scopes: options.operatorScopes ?? [
+          scopes: [
             "operator.read",
             "operator.talk",
             ...(options.nativeEffects ? ["operator.write"] : []),
@@ -297,33 +296,28 @@ export async function withNativePlugin(
             isWebchatConnect: () => false,
             extraHandlers: talkClientHandlers,
           });
-          return expectDefined(respond.mock.calls.at(-1), "Talk handler did not respond");
+          return requireSuccessfulReply(respond);
         };
-        const invokeResponse: NativePluginFixture["invokeResponse"] = (method, params) =>
-          call(method, {
-            sessionKey: SESSION_KEY,
-            ...(method === "talk.client.steer" ? {} : { voiceSessionId: voiceSessionIds.at(-1) }),
-            ...params,
-          });
         await run({
           create: async (negotiated, voiceSessionId) => {
-            const result = requireSuccessfulReply(
-              await call("talk.client.create", {
-                sessionKey: SESSION_KEY,
-                mode: "realtime",
-                transport: "webrtc",
-                brain: "agent-consult",
-                silenceDurationMs: 400,
-                capabilities: negotiated ? ["gateway-control-v1"] : ["voice-transcript"],
-                ...(voiceSessionId ? { voiceSessionId } : {}),
-              }),
-            );
+            const result = await call("talk.client.create", {
+              sessionKey: SESSION_KEY,
+              mode: "realtime",
+              transport: "webrtc",
+              brain: "agent-consult",
+              silenceDurationMs: 400,
+              capabilities: negotiated ? ["gateway-control-v1"] : ["voice-transcript"],
+              ...(voiceSessionId ? { voiceSessionId } : {}),
+            });
             voiceSessionIds.push(requireString(result, "voiceSessionId"));
             return result;
           },
-          invoke: async (method, params) =>
-            requireSuccessfulReply(await invokeResponse(method, params)),
-          invokeResponse,
+          invoke: (method, params) =>
+            call(method, {
+              sessionKey: SESSION_KEY,
+              ...(method === "talk.client.steer" ? {} : { voiceSessionId: voiceSessionIds.at(-1) }),
+              ...params,
+            }),
           offer: (token, sdp) => {
             const request = Object.assign(createMockIncomingRequest([sdp]), {
               method: "POST",

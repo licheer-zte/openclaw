@@ -54,9 +54,18 @@ export function parseCrabboxLeaseLifetime(value: Record<string, unknown>): Crabb
   return Object.fromEntries(Object.entries(fields).filter(([, field]) => field !== undefined));
 }
 
-export type ParsedInspect = ReturnType<typeof parseInspectJson>;
+export type ParsedInspect = {
+  awsInstanceProfileAttached?: boolean;
+  failureError?: string;
+  id: string;
+  ready?: boolean;
+  sshUser?: string;
+  state: string;
+  tailscaleEnabled: boolean;
+  lifetime?: CrabboxLeaseLifetime;
+};
 
-export function parseInspectJson(stdout: string) {
+export function parseInspectJson(stdout: string): ParsedInspect {
   const value = parseCrabboxJson(stdout, "inspect");
   if (!isRecord(value)) {
     throw new Error("Crabbox inspect returned invalid JSON");

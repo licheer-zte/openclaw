@@ -3,7 +3,6 @@ import * as path from "node:path";
 import * as base64 from "@openclaw/media-core/base64";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cancelTrackedResponse } from "../../test/helpers/provider-http.js";
-import { makeStallingStream } from "../infra/http-body.test-support.js";
 import { stubFetchResponse } from "../test-utils/camera-url-test-helpers.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 
@@ -300,11 +299,16 @@ describe("nodes camera helpers", () => {
     "preserves output on URL write failure when cancellation rejects=%s",
     async (cancelFails) => {
       let canceled = false;
-      const stream = makeStallingStream([Buffer.from("partial-camera")], () => {
-        canceled = true;
-        if (cancelFails) {
-          throw new Error("injected cancel failure");
-        }
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(Buffer.from("partial-camera"));
+        },
+        cancel() {
+          canceled = true;
+          if (cancelFails) {
+            throw new Error("injected cancel failure");
+          }
+        },
       });
       stubFetchResponse(new Response(stream, { status: 200 }));
       await withCameraTempDir(async (dir) => {

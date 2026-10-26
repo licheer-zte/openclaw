@@ -2,7 +2,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { useRealtimeTalkMicrophoneFixture } from "./input.test-support.ts";
-import { createGatewayRelaySession } from "./session.test-support.ts";
 import type { RealtimeTalkTransportContext } from "./shared.ts";
 
 const transportMock = vi.hoisted(() => ({
@@ -56,6 +55,20 @@ type TranscriptContext = RealtimeTalkTransportContext & {
 
 function createVoiceSession(voiceSessionId: string, clientSecret = "secret") {
   return { provider: "openai", transport: "webrtc" as const, voiceSessionId, clientSecret };
+}
+
+function createRelaySession(relaySessionId: string) {
+  return {
+    provider: "openai",
+    transport: "gateway-relay",
+    relaySessionId,
+    audio: {
+      inputEncoding: "pcm16",
+      inputSampleRateHz: 24_000,
+      outputEncoding: "pcm16",
+      outputSampleRateHz: 24_000,
+    },
+  };
 }
 
 function transcriptContext(contexts: RealtimeTalkTransportContext[], index = 0): TranscriptContext {
@@ -257,7 +270,7 @@ describe("RealtimeTalkSession lifecycle", () => {
   });
 
   it("retires both relays when restart activation throws", async () => {
-    const request = voiceRequest(() => createGatewayRelaySession("openai", "relay-activation"));
+    const request = voiceRequest(() => createRelaySession("relay-activation"));
     const session = sessionFor(request);
     await session.start();
     transportMock.relayActivate.mockImplementationOnce(() => {
@@ -273,9 +286,7 @@ describe("RealtimeTalkSession lifecycle", () => {
   });
 
   it("does not restore an active relay after activation stops the session", async () => {
-    const request = voiceRequest(() =>
-      createGatewayRelaySession("openai", "relay-activation-stop"),
-    );
+    const request = voiceRequest(() => createRelaySession("relay-activation-stop"));
     const session = sessionFor(request);
     await session.start();
     transportMock.relayActivate.mockImplementationOnce(() => {
@@ -709,7 +720,7 @@ describe("RealtimeTalkSession lifecycle", () => {
   it("does not report Gateway relay transcripts through the client RPC", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "talk.client.create") {
-        return createGatewayRelaySession("openai", "relay-voice");
+        return createRelaySession("relay-voice");
       }
       return { ok: true };
     });

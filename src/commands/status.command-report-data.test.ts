@@ -18,6 +18,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 async function report(overrides: Parameters<typeof createStatusCommandReportDataParams>[0] = {}) {
@@ -81,17 +82,20 @@ it("shows skipped audit text when fast status omits the security audit", async (
 it.each([false, true])(
   "reports auxiliary health warnings only when degraded=%s",
   async (degraded) => {
-    const quarantined = [
-      {
-        engineId: "synthetic-context",
-        operation: "ingest",
-        reason: "provider failed",
-        failedAt: 1,
-      },
-    ];
     const output = await report({
       health: createStatusHealth({
-        contextEngines: { quarantined: degraded ? quarantined : [] },
+        contextEngines: {
+          quarantined: degraded
+            ? [
+                {
+                  engineId: "synthetic-context",
+                  operation: "ingest",
+                  reason: "provider failed",
+                  failedAt: 1,
+                },
+              ]
+            : [],
+        },
         configReload: { hotReloadStatus: degraded ? "disabled" : "active" },
       }),
       tableWidth: 240,

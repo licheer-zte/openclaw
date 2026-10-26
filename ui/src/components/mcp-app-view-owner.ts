@@ -213,8 +213,6 @@ export function createMcpAppView(
     } catch (error) {
       if (!abort.signal.aborted) {
         errorState = error;
-        host.onHeightChange?.(null, true);
-        updateReservedHeight();
         publishState();
       }
     }
@@ -229,11 +227,7 @@ export function createMcpAppView(
   function updateReservedHeight() {
     if (mountElement) {
       mountElement.style.minHeight =
-        !errorState &&
-        inactive !== "ended" &&
-        host.surface === "conversation" &&
-        !host.fillContainer &&
-        host.displayMode === "inline"
+        host.surface === "conversation" && !host.fillContainer && host.displayMode === "inline"
           ? `${activeResources?.frameHeight ?? host.height}px`
           : "";
       if (host.onHeightChange) {
@@ -298,9 +292,7 @@ export function createMcpAppView(
         host.sessionKey === binding.sessionKey &&
         context.gateway.snapshot.client === binding.client
       ) {
-        host.onHeightChange?.(null, true);
         setInactive("ended");
-        updateReservedHeight();
         confirmation.cancel();
         host.dispatchEvent(
           new CustomEvent(MCP_APP_VIEW_EXPIRED_EVENT, { bubbles: true, composed: true }),
@@ -465,13 +457,11 @@ export function createMcpAppView(
         throw new Error(translate("mcpApp.errors.sandboxUnavailable"));
       }
 
-      let appReady = false;
       let modes = negotiateMcpAppDisplayModes(payload.displayModes);
-      const initialDisplayMode = () =>
+      host.displayMode =
         payload.displayMode && modes.available.includes(payload.displayMode)
           ? payload.displayMode
           : modes.initial;
-      host.displayMode = initialDisplayMode();
       let modelContext = payload.hostContext?.["openai/modelContext"] ?? null;
       let contextGeneration = 0;
       const buildHostContext = () => {
@@ -650,22 +640,24 @@ export function createMcpAppView(
           !host.fillContainer &&
           host.displayMode !== "fullscreen"
         ) {
-          const measured = Math.min(1200, Math.max(160, Math.round(height)));
-          const nextHeight = host.onHeightChange?.(measured, appReady) ?? measured;
+          const nextHeight = Math.min(1200, Math.max(160, Math.round(height)));
           createdResources.frameHeight = nextHeight;
           iframe.style.height = `${nextHeight}px`;
           updateReservedHeight();
+          host.onHeightChange?.(nextHeight);
           bridge.setHostContext(buildHostContext());
         }
       };
       const initialized = new Promise<void>((resolve) => {
         bridge.oninitialized = () => {
-          appReady = true;
           modes = negotiateMcpAppDisplayModes(
             payload.displayModes,
             bridge.getAppCapabilities()?.availableDisplayModes,
           );
-          host.displayMode = initialDisplayMode();
+          host.displayMode =
+            payload.displayMode && modes.available.includes(payload.displayMode)
+              ? payload.displayMode
+              : modes.initial;
           resolve();
         };
       });

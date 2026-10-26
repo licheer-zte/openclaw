@@ -187,7 +187,7 @@ export async function publishAuthProfileStoreUpdate(
   ];
   // A credential-only publication must not advance a derived snapshot while
   // retaining state that this committed update has not reconciled yet.
-  if (mutation.stateChanged && !mutation.availabilityOnly) {
+  if (mutation.stateChanged) {
     for (const entry of entries) {
       if (entry.databasePath !== owner.databasePath) {
         clearRuntimeAuthProfileStoreSnapshotAtDatabasePath(entry.databasePath, entry.agentDir);

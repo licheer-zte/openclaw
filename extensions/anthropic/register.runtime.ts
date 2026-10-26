@@ -310,6 +310,16 @@ function buildAnthropicForwardCompatModel(
   };
 }
 
+function resolveAnthropicForwardCompatModel(
+  ctx: ProviderResolveDynamicModelContext,
+): ProviderRuntimeModel | undefined {
+  return (
+    resolveAnthropicSnapshotModel(ctx) ??
+    resolveAnthropic4xForwardCompatModel(ctx) ??
+    buildAnthropicForwardCompatModel(ctx)
+  );
+}
+
 function isAnthropicMandatoryClaude5Model(modelId: string): boolean {
   return (
     resolveClaudeFable5ModelIdentity({ id: modelId }) !== undefined ||
@@ -586,10 +596,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
       normalizeAnthropicProviderConfigForProvider({ provider, providerConfig }),
     applyConfigDefaults: ({ config, env }) => applyAnthropicConfigDefaults({ config, env }),
     resolveDynamicModel: (ctx) => {
-      const model =
-        resolveAnthropicSnapshotModel(ctx) ??
-        resolveAnthropic4xForwardCompatModel(ctx) ??
-        buildAnthropicForwardCompatModel(ctx);
+      const model = resolveAnthropicForwardCompatModel(ctx);
       if (!model) {
         return undefined;
       }

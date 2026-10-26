@@ -58,7 +58,6 @@ import {
   activeManagedServiceUpdateHandoffs,
   isCurrentManagedServiceUpdateHandoffProcess,
   readManagedServiceUpdateHandoffLease,
-  sendManagedServiceUpdateHandoffCommand,
 } from "./update-managed-service-handoff-current.js";
 import {
   assertManagedUpdateLeaseDatabaseIdentity,
@@ -73,10 +72,6 @@ import {
   prepareManagedHandoffLeaseStore,
   resolveManagedUpdateLeaseDatabasePath,
 } from "./update-managed-service-handoff-lease.js";
-import {
-  assertLegacyGatewayCustodySettled,
-  resolveLegacyGatewayManagedUpdateLeaseDatabasePath as resolveLegacyGatewayDatabasePath,
-} from "./update-managed-service-handoff-legacy-store.js";
 import { MANAGED_HANDOFF_NATIVE_SCOPE_SOURCE } from "./update-managed-service-handoff-native-scope-source.js";
 import {
   prepareManagedHandoffCliRuntime,
@@ -1256,8 +1251,6 @@ async function spawnManagedServiceUpdateHandoff(
     await fs.writeFile(metaPath, `${JSON.stringify(metaFile, null, 2)}\n`, { mode: 0o600 });
 
     helperLog = await fs.open(logPath, "a", 0o600).catch(() => undefined);
-    // An earlier macOS Gateway's store keeps fencing its unsettled custody.
-    await assertLegacyGatewayCustodySettled(rootIdentity, resolveLegacyGatewayDatabasePath());
     assertManagedUpdateLeaseDatabaseIdentity(updateLeaseDatabaseIdentity);
     owner.requesterAuthority?.assertCurrent();
     owner.requesterAuthority?.signal?.throwIfAborted();
@@ -1888,6 +1881,24 @@ export async function completeForegroundUpdateHandoffAfterClose(
     activeManagedServiceUpdateHandoffs.delete(root);
   }
   return { respawn };
+}
+
+function sendManagedServiceUpdateHandoffCommand(
+  identity: NonNullable<GatewayRestartIntent["successorOwner"]>,
+  command: string,
+): Promise<string | null> {
+  const owner = activeManagedServiceUpdateHandoffs.get(
+    resolveUpdateInstallRoot(identity.installRoot),
+  );
+  const child = owner?.launcher;
+  if (!owner || !child?.stdin || !child.stdout || child.stdin.destroyed) {
+    return Promise.resolve(null);
+  }
+  return waitForHandoffResponse(
+    child,
+    command === "park" ? owner.parentExitTimeoutMs : owner.recoveryTimeoutMs,
+    command,
+  ).catch(() => null);
 }
 
 export async function requestManagedServiceUpdateHandoffPark(

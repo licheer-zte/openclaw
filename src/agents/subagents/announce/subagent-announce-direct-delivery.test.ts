@@ -390,7 +390,6 @@ it.each([
     throw new Error("unexpected recovery dispatch");
   };
   const unregister = registerGatewayRecoveryRuntime({
-    prepareFailedWorkerPlacement: unused,
     prepareRestartRecovery: unused,
     resumeChatInput: unused,
     dispatchSessionMethod: unused,

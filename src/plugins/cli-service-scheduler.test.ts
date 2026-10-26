@@ -31,14 +31,16 @@ it("retains the registered CLI owner's scheduler and joins its work before retir
   const instance = getPluginInstance(record)!;
   const program = new Command();
   const registration = { program, parentPath: [], config: {}, logger: api.logger };
-  const entered = createDeferredCore<unknown>();
+  const entered = createDeferredCore();
   const finish = createDeferredCore();
   const events: string[] = [];
+  const observations: unknown[] = [];
   let scheduler: PluginServiceSchedulerV1 | undefined;
   let lateResolver: (() => PluginServiceSchedulerV1) | undefined;
+  const parentPath: string[] = [];
   api.registerCli(
-    ({ program: cliProgram }) =>
-      void cliProgram.command("scheduled").action(() => {
+    ({ program: cliProgram }) => {
+      cliProgram.command("scheduled").action(() => {
         scheduler = resolvePluginServiceScheduler();
         lateResolver = AsyncLocalStorage.bind(resolvePluginServiceScheduler);
         scheduler.schedule({
@@ -47,7 +49,7 @@ it("retains the registered CLI owner's scheduler and joins its work before retir
           everyMs: 1,
           run: async () => {
             try {
-              entered.resolve({
+              observations.push({
                 instance:
                   pluginInstanceInvocation.getStore()?.instance === instance &&
                   instance.hasActiveCall,
@@ -55,15 +57,20 @@ it("retains the registered CLI owner's scheduler and joins its work before retir
                 requester: getPluginRuntimeGatewayRequestScope()?.client,
                 scheduler: resolvePluginServiceScheduler() === scheduler,
               });
-            } catch (error) {
-              entered.reject(error);
+            } finally {
+              entered.resolve();
             }
             await finish.promise;
             events.push("settled");
           },
         });
-      }),
-    { commands: ["scheduled"] },
+      });
+    },
+    {
+      parentPath,
+      commands: ["scheduled"],
+      descriptors: [{ name: "scheduled", description: "Scheduled work", hasSubcommands: false }],
+    },
   );
   try {
     await host.run(() => builder.registry.cliRegistrars[0]!.register(registration));
@@ -76,12 +83,10 @@ it("retains the registered CLI owner's scheduler and joins its work before retir
     operator.abort();
     expect(lateResolver).toThrow("active plugin invocation");
     const dispatch = clock.advanceBy(1);
-    expect(await entered.promise).toEqual({
-      instance: true,
-      operator: undefined,
-      requester: undefined,
-      scheduler: true,
-    });
+    await entered.promise;
+    expect(observations).toEqual([
+      { instance: true, operator: undefined, requester: undefined, scheduler: true },
+    ]);
     const retirement = host.close().then(() => events.push("retired"));
     await Promise.resolve();
     expect(events).toEqual([]);

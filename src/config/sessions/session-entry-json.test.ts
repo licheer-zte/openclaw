@@ -38,11 +38,6 @@ describe("canonical session numeric metadata", () => {
         spawnDepth: 2,
         inputTokens: 0,
         sessionFile: "retired.jsonl",
-        titleRefinement: {
-          sessionId: "session",
-          generatedName: "Release planning",
-          remainingMessages: 1,
-        },
         extension: { untouched: true },
       }),
     });

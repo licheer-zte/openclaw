@@ -14,6 +14,7 @@ import type {
 
 type TestTransport = "chrome" | "chrome-node";
 type TestMode = "agent";
+type TestRequest = { url: string; agentId: string };
 export type TestSession = MeetingSessionRecord<TestTransport, TestMode> & {
   browser?: {
     launched: boolean;
@@ -25,7 +26,7 @@ export type TestSession = MeetingSessionRecord<TestTransport, TestMode> & {
 };
 const TestRuntime = MeetingSessionRuntime<
   TestSession,
-  { url: string; agentId: string },
+  TestRequest,
   TestTransport,
   TestMode,
   MeetingBrowserHealth,
@@ -133,7 +134,8 @@ export function createTestRuntime(
     releaseBrowserTab: (session) => params.releaseBrowserTab(session),
     refreshBrowserHealth: async () => {},
     refreshStatus: async () => {},
-    refreshReusableSession: params.refreshReusableSession ?? (async () => undefined),
+    refreshReusableSession: async (session, request, resolved) =>
+      await params.refreshReusableSession?.(session, request, resolved),
     ensureRealtimeBridge: params.ensureRealtimeBridge ?? (async () => undefined),
     captureTranscript: async (_session, options) => await params.captureTranscript?.(options),
     speakViaTransport: async () => undefined,

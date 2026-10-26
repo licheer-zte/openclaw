@@ -10,7 +10,6 @@ import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { isDerivedWorkspacePath, buildCacheInputPaths } from "./workspace-path-exclusions.js";
 
 type ManifestNode = WorkerWorkspaceManifestEntry | { path: string; type: "directory" };
-export const OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX = "Cloud workspace result is too large: ";
 
 export type WorkspaceNode = ManifestNode | { path: string; type: "unsupported" } | undefined;
 
@@ -175,7 +174,7 @@ export function parseChangedWorkspaceResult(
   let totalBytes = 0;
   for (const entry of entries) {
     if (entry.type === "file" && entry.size > MAX_RECONCILIATION_FILE_BYTES) {
-      throw new Error(OVERSIZED_WORKSPACE_FILE_ERROR_PREFIX + entry.path);
+      throw new Error(`Cloud workspace result is too large: ${entry.path}`);
     }
     totalBytes += entry.type === "file" ? entry.size : Buffer.byteLength(entry.target);
     if (totalBytes > MAX_RECONCILIATION_TOTAL_BYTES) {

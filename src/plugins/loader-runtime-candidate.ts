@@ -70,7 +70,6 @@ import {
 } from "./runtime-degraded-state.js";
 import { recordImportedPluginId } from "./runtime.js";
 import { hasKind, kindsEqual } from "./slots.js";
-import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type { OpenClawPluginModule, PluginLogger } from "./types.js";
 
 type PluginRegistryBuilder = ReturnType<typeof createPluginRegistry>;
@@ -496,13 +495,6 @@ export function* loadRuntimePluginCandidate(params: {
   let failed = false;
   const beforeModuleLoad = performance.now();
   const artifactPreparationMs = beforeModuleLoad - beforeArtifactPreparation;
-  const traceRun = <T>(run: () => T): T =>
-    params.options.startupTrace?.run
-      ? params.options.startupTrace.run(
-          `plugins.gateway-load.plugin.${encodeStartupTraceSegment(record.id)}`,
-          run,
-        )
-      : run();
   try {
     const moduleOwner = {
       record,
@@ -516,13 +508,13 @@ export function* loadRuntimePluginCandidate(params: {
       ),
     };
     try {
-      if (!recovery) {
+      if (!recovery && candidate.origin !== "bundled") {
         // Host callers await acquisition after selection and policy checks. Synchronous
         // CLI consumers skip this step and use the same loader's inline acquisition.
         yield async () => {
           const started = performance.now();
           try {
-            await traceRun(() => params.loadPluginModule.prepare(safeSource, moduleOwner));
+            await params.loadPluginModule.prepare(safeSource, moduleOwner);
           } finally {
             modulePreparationMs = performance.now() - started;
           }
@@ -551,7 +543,7 @@ export function* loadRuntimePluginCandidate(params: {
     const mod = withProfile(
       { pluginId: record.id, source: safeSource },
       registrationPlan.mode,
-      () => traceRun(() => loadPluginModule(safeSource) as OpenClawPluginModule),
+      () => loadPluginModule(safeSource) as OpenClawPluginModule,
     );
     moduleLoadMs = performance.now() - beforeModuleLoad;
     const instance = getPluginInstance(record);
@@ -659,9 +651,9 @@ export function* loadRuntimePluginCandidate(params: {
       );
     };
     if (instance) {
-      traceRun(() => instance.run(registerPlugin));
+      instance.run(registerPlugin);
     } else {
-      traceRun(registerPlugin);
+      registerPlugin();
     }
     // Dashboard entries stay inside the same registry snapshot as their RPC handlers.
     // Non-activating snapshots are private until cached activation; rollback restores both.

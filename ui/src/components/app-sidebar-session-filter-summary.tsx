@@ -108,10 +108,6 @@ export function countSidebarSessionFilters(host: Pick<SessionListHost, "sessions
 
 export function renderSessionListToolbar(host: SessionListHost & { onToggleSidebar?: () => void }) {
   const count = createMemo(() => countSidebarSessionFilters(host));
-  const statusLabel = () =>
-    host.sessionsStatusFilter === "active"
-      ? t("common.active")
-      : t(`sessionsView.${host.sessionsStatusFilter}`);
   return (
     <div class="sidebar-session-toolbar sidebar-panel-header" onMouseDown={beginNativeWindowDrag}>
       <SidebarOwnerPicker host={host} />
@@ -122,8 +118,14 @@ export function renderSessionListToolbar(host: SessionListHost & { onToggleSideb
           { "sidebar-session-sort--filtered": count() > 0 },
         ]}
         title={t("chat.sidebar.sortSessions")}
-        aria-label={`${t("chat.sidebar.sortSessions")} · ${statusLabel()}`}
-        aria-description={`${t("sessionsView.status")}: ${statusLabel()}`}
+        aria-label={t("chat.sidebar.sortSessions")}
+        aria-description={
+          count() > 0
+            ? t("chat.sidebar.activeFilterCount", {
+                count: String(count()),
+              })
+            : undefined
+        }
         aria-haspopup="dialog"
         aria-expanded={host.sidebarMenus.sessionSortMenuPosition !== null ? "true" : "false"}
         onClick={(event: MouseEvent) => {
@@ -133,7 +135,6 @@ export function renderSessionListToolbar(host: SessionListHost & { onToggleSideb
         }}
       >
         <Icon name="listFilter" />
-        <span class="sidebar-session-sort__status">{statusLabel()}</span>
       </button>
       <SidebarCollapseToggle onToggle={() => host.onToggleSidebar?.()} />
     </div>

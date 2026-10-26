@@ -4,7 +4,7 @@ import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js
 import { executeSendAction } from "./outbound-send-service.js";
 
 const mocks = vi.hoisted(() => ({
-  commitConfirmedVisibleMessage: vi.fn(),
+  appendAssistantMessageToSessionTranscript: vi.fn(),
   dispatchChannelMessageAction: vi.fn(),
   sendMessage: vi.fn(),
 }));
@@ -13,9 +13,9 @@ vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
   dispatchChannelMessageAction: mocks.dispatchChannelMessageAction,
 }));
 
-// mock-isolation: Capture destination history without a session store.
-vi.mock("../../sessions/confirmed-visible-message.js", () => ({
-  commitConfirmedVisibleMessage: mocks.commitConfirmedVisibleMessage,
+vi.mock("../../config/sessions/transcript.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/transcript.runtime.js")>()),
+  appendAssistantMessageToSessionTranscript: mocks.appendAssistantMessageToSessionTranscript,
 }));
 
 vi.mock("./message.js", () => ({ sendMessage: mocks.sendMessage }));
@@ -34,6 +34,7 @@ function send() {
       params,
       input: { cfg, action: "send", params },
       onSendAccepted,
+      mirror: { sessionKey: "agent:main:demo-outbound:channel:123" },
     },
     to: "channel:123",
     message: "accepted then unsent",
@@ -42,7 +43,7 @@ function send() {
 
 beforeEach(() => vi.clearAllMocks());
 it.each(["thrown", "returned"])(
-  "commits %s partial plugin delivery without recording unproven content",
+  "commits %s partial plugin delivery without mirroring unproven content",
   async (mode) => {
     if (mode === "thrown") {
       mocks.dispatchChannelMessageAction.mockRejectedValueOnce(
@@ -68,7 +69,7 @@ it.each(["thrown", "returned"])(
       });
     }
     expect(onSendAccepted).toHaveBeenCalledOnce();
-    expect(mocks.commitConfirmedVisibleMessage).not.toHaveBeenCalled();
+    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
     expect(mocks.sendMessage).not.toHaveBeenCalled();
   },
 );

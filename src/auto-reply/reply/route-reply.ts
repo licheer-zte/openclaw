@@ -7,18 +7,13 @@ import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
 import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
-import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   isOutboundDeliveryError,
   PlatformMessageNotDispatchedError,
 } from "../../infra/outbound/deliver-types.js";
-import {
-  createStructuredOutboundPayloadPlan,
-  resolveOutboundPayloadMirrorText,
-  type NormalizedOutboundPayload,
-} from "../../infra/outbound/payloads.js";
+import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
@@ -35,7 +30,6 @@ import {
 } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
-import { mirrorDeliveredReplyToTranscript } from "./dispatch-from-config.transcript.js";
 import { normalizeReplyPayloadOutcome } from "./normalize-reply.js";
 import type { ReplyDispatchKind, ReplyDispatchOperation } from "./reply-dispatcher.types.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
@@ -81,7 +75,7 @@ type RouteReplyParams = {
   replyDelivery?: ReplyDeliveryContext;
   cfg: OpenClawConfig;
   abortSignal?: AbortSignal;
-  /** Record transcript-only reply bookkeeping in the producing session (default: true). */
+  /** Mirror reply into session transcript (default: true when sessionKey is set). */
   mirror?: boolean;
   isGroup?: boolean;
   /** Group or channel identifier for correlation with received events */
@@ -303,8 +297,6 @@ async function routeReplyOperation(
       requesterSenderUsername: params.requesterSenderUsername,
       requesterSenderE164: params.requesterSenderE164,
     });
-    const deliveredPayloads: NormalizedOutboundPayload[] | undefined =
-      params.mirror !== false && params.sessionKey ? [] : undefined;
     const sendParams = {
       cfg,
       channel: channelId,
@@ -340,9 +332,17 @@ async function routeReplyOperation(
             durability: "required" as const,
           }
         : {}),
-      onDeliveredPayload: deliveredPayloads
-        ? (delivered: NormalizedOutboundPayload) => deliveredPayloads.push(delivered)
-        : undefined,
+      mirror:
+        params.mirror !== false && params.sessionKey
+          ? {
+              sessionKey: params.sessionKey,
+              agentId: resolvedAgentId,
+              text,
+              mediaUrls,
+              ...(params.isGroup != null ? { isGroup: params.isGroup } : {}),
+              ...(params.groupId ? { groupId: params.groupId } : {}),
+            }
+          : undefined,
     } satisfies Omit<Parameters<typeof sendDurableMessageBatchCore>[0], "payloads">;
     const send =
       operation.kind === "prepared"
@@ -359,24 +359,6 @@ async function routeReplyOperation(
             undefined,
             params.sessionGeneration,
           );
-    if (params.sessionKey && deliveredPayloads && deliveredPayloads.length > 0) {
-      const writerFence = getOwnedSessionTranscriptWriterFence({ sessionKey: params.sessionKey });
-      await mirrorDeliveredReplyToTranscript({
-        cfg,
-        metadata: {
-          sessionKey: params.sessionKey,
-          agentId: resolvedAgentId,
-          ...writerFence,
-          text: deliveredPayloads
-            .map(
-              (delivered) => delivered.hookContent ?? resolveOutboundPayloadMirrorText(delivered),
-            )
-            .filter((deliveredText) => deliveredText.trim())
-            .join("\n"),
-          mediaUrls: deliveredPayloads.flatMap((delivered) => delivered.mediaUrls),
-        },
-      });
-    }
     if (send.status === "failed" || send.status === "partial_failed") {
       const delivery = summarizeVisibleRouteReplyDelivery(
         send.status === "failed" ? [] : send.results,

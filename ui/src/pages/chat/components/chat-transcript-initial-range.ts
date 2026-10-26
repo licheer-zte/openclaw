@@ -1,5 +1,6 @@
 import type { Range, Virtualizer } from "@tanstack/virtual-core";
 
+/** Prepare the measured tail; admit offscreen overscan when the reader navigates. */
 export class TranscriptInitialRange {
   pending = true;
   private tailRows: number;
@@ -8,10 +9,6 @@ export class TranscriptInitialRange {
 
   get measuring(): boolean {
     return this.pending || this.preparingOverscan;
-  }
-
-  get reading(): boolean {
-    return !this.pending && !this.viewportOnly;
   }
 
   constructor(

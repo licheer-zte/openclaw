@@ -22,6 +22,19 @@ type ImapAuthEvidence = {
     | "authentication-temperror";
 };
 
+type SenderGateVerdict =
+  | { accepted: true; sender: string; reason: "token" }
+  | {
+      accepted: false;
+      sender?: string;
+      reason: "invalid-from" | "sender-not-allowed" | "message-too-old";
+      transient: false;
+    }
+  | (ImapAuthEvidence & { sender: string } & (
+        | { accepted: true }
+        | { accepted: false; transient: boolean }
+      ));
+
 function matchesImapSender(sender: string, entries: readonly string[]): boolean {
   const at = sender.lastIndexOf("@");
   if (at < 1) {
@@ -148,31 +161,21 @@ export async function evaluateImapSender(params: {
   raw: Buffer;
   internalDate: Date;
   account: ImapAccountConfig;
-}) {
+}): Promise<SenderGateVerdict> {
   const fromValues = params.mail.from?.value ?? [];
   const fromHeaders = params.mail.headerLines.filter(({ key }) => key.toLowerCase() === "from");
   if (fromHeaders.length !== 1 || fromValues.length !== 1 || !fromValues[0]?.address) {
-    return { accepted: false as const, reason: "invalid-from" as const, transient: false as const };
+    return { accepted: false, reason: "invalid-from", transient: false };
   }
   const sender = fromValues[0].address;
   if (!matchesImapSender(sender, params.account.allowedSenders)) {
-    return {
-      accepted: false as const,
-      sender,
-      reason: "sender-not-allowed" as const,
-      transient: false as const,
-    };
+    return { accepted: false, sender, reason: "sender-not-allowed", transient: false };
   }
   if (matchingSenderToken(params.mail, sender, params.account)) {
-    return { accepted: true as const, sender, reason: "token" as const };
+    return { accepted: true, sender, reason: "token" };
   }
   if (Date.now() - params.internalDate.getTime() > AUTH_FRESHNESS_MS) {
-    return {
-      accepted: false as const,
-      sender,
-      reason: "message-too-old" as const,
-      transient: false as const,
-    };
+    return { accepted: false, sender, reason: "message-too-old", transient: false };
   }
   let result: AuthenticateResult | undefined;
   try {
@@ -193,24 +196,19 @@ export async function evaluateImapSender(params: {
       fallback.strength === "asserted" &&
       meetsIdentifierAuthentication(fallback.strength, params.account.senderAuth.min)
     ) {
-      return {
-        accepted: true as const,
-        sender,
-        strength: fallback.strength,
-        reason: fallback.reason,
-      };
+      return { accepted: true, sender, strength: fallback.strength, reason: fallback.reason };
     }
     return {
-      accepted: false as const,
+      accepted: false,
       sender,
-      strength: "unverified" as const,
-      reason: "authentication-temperror" as const,
-      transient: true as const,
+      strength: "unverified",
+      reason: "authentication-temperror",
+      transient: true,
     };
   }
   const evidence = mapImapAuthStrength(result, authenticationHeaders(params.mail), params.account);
   if (!meetsIdentifierAuthentication(evidence.strength, params.account.senderAuth.min)) {
-    return { accepted: false as const, sender, ...evidence };
+    return { accepted: false, sender, ...evidence };
   }
-  return { accepted: true as const, sender, strength: evidence.strength, reason: evidence.reason };
+  return { accepted: true, sender, strength: evidence.strength, reason: evidence.reason };
 }

@@ -93,7 +93,6 @@ export async function startTranscriptReloadFixtureSidecars(
     mainSessionRecoveryStartupCheckedStorePaths: new Set<string>(),
     isRestartRecoverySuppressed: () => false,
     recoveryRuntime: {
-      prepareFailedWorkerPlacement: unusedRecovery,
       prepareRestartRecovery: unusedRecovery,
       dispatchSessionMethod: unusedRecovery,
       dispatchAgent: unusedRecovery,

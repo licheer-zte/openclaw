@@ -248,7 +248,6 @@ async function replay(events: readonly PilotEvent[], label: string) {
 
 const noRecoveryDispatch = () => Promise.reject(new Error("a joined resend must not dispatch"));
 const joinOnlyRecoveryRuntime: GatewayRecoveryRuntime = {
-  prepareFailedWorkerPlacement: noRecoveryDispatch,
   prepareRestartRecovery: noRecoveryDispatch,
   resumeChatInput: noRecoveryDispatch,
   dispatchSessionMethod: noRecoveryDispatch,

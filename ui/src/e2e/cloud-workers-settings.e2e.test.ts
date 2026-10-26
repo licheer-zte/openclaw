@@ -226,8 +226,8 @@ suite.define(() => {
       );
       expect(await machineClass.getAttribute("list")).toBeNull();
       const saveButton = exactButton(page, "Save");
-      // Wait for the applied revision so its background config.get cannot
-      // consume the notification refresh gate.
+      // Saved temporarily hides Apply changes; wait for the applied revision so
+      // its background config.get cannot consume the notification refresh gate.
       await expect
         .poll(() =>
           evaluateControlUiContext(
@@ -429,9 +429,6 @@ suite.define(() => {
             },
           },
         };
-        const deletedConfig = {
-          cloudWorkers: { profiles: { retained }, projectProfiles: retainedProjectProfiles },
-        };
         const gateway = await workerGateway(page, "before-delete", initialConfig, {
           featureMethods: ["config.patch", "config.set", "config.schema", "environments.list"],
           methodResponses: {
@@ -442,6 +439,13 @@ suite.define(() => {
                 }),
               }),
             ),
+            "config.patch": {
+              ok: true,
+              hash: "deleted",
+              config: {
+                cloudWorkers: { profiles: { retained }, projectProfiles: retainedProjectProfiles },
+              },
+            },
           },
         });
 
@@ -526,7 +530,6 @@ suite.define(() => {
         await expect.poll(() => confirmation.textContent()).toContain("Delete profile pending?");
         await expect.poll(() => confirmation.textContent()).toContain("Repository defaults");
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
-        await gateway.deferNext("config.patch");
         await exactButton(confirmation, "Delete").click();
         await expect.poll(async () => (await gateway.getRequests("config.patch")).length).toBe(1);
         const deleteRequest = (await gateway.getRequests("config.patch"))[0];
@@ -542,12 +545,6 @@ suite.define(() => {
         expect(isRecord(deleteRequest.params) && deleteRequest.params.replacePaths).toEqual(
           replacePaths,
         );
-        await gateway.setMethodResponse("config.get", configResponse(deletedConfig, "deleted"));
-        await gateway.resolveDeferred("config.patch", {
-          ok: true,
-          hash: "deleted",
-          config: deletedConfig,
-        });
         await expect.poll(() => row.count()).toBe(0);
         await page.locator(".settings-row code", { hasText: /^retained$/ }).waitFor();
       });

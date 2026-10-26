@@ -20,7 +20,7 @@ import {
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import type { GatewayAuthConfig } from "../../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { loadDeviceAuthToken as readDeviceAuthTokenForTest } from "../../../infra/device-auth-store.js";
+import { readDeviceAuthTokenForTest } from "../../../infra/device-auth-store.test-support.js";
 import { issueDeviceBootstrapToken } from "../../../infra/device-bootstrap.js";
 import * as pairingApprovals from "../../../infra/device-pairing-approval.js";
 import { ensureDeviceToken } from "../../../infra/device-pairing-tokens.js";
@@ -553,12 +553,10 @@ describe("gateway connect pairing exemptions", () => {
         profileId: profile.id,
         displayName: "Ada Owner",
       });
-      const cachedToken = (
-        await readDeviceAuthTokenForTest({
-          deviceId: loaded.identity.deviceId,
-          role: "operator",
-        })
-      )?.token;
+      const cachedToken = readDeviceAuthTokenForTest({
+        deviceId: loaded.identity.deviceId,
+        role: "operator",
+      })?.token;
       expect(cachedToken).toBe(first.hello.auth.deviceToken);
       expect(cachedToken).toBeTruthy();
 
@@ -768,12 +766,10 @@ describe("gateway connect pairing exemptions", () => {
         clearTimeout(provisionTimeout);
       }
       await provisionClient?.stopAndWait();
-      const deviceToken = (
-        await readDeviceAuthTokenForTest({
-          deviceId: loaded.identity.deviceId,
-          role: "operator",
-        })
-      )?.token;
+      const deviceToken = readDeviceAuthTokenForTest({
+        deviceId: loaded.identity.deviceId,
+        role: "operator",
+      })?.token;
       expect(deviceToken).toBe(
         (await getPairedDevice(loaded.identity.deviceId))?.tokens?.operator?.token,
       );
@@ -803,8 +799,7 @@ describe("gateway connect pairing exemptions", () => {
       });
       expect(connectAttempts).toHaveBeenCalledTimes(1);
       expect(
-        (await readDeviceAuthTokenForTest({ deviceId: loaded.identity.deviceId, role: "operator" }))
-          ?.token,
+        readDeviceAuthTokenForTest({ deviceId: loaded.identity.deviceId, role: "operator" })?.token,
       ).toBe(deviceToken);
     } finally {
       if (provisionTimeout) {

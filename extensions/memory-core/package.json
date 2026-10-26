@@ -14,9 +14,9 @@
     "@solidjs/web": "2.0.0-rc.18",
     "solid-js": "2.0.0-rc.18",
     "json5": "2.2.3",
-    "kysely": "0.29.7",
+    "kysely": "0.29.6",
     "p-limit": "7.3.3",
-    "typebox": "1.4.2"
+    "typebox": "1.4.1"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

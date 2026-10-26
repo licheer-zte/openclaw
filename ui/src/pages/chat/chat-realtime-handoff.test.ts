@@ -92,7 +92,6 @@ function fixture() {
     client,
     connected: true,
     sessionKey: "main",
-    chatMessages: [],
     ...createInitialChatRealtimeState(),
   } as unknown as ChatRealtimeState;
   attachChatRealtimeActions(state);

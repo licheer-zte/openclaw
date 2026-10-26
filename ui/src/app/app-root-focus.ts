@@ -45,11 +45,7 @@ export async function loadFocusDashboard(
     if (signal.aborted) {
       return { kind: "loading" };
     }
-    if (
-      isRouteNotFound(result) ||
-      result.kind === "missing-session" ||
-      result.kind === "unavailable-home"
-    ) {
+    if (isRouteNotFound(result) || result.kind === "missing-session") {
       return { kind: "not-found" };
     }
     if (result.kind === "route-error") {

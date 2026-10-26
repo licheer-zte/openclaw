@@ -352,7 +352,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         });
         if (snapshot && this.ownsChatSnapshot({ sessionKey: initialSessionKey })) {
           applyChatCacheSnapshot(pageState, snapshot);
-          this.syncSessionReactions();
           const target = this.resolveChatReadTarget();
           if (target && snapshot.progressCard !== undefined) {
             this.progressCards.hydrate(target, snapshot.progressCard);

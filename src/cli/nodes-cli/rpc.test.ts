@@ -76,25 +76,39 @@ describe("node inventory resolution", () => {
 });
 
 describe("node invoke envelope", () => {
-  it("preserves caller-owned invoke fields and params identity", () => {
+  it("preserves caller-owned params, idempotency key, descriptors, and key order", () => {
     const params = { url: "openclaw://widget/local" };
-    const input = {
+    const result = buildNodeInvokeParams({
       nodeId: "mac-1",
       command: "canvas.present",
       params,
       idempotencyKey: "caller-supplied-key",
       timeoutMs: 35_000,
-    };
-    const result = buildNodeInvokeParams(input);
-    expect(result).toEqual(input);
+    });
+
+    expect(Object.keys(result)).toEqual([
+      "nodeId",
+      "command",
+      "params",
+      "idempotencyKey",
+      "timeoutMs",
+    ]);
     expect(result.params).toBe(params);
+    expect(result.idempotencyKey).toBe("caller-supplied-key");
+    expect(Object.getOwnPropertyDescriptor(result, "params")).toEqual({
+      value: params,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
   });
 
   it("retains undefined params while generating an idempotency key", () => {
     const result = buildNodeInvokeParams({ nodeId: "mac-1", command: "canvas.hide" });
 
-    expect(result).not.toHaveProperty("timeoutMs");
-    expect(result).toHaveProperty("params", undefined);
+    expect(Object.keys(result)).toEqual(["nodeId", "command", "params", "idempotencyKey"]);
+    expect(Object.hasOwn(result, "params")).toBe(true);
+    expect(result.params).toBeUndefined();
     expect(result.idempotencyKey).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
     );
@@ -102,15 +116,21 @@ describe("node invoke envelope", () => {
 });
 
 describe("node numeric option parsing", () => {
-  it.each([
-    ["positive integer", parseOptionalNodeInteger],
-    [
-      "non-negative integer",
-      (value: unknown, flag: string) => parseOptionalNodeInteger(value, flag, "non-negative"),
-    ],
-    ["finite number", parseOptionalNodeFiniteNumber],
-  ] as const)("parses optional %s values", (kind, parse) => {
-    expect(() => parse("", "--value")).toThrow(`--value must be a ${kind}`);
-    expect(parse(null, "--value")).toBeUndefined();
+  it("rejects explicit blank numeric values", () => {
+    expect(() => parseOptionalNodeInteger("", "--positive")).toThrow(
+      "--positive must be a positive integer",
+    );
+    expect(() => parseOptionalNodeInteger("", "--non-negative", "non-negative")).toThrow(
+      "--non-negative must be a non-negative integer",
+    );
+    expect(() => parseOptionalNodeFiniteNumber("", "--finite")).toThrow(
+      "--finite must be a finite number",
+    );
+  });
+
+  it("preserves omitted numeric values", () => {
+    expect(parseOptionalNodeInteger(null, "--positive")).toBeUndefined();
+    expect(parseOptionalNodeInteger(null, "--non-negative", "non-negative")).toBeUndefined();
+    expect(parseOptionalNodeFiniteNumber(null, "--finite")).toBeUndefined();
   });
 });

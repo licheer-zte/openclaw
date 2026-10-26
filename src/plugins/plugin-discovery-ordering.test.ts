@@ -22,7 +22,10 @@ function createPlugin(pluginRoot: string, id: string, bundledDist?: boolean) {
   writeTree(pluginRoot, {
     "package.json": {
       name: `@qa/${id}`,
-      openclaw: { extensions: ["./index.cjs"], build: { bundledDist } },
+      openclaw: {
+        extensions: ["./index.cjs"],
+        ...(bundledDist === undefined ? {} : { build: { bundledDist } }),
+      },
     },
     "openclaw.plugin.json": { id, configSchema: { type: "object" } },
     "index.cjs":

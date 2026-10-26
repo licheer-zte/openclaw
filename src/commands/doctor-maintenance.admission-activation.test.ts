@@ -103,8 +103,10 @@ it("restores within the native deadline when cold source observations cost two s
       elapsed += 2_000;
       return result;
     };
-  const observe = snapshots.readSqliteSourceContentVersionSync;
-  const prepare = snapshots.prepareSqliteReadOnlyLocationSync;
+  const {
+    readSqliteSourceContentVersionSync: observe,
+    prepareSqliteReadOnlyLocationSync: prepare,
+  } = snapshots;
   vi.spyOn(snapshots, "readSqliteSourceContentVersionSync").mockImplementation(slow(observe));
   vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync").mockImplementation(slow(prepare));
   await activate(admission);

@@ -761,6 +761,14 @@ describe("subagent-handoff", () => {
         });
         if (unwrap) {
           expect(outputText(reply)).toBe("Failed to delegate: Child admission denied");
+          expect(outputItems(reply)).toMatchObject([
+            {
+              type: "message",
+              content: [
+                { type: "output_text", text: "Failed to delegate: Child admission denied" },
+              ],
+            },
+          ]);
         } else {
           expect(outputToolCall(reply, "sessions_yield")).toBeDefined();
         }

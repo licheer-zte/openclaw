@@ -17,7 +17,6 @@ export function createSidebarSessionWindow(
 ) {
   const scroll = useContext(SidebarScrollContext);
   let list: HTMLDivElement;
-  const [rowFloor, setRowFloor] = createSignal(30);
   const [focusedKey, setFocusedKey] = createSignal<string>();
   const [view, setView] = createSignal<{ items: WindowItem[]; height: number }>({
     items: [],
@@ -36,7 +35,7 @@ export function createSidebarSessionWindow(
     const preview =
       host().sessionsShowPreview &&
       Boolean(row.snapshotSubtitle?.subtitle || row.lastMessagePreview || row.channelPresentation);
-    const ownHeight = Math.max(preview ? 50 : 30, rowFloor());
+    const ownHeight = preview ? 50 : 30;
     if (!host().isSessionChildrenExpanded(row)) {
       return { height: ownHeight, signature: [preview] };
     }
@@ -92,8 +91,6 @@ export function createSidebarSessionWindow(
   let margin = 0;
   let layout = "";
   let restored = false;
-  // Initial list sizing can clamp scrollTop before its logical anchor is restored.
-  const restoreAnchor = scroll.readAnchor();
   const anchorAt = (top: number) =>
     top < 0 || top >= totalHeight ? undefined : positions.findLast((item) => item.top <= top);
   const publish = () => {
@@ -142,17 +139,14 @@ export function createSidebarSessionWindow(
     }
     publish();
   };
-  const scheduleMeasurement = createLayoutMeasurement(
-    () => ({ items: inputs() }),
+  createLayoutMeasurement(
+    () => ({ items: inputs(), anchor: scroll.readAnchor() }),
     (request) => {
       const scroller = scroll.element();
       if (!request || !scroller) {
         return undefined;
       }
       const style = getComputedStyle(scroller);
-      // Unstyled hosts retain the estimate until CSS supplies the row minimum.
-      const nextRowFloor =
-        Number.parseFloat(style.getPropertyValue("--sidebar-session-row-floor")) || 30;
       const nextLayout = [
         scroller.clientWidth,
         style.getPropertyValue("--control-ui-text-scale"),
@@ -166,11 +160,6 @@ export function createSidebarSessionWindow(
         scroller.scrollTop;
       // All layout reads precede the publication/scroll writes.
       return () => {
-        // This request still contains estimates for the previous CSS minimum.
-        if (rowFloor() !== nextRowFloor) {
-          setRowFloor(nextRowFloor);
-          return;
-        }
         if (layout !== nextLayout) {
           measured.clear();
         }
@@ -187,9 +176,9 @@ export function createSidebarSessionWindow(
         rebuild();
         if (!restored && current.length) {
           const restoredItem =
-            restoreAnchor && positions.find((item) => item.row.key === restoreAnchor.key);
+            request.anchor && positions.find((item) => item.row.key === request.anchor?.key);
           if (restoredItem) {
-            scroller.scrollTop = margin + restoredItem.top + restoreAnchor!.offset;
+            scroller.scrollTop = margin + restoredItem.top + request.anchor!.offset;
           }
           restored = true;
           publish();
@@ -226,8 +215,7 @@ export function createSidebarSessionWindow(
         }
       }
       if (changed) {
-        // Publish parent geometry outside the row's ResizeObserver delivery.
-        scheduleMeasurement();
+        rebuild();
       }
     },
   );

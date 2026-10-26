@@ -1,12 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearDeviceAuthToken, loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import {
-  clearDeviceAuthToken,
-  loadDeviceAuthToken,
-  storeDeviceAuthToken as seedDeviceAuthToken,
-  loadDeviceAuthToken as readDeviceAuthTokenForTest,
-} from "../infra/device-auth-store.js";
+  seedDeviceAuthToken,
+  readDeviceAuthTokenForTest,
+} from "../infra/device-auth-store.test-support.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -210,7 +209,7 @@ describe("collectDevicePairingHealthFindings", () => {
         legacyDeviceAuthContents,
       );
       const auth = { env: state.env, deviceId: "synthetic-device", role: "operator" };
-      const readToken = async () => (await readDeviceAuthTokenForTest(auth))?.token;
+      const readToken = () => readDeviceAuthTokenForTest(auth)?.token;
       const migrate = () =>
         migrateLegacyDeviceAuth({
           detected: detectLegacyDeviceAuth({
@@ -221,30 +220,32 @@ describe("collectDevicePairingHealthFindings", () => {
           env: state.env,
         });
       expect((await migrate()).warnings).toEqual([]);
-      expect(await readToken()).toBe(expectedToken);
+      expect(readToken()).toBe(expectedToken);
       await expect(loadDeviceAuthToken(auth)).resolves.toMatchObject({ token: expectedToken });
       const findings = await collect("remote");
       expect(findings).toEqual([]);
       expect(await fs.readFile(sourcePath, "utf8")).toBe(legacyDeviceAuthContents);
-      expect(await readToken()).toBe(expectedToken);
+      expect(readToken()).toBe(expectedToken);
       expect(await clearDeviceAuthToken(auth)).toBe(true);
       expect((await migrate()).changes).toEqual([]);
-      expect(await readToken()).toBeUndefined();
+      expect(readToken()).toBeUndefined();
       expect(await fs.readFile(sourcePath, "utf8")).toBe(legacyDeviceAuthContents);
     });
   });
 
   it("warns when the local cached device token predates the gateway rotation", async () => {
     await withApprovedOperatorPairing(async ({ identity }) => {
-      const now = vi.spyOn(Date, "now").mockReturnValueOnce(1);
-      const stored = seedDeviceAuthToken({
-        deviceId: identity.deviceId,
-        role: "operator",
-        token: "stale-local-token",
-        scopes: ["operator.read"],
-      });
-      now.mockRestore();
-      await stored;
+      const now = vi.spyOn(Date, "now").mockReturnValue(1);
+      try {
+        seedDeviceAuthToken({
+          deviceId: identity.deviceId,
+          role: "operator",
+          token: "stale-local-token",
+          scopes: ["operator.read"],
+        });
+      } finally {
+        now.mockRestore();
+      }
 
       const rotated = await rotateDeviceToken({
         deviceId: identity.deviceId,
@@ -298,7 +299,7 @@ describe("collectDevicePairingHealthFindings", () => {
 
   it("does not suggest rotating local auth for a role that is no longer approved", async () => {
     await withApprovedOperatorPairing(async ({ identity }) => {
-      await seedDeviceAuthToken({
+      seedDeviceAuthToken({
         deviceId: identity.deviceId,
         role: "node",
         token: "stale-node-token",
@@ -373,7 +374,7 @@ describe("collectDevicePairingHealthFindings", () => {
 
   it("does not duplicate missing-token warnings when local cache exists for an approved role", async () => {
     await withApprovedOperatorPairing(async ({ identity }) => {
-      await seedDeviceAuthToken({
+      seedDeviceAuthToken({
         deviceId: identity.deviceId,
         role: "operator",
         token: "stale-local-token",

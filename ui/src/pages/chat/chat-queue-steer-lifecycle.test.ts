@@ -15,7 +15,6 @@ import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-suppo
 import { buildPendingInputQueueItems, getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { retryQueuedChatMessage, steerQueuedChatMessage } from "./chat-send-actions.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
-import { nativeMessage } from "./chat-thread-fixtures.test-support.ts";
 import { readPendingSendStatus } from "./chat-thread-items.ts";
 import { renderChatQueueSolid } from "./components/chat-composer-queue.tsx";
 import { ChatSendStatus } from "./components/chat-message-send-status-view.tsx";
@@ -286,11 +285,12 @@ it.each(["custody", "receipt", "retry", "remount", "deferred", "deferred-remount
         // submitted steer when the pane is recreated from its actual cache.
         history.messages = [
           original,
-          nativeMessage("assistant", "Already visible output.", 5_000, {
-            id: "pre-steer",
-            seq: 2,
-            runId: "active-run",
-          }),
+          {
+            role: "assistant",
+            content: "Already visible output.",
+            timestamp: 5_000,
+            __openclaw: { id: "pre-steer", seq: 2, runId: "active-run" },
+          },
         ];
         prefixPersisted = true;
         history.inFlightRun!.text = "";
@@ -352,11 +352,12 @@ it.each(["custody", "receipt", "retry", "remount", "deferred", "deferred-remount
       expect.soft(snapshot(), "persisted copy replaces optimistic").toEqual(expected());
       history.messages = [
         original,
-        nativeMessage("assistant", "Already visible output.", 5_000, {
-          id: "pre-steer",
-          seq: 2,
-          runId: "active-run",
-        }),
+        {
+          role: "assistant",
+          content: "Already visible output.",
+          timestamp: 5_000,
+          __openclaw: { id: "pre-steer", seq: 2, runId: "active-run" },
+        },
         steer,
         {
           role: "assistant",

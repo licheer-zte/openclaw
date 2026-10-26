@@ -1,4 +1,4 @@
-import { once, type EventEmitter } from "node:events";
+import type { EventEmitter } from "node:events";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -26,17 +26,6 @@ const controls = vi.hoisted(() => ({
   constructions: 0,
   workers: [] as ControlledWorker[],
   constructorError: undefined as Error | undefined,
-  processOwner: undefined as { assertCurrent(): void } | undefined,
-  prepareAccess: vi.fn<() => Promise<() => void>>(),
-}));
-
-// This fixture controls transport lifetime independently of real filesystem ownership.
-vi.mock("../infra/gateway-state-owner.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/gateway-state-owner.js")>()),
-  captureStateDatabaseAccess: async () => ({
-    processOwner: controls.processOwner,
-    prepareAccess: controls.prepareAccess,
-  }),
 }));
 
 vi.mock("../infra/node-sqlite.js", () => ({
@@ -89,7 +78,6 @@ vi.mock("node:worker_threads", async (importOriginal) => {
           return;
         }
         this.messages.push(message);
-        this.emit("request");
       }
 
       terminate() {
@@ -109,8 +97,6 @@ beforeEach(() => {
   controls.constructions = 0;
   controls.workers.length = 0;
   controls.constructorError = undefined;
-  controls.processOwner = undefined;
-  controls.prepareAccess.mockResolvedValue(() => {});
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
 });
 
@@ -189,11 +175,9 @@ async function constructedWorker(expiresAt = Date.now() + 60_000) {
   return worker;
 }
 
-async function request(worker: ControlledWorker, index = 0) {
-  while (!worker.messages[index]) {
-    await once(worker, "request");
-  }
-  const value = worker.messages[index];
+async function request(worker: ControlledWorker) {
+  await Promise.resolve();
+  const value = worker.messages[0];
   assert(value);
   return value;
 }
@@ -390,24 +374,11 @@ describe("state lease heartbeat lifetime", () => {
     }
   });
 
-  it.each(["reply-first", "deadline-first", "expired", "lost", "lost-before-request"] as const)(
+  it.each(["reply-first", "deadline-first", "expired", "lost"] as const)(
     "validates verify after %s delivery",
     async (delivery) => {
       const { params, heartbeat, worker } = await readyHeartbeat();
-      if (delivery === "lost-before-request") {
-        Atomics.store(worker.shared, state.status, state.lost);
-      }
       const outcome = heartbeat.verify().catch((error: unknown) => error);
-      if (delivery === "lost-before-request") {
-        const result = await outcome;
-        expect(result).toMatchObject({
-          message: "state lease heartbeat is not running",
-          code: "OPENCLAW_STATE_LEASE_LOST",
-        });
-        expect(params.onLost).toHaveBeenCalledExactlyOnceWith(result);
-        expect(worker.messages).toEqual([]);
-        return;
-      }
       const reply = await request(worker);
       let expiresAt = Number(Atomics.load(worker.shared, state.expiresAt));
       if (delivery === "deadline-first") {
@@ -426,11 +397,7 @@ describe("state lease heartbeat lifetime", () => {
       const result = await outcome;
       if (delivery === "lost") {
         assert(result instanceof Error);
-        expect(result).toMatchObject({
-          message: "state lease heartbeat is not running",
-          code: "OPENCLAW_STATE_LEASE_LOST",
-        });
-        expect(params.onLost).toHaveBeenCalledExactlyOnceWith(result);
+        expect(result).toEqual(new Error("state lease heartbeat is not running"));
       } else if (delivery === "expired") {
         expectMessage(
           result,
@@ -449,7 +416,7 @@ describe("state lease heartbeat lifetime", () => {
     const { params, heartbeat, worker } = await readyHeartbeat();
     const first = heartbeat.verify();
     const second = heartbeat.verify();
-    await request(worker, 1);
+    await Promise.resolve();
     const firstRequest = worker.messages[0];
     const secondRequest = worker.messages[1];
     assert(firstRequest && secondRequest);
@@ -462,40 +429,24 @@ describe("state lease heartbeat lifetime", () => {
     expect(params.onLost).not.toHaveBeenCalled();
   });
 
-  it.each(["reply", "ownership preparation"])(
-    "bounds delayed %s even when its lease renews",
-    async (delayed) => {
-      const preparation = createDeferredCore<() => void>();
-      if (delayed === "ownership preparation") {
-        controls.processOwner = { assertCurrent() {} };
-        controls.prepareAccess.mockReturnValue(preparation.promise);
-      }
-      const leaseMs = 3_000;
-      const { params, heartbeat, worker } = await readyHeartbeat(Date.now() + leaseMs, {
-        leaseMs,
-        expiresAt: Date.now() + leaseMs,
-      });
-      const outcome = heartbeat.verify().catch((error: unknown) => error);
-      if (delayed === "reply") {
-        await request(worker);
-      }
-      await vi.advanceTimersByTimeAsync(1_500);
-      expect(params.onLost).not.toHaveBeenCalled();
-      Atomics.store(worker.shared, state.expiresAt, BigInt(Date.now() + leaseMs));
-      await vi.advanceTimersByTimeAsync(1_500);
-      expectMessage(
-        await outcome,
-        "phase=verify, trigger=deadline, requestId=1, elapsedMs=3000",
-        "operationRemainingMs=0, leaseRemainingMs=1500",
-        "status=1",
-      );
-      expect(params.onLost).toHaveBeenCalledOnce();
-      preparation.resolve(() => {});
-      await vi.advanceTimersByTimeAsync(0);
-      if (delayed === "ownership preparation") {
-        expect(controls.prepareAccess).toHaveBeenCalledOnce();
-        expect(worker.messages).toEqual([]);
-      }
-    },
-  );
+  it("bounds an unanswered request even when its lease renews", async () => {
+    const leaseMs = 3_000;
+    const { params, heartbeat, worker } = await readyHeartbeat(Date.now() + leaseMs, {
+      leaseMs,
+      expiresAt: Date.now() + leaseMs,
+    });
+    const outcome = heartbeat.verify().catch((error: unknown) => error);
+    await request(worker);
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(params.onLost).not.toHaveBeenCalled();
+    Atomics.store(worker.shared, state.expiresAt, BigInt(Date.now() + leaseMs));
+    await vi.advanceTimersByTimeAsync(1_500);
+    expectMessage(
+      await outcome,
+      "phase=verify, trigger=deadline, requestId=1, elapsedMs=3000",
+      "operationRemainingMs=0, leaseRemainingMs=1500",
+      "status=1",
+    );
+    expect(params.onLost).toHaveBeenCalledOnce();
+  });
 });

@@ -9,22 +9,19 @@
 // --trace-gc-nvp brackets the warm workload for a separate promotion pass.
 // --replacements also replays owner-recorded truncations. CPU includes request preparation.
 // All fixtures are synthetic; identity probes run separately from measured calls.
-// --hydration retained reprojects the same writable startup history each request.
-// --boundary-owner /absolute/base.ts selects the baseline request-boundary module.
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { Session } from "node:inspector/promises";
-import { loadavg } from "node:os";
 import { performance, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { writeHeapSnapshot } from "node:v8";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import { fingerprintMessage } from "../../src/agents/embedded-agent-runner/prompt-cache-history.js";
 import { clearPromptCacheObservations } from "../../src/agents/embedded-agent-runner/prompt-cache-observability.js";
 import { createPromptCacheRequestObserver } from "../../src/agents/embedded-agent-runner/prompt-cache-request-observer.js";
+import { normalizeMessagesForLlmBoundary } from "../../src/agents/embedded-agent-runner/run/attempt-llm-boundary.js";
 import { applyRuntimeContextCarrierRetention } from "../../src/agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import {
   createToolResultPromptProjectionState,
@@ -46,7 +43,6 @@ const { values } = parseArgs({
     envelopes: { type: "string", default: "sealed" },
     "reuse-view": { type: "boolean", default: false },
     hydration: { type: "string", default: "shared" },
-    "boundary-owner": { type: "string" },
     sessions: { type: "string", default: "16" },
     messages: { type: "string", default: "128" },
     rounds: { type: "string", default: "20" },
@@ -57,7 +53,7 @@ const { values } = parseArgs({
 });
 assert.ok(global.gc, "Pass --expose-gc");
 assert.ok(["sealed", "append", "projected"].includes(values.envelopes));
-assert.ok(["shared", "clone", "retained"].includes(values.hydration));
+assert.ok(["shared", "clone"].includes(values.hydration));
 assert.ok(["retained", "allocation", "snapshot", "promotion"].includes(values.measure));
 const sessionCount = Number(values.sessions);
 const messageCount = Number(values.messages);
@@ -65,14 +61,6 @@ const rounds = Number(values.rounds);
 for (const count of [sessionCount, messageCount, rounds]) {
   assert.ok(Number.isSafeInteger(count) && count > 0);
 }
-const {
-  normalizeMessagesForLlmBoundary,
-}: typeof import("../../src/agents/embedded-agent-runner/run/attempt-llm-boundary.js") =
-  await import(
-    values["boundary-owner"]
-      ? pathToFileURL(values["boundary-owner"]).href
-      : "../../src/agents/embedded-agent-runner/run/attempt-llm-boundary.js"
-  );
 
 function fixture(index: number): AgentMessage {
   const text = `Synthetic transcript ${index}: ${"sample text ".repeat(100)}`;
@@ -148,7 +136,6 @@ function createSession(index: number, count: number) {
       message: fixture(index * messageCount + offset),
     })),
     messages: [] as Message[],
-    retainedMessages: undefined as AgentMessage[] | undefined,
     projections: createToolResultPromptProjectionState(),
     observer: createPromptCacheRequestObserver(
       { sessionId: `retention-${index}`, streamStrategy: "fixture" },
@@ -179,15 +166,11 @@ let newWrappers = 0;
 let messageCacheHits = 0;
 let measuredMessages = 0;
 function hydrate(session: ReturnType<typeof createSession>) {
-  const messages =
-    session.retainedMessages ??
-    (values.hydration === "shared"
-      ? cloneTranscriptView(session.entries)
-      : structuredClone(session.entries)
-    ).map((entry) => entry.message);
-  if (values.hydration === "retained") {
-    session.retainedMessages = messages;
-  }
+  const view =
+    values.hydration === "clone"
+      ? structuredClone(session.entries)
+      : cloneTranscriptView(session.entries);
+  const messages = view.map((entry) => entry.message);
   session.messages = convertToLlm(
     values.envelopes === "projected"
       ? normalizeMessagesForLlmBoundary(
@@ -318,7 +301,6 @@ if (values.measure === "promotion") {
   console.log("PROMOTION_START");
 }
 const started = performance.now();
-const hostLoadBefore = loadavg();
 let ended = Infinity;
 const observer = new PerformanceObserver((list) => {
   for (const entry of list.getEntries()) {
@@ -403,7 +385,6 @@ const currentViewsAliveAfterRelease = currentViews.filter((ref) => ref.deref()).
 const fixtureDigest = hash("sha256", JSON.stringify(sessions.map(({ entries }) => entries)), "hex");
 for (const session of sessions) {
   session.entries.length = 0;
-  session.retainedMessages = undefined;
 }
 clearPromptCacheObservations();
 await collect();
@@ -412,8 +393,6 @@ const residentMessages = sessionCount * messageCount;
 console.log(
   JSON.stringify({
     node: process.version,
-    hostLoadBefore,
-    hostLoadAfter: loadavg(),
     replacements: values.replacements,
     sampledBytes,
     fingerprintSampledBytes,

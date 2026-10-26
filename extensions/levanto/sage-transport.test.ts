@@ -45,16 +45,6 @@ const answer = {
   result: { answer: null, probability: 0.51 },
   meta: { model: "levanto-sage-v1.3", usage: { input_tokens: 5, output_tokens: 1 } },
 };
-const unavailable = (reason: string) => ({ status: "unavailable", reason });
-function pendingBody(status = 200) {
-  const started = createDeferred<void>();
-  const cancel = vi.fn();
-  const response = new Response(
-    new ReadableStream({ pull: () => started.resolve(), cancel }, { highWaterMark: 0 }),
-    { status },
-  );
-  return { started: started.promise, cancel, response };
-}
 function fixture(fetchFn: typeof fetch, overrides: Partial<DecisionProviderContextV2> = {}) {
   vi.stubGlobal("fetch", fetchFn);
   const provider = registerLevantoTestProvider(vi.fn(async () => ({ width: 1, height: 1 })));
@@ -77,7 +67,9 @@ function fixture(fetchFn: typeof fetch, overrides: Partial<DecisionProviderConte
   };
   return { context, evaluate: (input = batch) => provider.evaluate(input, context) };
 }
-beforeEach(() => vi.useFakeTimers());
+beforeEach(() => {
+  vi.useFakeTimers();
+});
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -86,15 +78,24 @@ afterEach(() => {
 });
 
 describe("Sage through the real guarded provider HTTP helper", () => {
-  it.each<DecisionBatchV2>([
-    ...[0, 1].map((count): DecisionBatchV2 => ({
-      questions: batch.questions,
+  it.each([0, 1])("rejects a vendor-unsupported list of %s items before HTTP", async (count) => {
+    const input: DecisionBatchV2 = {
+      ...batch,
       state: {
         type: "list",
         items: Array.from({ length: count }, (_, id) => ({ id: String(id), content: "item" })),
       },
-    })),
-    {
+    };
+    expect(validateDecisionBatchV2(input)).toBe(true);
+    const fetchFn = vi.fn<typeof fetch>();
+    expect(await fixture(fetchFn).evaluate(input)).toEqual({
+      status: "unavailable",
+      reason: "unsupported-input",
+    });
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+  it("rejects 21 image choices accepted by the shared Decision contract before HTTP", async () => {
+    const input: DecisionBatchV2 = {
       state: {
         type: "image",
         dataUri:
@@ -106,16 +107,15 @@ describe("Sage through the real guarded provider HTTP helper", () => {
           criteria: Object.fromEntries(Array.from({ length: 21 }, (_, id) => [String(id), null])),
         },
       },
-    },
-  ])(
-    "rejects vendor limits accepted by the shared Decision contract before HTTP %#",
-    async (input) => {
-      expect(validateDecisionBatchV2(input)).toBe(true);
-      const fetchFn = vi.fn<typeof fetch>();
-      expect(await fixture(fetchFn).evaluate(input)).toEqual(unavailable("unsupported-input"));
-      expect(fetchFn).not.toHaveBeenCalled();
-    },
-  );
+    };
+    expect(validateDecisionBatchV2(input)).toBe(true);
+    const fetchFn = vi.fn<typeof fetch>();
+    expect(await fixture(fetchFn).evaluate(input)).toEqual({
+      status: "unavailable",
+      reason: "unsupported-input",
+    });
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
   it("posts once beneath the configured prefix, preserving prepared headers and abstention", async () => {
     lookup.mockResolvedValueOnce([{ address: "93.184.216.34", family: 4 }]);
     const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(Response.json(answer));
@@ -133,19 +133,59 @@ describe("Sage through the real guarded provider HTTP helper", () => {
     expect(fetchFn).toHaveBeenCalledTimes(1);
     const [url, init] = fetchFn.mock.calls[0]!;
     expect(url).toBe("https://93.184.216.34/prefix/decide");
-    expect(init).toMatchObject({ method: "POST", redirect: "manual" });
+    expect(init?.method).toBe("POST");
     assert(typeof init?.body === "string");
     expect(JSON.parse(init.body)).toEqual(request);
-    expect(Object.fromEntries(new Headers(init?.headers))).toMatchObject({
-      authorization: "Bearer synthetic-sage-fixture",
-      "x-client": "test",
-      "content-type": "application/json",
-    });
+    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer synthetic-sage-fixture");
+    expect(new Headers(init?.headers).get("x-client")).toBe("test");
+    expect(new Headers(init?.headers).get("content-type")).toBe("application/json");
+    expect(init?.redirect).toBe("manual");
     expect(init).toHaveProperty("dispatcher");
     expect(new Headers(omitNullRequestHeaders(context.model.headers)).has("content-type")).toBe(
       false,
     );
     expect(vi.getTimerCount()).toBe(0);
+  });
+  it("uses a single native batch call and retains the envelope", async () => {
+    const nativeBatch = {
+      requests: [
+        { content: "doc", questions: [request.question, { ...request.question, id: "failed" }] },
+      ],
+      reasoning: "off",
+    };
+    const result = {
+      results: [
+        {
+          answers: [
+            { ok: true, result: answer },
+            { ok: false, error: "Unavailable", result: null },
+          ],
+        },
+      ],
+      meta: { request_count: 1, question_count: 2, usage: { input_tokens: 9, output_tokens: 1 } },
+    };
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(Response.json(result));
+    const { evaluate } = fixture(fetchFn);
+    expect(
+      await evaluate({
+        state: { type: "text", text: "doc" },
+        questions: { q: batch.questions.q!, failed: batch.questions.q! },
+      }),
+    ).toMatchObject({
+      status: "ok",
+      result: {
+        answers: {
+          q: { type: "boolean", answer: null },
+          failed: { type: "error", code: "provider-error" },
+        },
+        metadata: { native: result },
+      },
+    });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(fetchFn.mock.calls[0]![0]).toBe("https://93.184.216.34/prefix/decide/batch");
+    const body = fetchFn.mock.calls[0]![1]?.body;
+    assert(typeof body === "string");
+    expect(JSON.parse(body)).toEqual(nativeBatch);
   });
   it("rechecks admission after DNS and preserves the authority error without fetching", async () => {
     const started = createDeferred<void>();
@@ -174,96 +214,153 @@ describe("Sage through the real guarded provider HTTP helper", () => {
     await rejected;
     expect(fetchFn).not.toHaveBeenCalled();
   });
-  it.each([
-    [400, "unsupported-input"],
-    [401, "authentication"],
-    [429, "rate-limited"],
-    [503, "transport"],
-  ] as const)("does not retry HTTP %s and redacts reflected auth", async (status, reason) => {
-    const fetchFn = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(Response.json({ detail: "synthetic-sage-fixture" }, { status }));
-    const outcome = await fixture(fetchFn).evaluate();
-    expect(outcome).toEqual(unavailable(reason));
-    expect(JSON.stringify(outcome)).not.toContain("synthetic-sage-fixture");
-    expect(fetchFn).toHaveBeenCalledTimes(1);
-    expect(vi.getTimerCount()).toBe(0);
-  });
+  it.each([400, 401, 402, 429, 500, 503])(
+    "does not retry HTTP %s and redacts reflected auth",
+    async (status) => {
+      const fetchFn = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(Response.json({ detail: "synthetic-sage-fixture" }, { status }));
+      const outcome = await fixture(fetchFn).evaluate();
+      expect(outcome).toEqual({
+        status: "unavailable",
+        reason:
+          status === 401
+            ? "authentication"
+            : status === 429
+              ? "rate-limited"
+              : status === 400
+                ? "unsupported-input"
+                : "transport",
+      });
+      expect(JSON.stringify(outcome)).not.toContain("synthetic-sage-fixture");
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
   it("rejects private addresses before fetch unless the prepared route explicitly trusts them", async () => {
     const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(Response.json(answer));
     const { context, evaluate } = fixture(fetchFn);
     context.model.baseUrl = "http://127.0.0.1/prefix";
-    expect(await evaluate()).toEqual(unavailable("transport"));
+    expect(await evaluate()).toEqual({ status: "unavailable", reason: "transport" });
     expect(fetchFn).not.toHaveBeenCalled();
-    const trustedRoute = {
-      baseUrl: context.model.baseUrl,
-      models: [],
-      request: { allowPrivateNetwork: true },
-    };
     expect(
       await fixture(fetchFn, {
         model: context.model,
-        config: { models: { providers: { levanto: trustedRoute } } },
+        config: {
+          models: {
+            providers: {
+              levanto: {
+                baseUrl: "http://127.0.0.1/prefix",
+                models: [],
+                request: { allowPrivateNetwork: true },
+              },
+            },
+          },
+        },
       }).evaluate(),
     ).toMatchObject({ status: "ok" });
   });
-  it.each([307, 303])("strips body and credentials on a cross-origin %s", async (status) => {
+  it("does not replay a billable body/auth across a cross-origin 307", async () => {
     const fetchFn = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
-        new Response(null, { status, headers: { location: "https://93.184.216.35/decide" } }),
+        new Response(null, { status: 307, headers: { location: "https://93.184.216.35/decide" } }),
       )
-      .mockResolvedValueOnce(
-        status === 307
-          ? Response.json({ detail: "missing body" }, { status: 400 })
-          : Response.json(answer),
-      );
-    expect(await fixture(fetchFn).evaluate()).toMatchObject({
-      status: status === 307 ? "unavailable" : "ok",
-    });
+      .mockResolvedValueOnce(Response.json({ detail: "missing body" }, { status: 400 }));
+    expect(await fixture(fetchFn).evaluate()).toMatchObject({ status: "unavailable" });
     expect(fetchFn).toHaveBeenCalledTimes(2);
     const redirected = fetchFn.mock.calls[1]![1];
-    if (status === 303) {
-      expect(redirected?.method).toBe("GET");
-    }
     expect(redirected?.body).toBeUndefined();
     expect(new Headers(redirected?.headers).has("authorization")).toBe(false);
   });
-  it("releases transport after malformed response", async () => {
-    const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(new Response("{broken"));
-    expect(await fixture(fetchFn).evaluate()).toEqual(unavailable("invalid-response"));
-    expect(vi.getTimerCount()).toBe(0);
+  it("strips credentials on a cross-origin 303", async () => {
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(null, { status: 303, headers: { location: "https://93.184.216.35/result" } }),
+      )
+      .mockResolvedValueOnce(Response.json(answer));
+    expect(await fixture(fetchFn).evaluate()).toMatchObject({ status: "ok" });
+    const redirected = fetchFn.mock.calls[1]![1];
+    expect(redirected?.method).toBe("GET");
+    expect(redirected?.body).toBeUndefined();
+    expect(new Headers(redirected?.headers).has("authorization")).toBe(false);
   });
+  it.each(["{broken", JSON.stringify({ ...answer, id: "wrong" })])(
+    "releases transport after malformed response %#",
+    async (body) => {
+      const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(new Response(body));
+      expect(await fixture(fetchFn).evaluate()).toEqual({
+        status: "unavailable",
+        reason: "invalid-response",
+      });
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
   it("rejects an oversized actual body and cancels its stream", async () => {
     const cancel = vi.fn();
-    const stream = new ReadableStream({
-      start(controller) {
-        controller.enqueue(new Uint8Array(16 * 1024 * 1024 + 1));
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array(16 * 1024 * 1024 + 1));
+        },
+        cancel,
+      }),
+      {
+        headers: { "content-length": "999999999" },
       },
-      cancel,
-    });
-    const response = new Response(stream, { headers: { "content-length": "999999999" } });
+    );
     const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(response);
-    expect(await fixture(fetchFn).evaluate()).toEqual(unavailable("invalid-response"));
+    expect(await fixture(fetchFn).evaluate()).toEqual({
+      status: "unavailable",
+      reason: "invalid-response",
+    });
     expect(cancel).toHaveBeenCalled();
   });
   it.each([200, 503])("bounds the whole body read for HTTP %s and cleans up", async (status) => {
-    const { started, cancel, response } = pendingBody(status);
-    const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(response);
+    const cancel = vi.fn();
+    const readStarted = createDeferred<void>();
+    const stream = new ReadableStream(
+      {
+        pull() {
+          readStarted.resolve();
+        },
+        cancel,
+      },
+      { highWaterMark: 0 },
+    );
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(new Response(stream, { status }));
     const pending = fixture(fetchFn).evaluate();
-    await started;
+    await readStarted.promise;
     await vi.advanceTimersByTimeAsync(501);
-    expect(await pending).toEqual(unavailable("transport"));
+    expect(await pending).toEqual({ status: "unavailable", reason: "transport" });
     expect(cancel).toHaveBeenCalled();
+    expect(fetchFn).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
   });
   it("honors cancellation during body consumption", async () => {
     const controller = new AbortController();
-    const { started, cancel, response } = pendingBody();
-    const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(response);
-    const pending = fixture(fetchFn, { signal: controller.signal }).evaluate();
+    const cancel = vi.fn();
+    const started = createDeferred<void>();
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        new ReadableStream(
+          {
+            pull() {
+              started.resolve();
+            },
+            cancel,
+          },
+          { highWaterMark: 0 },
+        ),
+      ),
+    );
+    const pending = fixture(fetchFn, {
+      signal: controller.signal,
+    }).evaluate();
     const rejected = expect(pending).rejects.toThrow("caller cancelled");
-    await started;
+    await started.promise;
     controller.abort(new Error("caller cancelled"));
     await rejected;
     expect(cancel).toHaveBeenCalled();
@@ -275,7 +372,7 @@ describe("Sage through the real guarded provider HTTP helper", () => {
     ).rejects.toThrow("cancelled");
     expect(
       await fixture(fetchFn, { deadlineMonotonicMs: performance.now() - 1 }).evaluate(),
-    ).toEqual(unavailable("transport"));
+    ).toEqual({ status: "unavailable", reason: "transport" });
     expect(fetchFn).not.toHaveBeenCalled();
   });
 });

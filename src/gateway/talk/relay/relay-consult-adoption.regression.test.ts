@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { isIndexedSessionEntry } from "../../../agents/sessions/session-manager-codec.js";
 import { SessionManager } from "../../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../../agents/test-helpers/agent-message-fixtures.js";
@@ -14,6 +14,8 @@ import { useRelayFixtures } from "./fixture.test-support.js";
 import { createIdleRelayProvider } from "./index.test-support.js";
 import { flushTalkRealtimeRelayVoiceWrites } from "./operations.js";
 
+const connId = "relay-adoption-test-client";
+const sessionKey = "agent:main:main";
 const speech = { assistant: "Checking now.", user: "Please keep working." };
 
 const createRelay = useRelayFixtures();
@@ -21,20 +23,31 @@ const assistantMessage = (text: string) =>
   makeAgentAssistantMessage({ content: [{ type: "text", text }], timestamp: 2 });
 
 async function createConsult(excludeFromContext = true) {
-  const createBridge = vi.fn((_request: RealtimeVoiceBridgeCreateRequest) => controlBridge());
+  let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
   const { relay } = await createRelay({
+    cfg: { agents: { entries: { main: {} } } },
     context: controlContext(),
+    connId,
     controlSource: "delegation",
-    provider: createIdleRelayProvider(createBridge),
+    provider: createIdleRelayProvider((options) => {
+      bridgeRequest = options;
+      return controlBridge();
+    }),
+    instructions: "Answer briefly.",
   });
-  const { onTranscript, onEvent, onReady } = createBridge.mock.calls[0]![0];
+  const onTranscript = bridgeRequest?.onTranscript;
+  const onEvent = bridgeRequest?.onEvent;
   if (!onTranscript || !onEvent) {
     throw new Error("expected registered relay transcript and response callbacks");
   }
-  onReady?.();
+  bridgeRequest?.onReady?.();
   onEvent({ direction: "server", type: "response.created", responseId: "consult-response" });
-  const { storePath, sessionKey } = relay.sessionTarget;
-  const scope = { agentId: "main", sessionId: "main", sessionKey, storePath };
+  const scope = {
+    agentId: "main",
+    sessionId: "main",
+    sessionKey,
+    storePath: relay.sessionTarget.storePath,
+  };
   await upsertSessionEntryCore(scope, {
     sessionFile: formatSqliteSessionFileMarker(scope),
     sessionId: scope.sessionId,
@@ -47,48 +60,67 @@ async function createConsult(excludeFromContext = true) {
     ...(excludeFromContext ? { excludeFromContext: true } : {}),
     timestamp: 1,
   };
-  await appendTranscriptMessage(scope, { eventId: "keyed-consult-turn", message: consult, now: 1 });
+  await appendTranscriptMessage(scope, {
+    eventId: "keyed-consult-turn",
+    message: consult,
+    now: 1,
+  });
   const recordSpeech = async (roles: readonly ("assistant" | "user")[]) => {
     for (const role of roles) {
       onTranscript(role, speech[role], true);
     }
-    await flushTalkRealtimeRelayVoiceWrites({ relaySessionId: relay.id, connId: relay.connId });
+    await flushTalkRealtimeRelayVoiceWrites({ relaySessionId: relay.id, connId });
   };
   const messages = async () =>
     (await loadTranscriptEvents(scope))
       .filter(isIndexedSessionEntry)
       .filter((entry) => entry.type === "message");
-  const open = () => SessionManager.openBounded(scope, { maxBytes: 100_000, maxEvents: 100 });
+  const openManager = () =>
+    SessionManager.openBounded(scope, { maxBytes: 100_000, maxEvents: 100 });
   const expectRejected = async (message: typeof consult, error: string) => {
     const before = await messages();
-    expect(() => open().appendMessage(message)).toThrow(error);
+    expect(() => openManager().appendMessage(message)).toThrow(error);
     expect(await messages()).toEqual(before);
   };
-  return { scope, consult, recordSpeech, messages, open, expectRejected };
+  return { scope, consult, recordSpeech, messages, openManager, expectRejected };
 }
 
 it.each([
-  [["user", "assistant"], true],
-  [["assistant", "user"], false],
-] as const)("adopts consult after %j speech (excluded: %s)", async (roles, excluded) => {
-  const { consult, recordSpeech, messages, open } = await createConsult(excluded);
-  await recordSpeech(roles);
-  const beforeAdoption = await messages();
-  expect(beforeAdoption.slice(1).map(({ message }) => message)).toMatchObject(
-    roles.map((role) => ({ role, content: [{ type: "text", text: speech[role] }] })),
-  );
+  { roles: ["user", "assistant"], excludeFromContext: true },
+  { roles: ["assistant", "user"], excludeFromContext: false },
+] as const)(
+  "adopts the exact consult after live $roles speech (excluded: $excludeFromContext)",
+  async ({ roles, excludeFromContext }) => {
+    const { consult, recordSpeech, messages, openManager } =
+      await createConsult(excludeFromContext);
+    await recordSpeech(roles);
+    const beforeAdoption = await messages();
+    expect(beforeAdoption).toMatchObject([
+      { id: "keyed-consult-turn", message: consult },
+      ...roles.map((role) => ({
+        message: {
+          role,
+          content: [{ type: "text", text: speech[role] }],
+          provenance: { kind: "realtime_voice", sourceChannel: "talk" },
+        },
+      })),
+    ]);
 
-  const manager = open();
-  expect(manager.appendMessageWithTranscriptAnchor(consult)).toMatchObject({
-    entryId: "keyed-consult-turn",
-    message: consult,
-    anchor: { entryId: "keyed-consult-turn", idempotencyKey: consult.idempotencyKey },
-    appended: false,
-  });
-  const parentId = beforeAdoption.at(-1)?.id;
-  const id = manager.appendMessage(assistantMessage("You have one meeting tomorrow."));
-  expect(await messages()).toMatchObject([...beforeAdoption, { id, parentId }]);
-});
+    const manager = openManager();
+    expect(manager.appendMessageWithTranscriptAnchor(consult)).toMatchObject({
+      entryId: "keyed-consult-turn",
+      message: consult,
+      anchor: { entryId: "keyed-consult-turn", idempotencyKey: consult.idempotencyKey },
+      appended: false,
+    });
+    expect(manager.getAppendParentId()).toBe(beforeAdoption.at(-1)?.id);
+    const answerId = manager.appendMessage(assistantMessage("You have one meeting tomorrow."));
+    expect(await messages()).toMatchObject([
+      ...beforeAdoption,
+      { id: answerId, parentId: beforeAdoption.at(-1)?.id },
+    ]);
+  },
+);
 
 it.each([
   { boundary: "completed" },

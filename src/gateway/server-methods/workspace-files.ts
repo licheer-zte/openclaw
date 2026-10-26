@@ -166,7 +166,7 @@ async function toSessionFileEntry(
     authorizeHostRead?: () => Promise<boolean>;
     onOutsideBoundary?: () => void;
   } = {},
-): Promise<SessionFileEntry | undefined> {
+): Promise<SessionFileEntry> {
   const target = await resolveSessionFileReadTarget(
     { root, fileRoot, authorizeHostRead: opts.authorizeHostRead },
     touched.path,
@@ -185,10 +185,6 @@ async function toSessionFileEntry(
   const browserPath = target.path;
   const readRoot = target.outside ? target.root : (opts.workspaceRoot ?? target.root);
   const stat = await statWorkspacePath(readRoot, browserPath, opts.assertCurrent);
-  // Confirmed directories belong to the browser, not file-only activity.
-  if (stat?.isDirectory && !opts.includeContent) {
-    return undefined;
-  }
   if (!stat?.isFile) {
     return { ...base, missing: true };
   }
@@ -253,7 +249,12 @@ export async function listSessionWorkspaceFiles(
     search?: string;
     assertCurrent?: () => void;
   },
-) {
+): Promise<{
+  root?: string;
+  gitCheckout?: boolean;
+  files: SessionFileEntry[];
+  browser?: SessionFileBrowserResult;
+}> {
   const root = params.root;
   const workspaceRoot = root ? await openWorkspaceRoot(root) : undefined;
   const gitCheckout =
@@ -374,7 +375,7 @@ export async function listSessionWorkspaceFiles(
   return {
     ...(root ? { root } : {}),
     ...(gitCheckout === undefined ? {} : { gitCheckout }),
-    files: files.filter((file) => file !== undefined),
+    files,
     ...(browser ? { browser } : {}),
   };
 }
@@ -427,7 +428,7 @@ export async function getSessionWorkspaceFile(
           params.root,
           options,
         );
-        if (file && !file.missing) {
+        if (!file.missing) {
           return { root: params.root, file };
         }
       }
@@ -443,6 +444,13 @@ export async function getSessionWorkspaceFile(
   };
 }
 
+export type SessionWorkspaceWriteResult =
+  | { status: "updated"; root: string; file: SessionFileEntry }
+  | { status: "conflict"; currentHash: string }
+  | { status: "unsafe" }
+  | { status: "missing" }
+  | { status: "too-large"; size: number };
+
 export async function setSessionWorkspaceFile(params: {
   root?: string;
   fileRoot?: string;
@@ -450,20 +458,20 @@ export async function setSessionWorkspaceFile(params: {
   content: string;
   expectedHash: string;
   assertCurrent?: () => void;
-}) {
+}): Promise<SessionWorkspaceWriteResult> {
   // Reject content the preview cannot round-trip, before encoding oversized input.
   if (params.content.includes("\0")) {
-    return { status: "unsafe" as const };
+    return { status: "unsafe" };
   }
   const size = Buffer.byteLength(params.content, "utf8");
   if (size > WORKSPACE_PREVIEW_MAX_BYTES) {
-    return { status: "too-large" as const, size };
+    return { status: "too-large", size };
   }
   if (Buffer.from(params.content, "utf8").toString("utf8") !== params.content) {
-    return { status: "unsafe" as const };
+    return { status: "unsafe" };
   }
   if (!params.root) {
-    return { status: "missing" as const };
+    return { status: "missing" };
   }
   const candidates = resolveSessionFileCandidates({
     root: params.root,
@@ -480,7 +488,7 @@ export async function setSessionWorkspaceFile(params: {
     }
   }
   if (!browserPath) {
-    return { status: "missing" as const };
+    return { status: "missing" };
   }
   let update: WorkspaceFileUpdateResult;
   try {
@@ -495,19 +503,19 @@ export async function setSessionWorkspaceFile(params: {
     if (!(error instanceof FsSafeError)) {
       throw error;
     }
-    return { status: "unsafe" as const };
+    return { status: "unsafe" };
   }
   if (update.status !== "updated") {
     return update;
   }
   return {
-    status: "updated" as const,
+    status: "updated",
     root: params.root,
     file: {
       path: params.path,
       workspacePath: update.canonicalPath,
       name: displayNameForPath(update.canonicalPath),
-      kind: "modified" as const,
+      kind: "modified",
       missing: false,
       size: update.stat.size,
       updatedAtMs: toUpdatedAtMs(update.stat.mtimeMs),

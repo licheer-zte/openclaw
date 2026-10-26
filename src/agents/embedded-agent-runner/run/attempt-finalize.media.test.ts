@@ -38,57 +38,82 @@ describe("finalizeEmbeddedAttempt trajectory capture", () => {
     return Object.fromEntries(recordEvent.mock.calls) as Record<string, Record<string, unknown>>;
   };
 
-  type TerminalCase = {
-    input: Partial<EmbeddedRunAttemptResult>;
-    stop: string | undefined;
-    status: "success" | "error" | "interrupted";
+  type TerminalCaseOptions = {
+    texts?: string[];
+    last?: AssistantStopReason;
+    completed?: AssistantStopReason;
+    yielded?: boolean;
   };
+  type TerminalCase = {
+    name: string;
+    terminal: EmbeddedRunAttemptResult["terminal"];
+    currentStopReason: AssistantStopReason;
+    expectedStopReason: string | undefined;
+    expectedFinalStatus: "success" | "error" | "interrupted";
+    options: TerminalCaseOptions;
+  };
+  const ok = { kind: "ok" } as const;
   const externalAbort = { kind: "aborted", source: "external" } as const;
   const yieldAbort = { kind: "aborted", source: "yield_cleanup" } as const;
   const failure = { source: "prompt", error: new Error("prompt failed") } as const;
-  const yielded = {
-    lastAssistant: assistant("aborted"),
-    currentAttemptCompletedAssistant: assistant("stop"),
-    yieldDetected: true,
-  };
+  const yielded = { last: "aborted", completed: "stop", yielded: true } as const;
   const timeout = { kind: "timeout", phase: "prompt", source: "runtime" } as const;
 
   it.each`
-    name                                     | input                                                                                                    | stop          | status
-    ${"current over stale"}                  | ${{ lastAssistant: assistant("aborted") }}                                                               | ${"stop"}     | ${"success"}
-    ${"normal completion"}                   | ${{ currentAttemptAssistant: assistant("length"), currentAttemptCompletedAssistant: assistant("stop") }} | ${"stop"}     | ${"success"}
-    ${"length truncation with visible text"} | ${{ currentAttemptAssistant: assistant("length") }}                                                      | ${"length"}   | ${"success"}
-    ${"yield plus prompt timeout"}           | ${{ ...yielded, terminal: timeout }}                                                                     | ${undefined}  | ${"interrupted"}
-    ${"yield plus external abort"}           | ${{ ...yielded, terminal: externalAbort }}                                                               | ${"aborted"}  | ${"interrupted"}
-    ${"external abort over prompt failure"}  | ${{ terminal: { ...externalAbort, failure } }}                                                           | ${"aborted"}  | ${"interrupted"}
-    ${"partial provider error"}              | ${{ currentAttemptAssistant: assistant("error"), assistantTexts: ["x"] }}                                | ${"error"}    | ${"error"}
-    ${"yield cleanup plus prompt failure"}   | ${{ ...yielded, terminal: { ...yieldAbort, failure }, currentAttemptAssistant: assistant("error") }}     | ${undefined}  | ${"error"}
-    ${"yield over completed assistant"}      | ${{ ...yielded, terminal: yieldAbort, currentAttemptAssistant: assistant("length") }}                    | ${"end_turn"} | ${"success"}
-  `("$name", ({ input, stop, status }: TerminalCase) => {
-    const events = captureTrajectory({ lastAssistant: assistant("toolUse"), ...input });
-    for (const name of ["model.completed", "trace.artifacts", "session.ended"]) {
-      expect(events[name]).toHaveProperty("stopReason", stop);
-    }
-    expect(events["trace.artifacts"]).toHaveProperty("finalStatus", status);
-  });
-
-  it.each`
-    name                       | input                                                                                                                                                                                    | delivered
-    ${"tool metadata only"}    | ${{ currentAttemptAssistant: assistant("toolUse"), toolMetas: [{ toolName: "read" }] }}                                                                                                  | ${false}
-    ${"accepted spawn"}        | ${{ currentAttemptAssistant: assistant("toolUse"), toolMetas: [{ toolName: "read" }], acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:claude:subagent:child" }] }} | ${true}
-    ${"unconsumed tool error"} | ${{ currentAttemptAssistant: undefined, lastToolError: { toolName: "bash", error: "Execution denied.", executionStarted: false } }}                                                      | ${false}
-    ${"answered tool error"}   | ${{ lastToolError: { toolName: "bash", error: "Execution denied.", executionStarted: false } }}                                                                                          | ${true}
+    name                                     | terminal                         | currentStopReason | expectedStopReason | expectedFinalStatus | options
+    ${"current over stale"}                  | ${ok}                            | ${"stop"}         | ${"stop"}          | ${"success"}        | ${{ last: "aborted" }}
+    ${"normal completion"}                   | ${ok}                            | ${"length"}       | ${"stop"}          | ${"success"}        | ${{ completed: "stop" }}
+    ${"length truncation with visible text"} | ${ok}                            | ${"length"}       | ${"length"}        | ${"success"}        | ${{}}
+    ${"yield plus prompt timeout"}           | ${timeout}                       | ${"stop"}         | ${undefined}       | ${"interrupted"}    | ${yielded}
+    ${"yield plus external abort"}           | ${externalAbort}                 | ${"stop"}         | ${"aborted"}       | ${"interrupted"}    | ${yielded}
+    ${"external abort over prompt failure"}  | ${{ ...externalAbort, failure }} | ${"stop"}         | ${"aborted"}       | ${"interrupted"}    | ${{}}
+    ${"partial provider error"}              | ${ok}                            | ${"error"}        | ${"error"}         | ${"error"}          | ${{ texts: ["x"] }}
+    ${"yield cleanup plus prompt failure"}   | ${{ ...yieldAbort, failure }}    | ${"error"}        | ${undefined}       | ${"error"}          | ${yielded}
+    ${"yield over completed assistant"}      | ${yieldAbort}                    | ${"length"}       | ${"end_turn"}      | ${"success"}        | ${yielded}
   `(
-    "requires durable progress: $name",
-    ({ input, delivered }: { input: Partial<EmbeddedRunAttemptResult>; delivered: boolean }) => {
-      const events = captureTrajectory(input);
+    "$name",
+    ({
+      terminal,
+      currentStopReason,
+      expectedStopReason,
+      expectedFinalStatus,
+      options,
+    }: TerminalCase) => {
+      const events = captureTrajectory({
+        terminal,
+        assistantTexts: options.texts ?? [],
+        lastAssistant: assistant(options.last ?? "toolUse"),
+        currentAttemptAssistant: assistant(currentStopReason),
+        currentAttemptCompletedAssistant: options.completed
+          ? assistant(options.completed)
+          : undefined,
+        yieldDetected: options.yielded,
+      });
+
+      for (const name of ["model.completed", "trace.artifacts", "session.ended"]) {
+        expect(events[name]).toHaveProperty("stopReason", expectedStopReason);
+      }
+      expect(events["trace.artifacts"]).toHaveProperty("finalStatus", expectedFinalStatus);
+    },
+  );
+
+  it.each([false, true])(
+    "requires durable progress rather than tool metadata (accepted spawn=%s)",
+    (spawned) => {
+      const events = captureTrajectory({
+        currentAttemptAssistant: assistant("toolUse"),
+        toolMetas: [{ toolName: "read" }],
+        acceptedSessionSpawns: spawned
+          ? [{ runId: "run-child", childSessionKey: "agent:claude:subagent:child" }]
+          : undefined,
+      });
       expect(events["trace.artifacts"]).toHaveProperty(
         "finalStatus",
-        delivered ? "success" : "error",
+        spawned ? "success" : "error",
       );
       expect(events["session.ended"]).toMatchObject({
-        status: delivered ? "success" : "error",
-        terminalError: delivered ? undefined : "non_deliverable_terminal_turn",
+        status: spawned ? "success" : "error",
+        terminalError: spawned ? undefined : "non_deliverable_terminal_turn",
       });
     },
   );
@@ -97,7 +122,19 @@ describe("finalizeEmbeddedAttempt trajectory capture", () => {
     const media = [{ path: "/media/canonical.png", contentType: "image/png" }];
     const message = castAgentMessage({ role: "user", content: "inspect", __openclaw: { media } });
     const expected = structuredClone(message);
-    const events = captureTrajectory({ messagesSnapshot: [message] });
+    const events = captureTrajectory({
+      messagesSnapshot: [message],
+    });
     expect(events["model.completed"]?.messagesSnapshot).toEqual([expected]);
+  });
+  it.each([false, true])("does not count an unconsumed tool error as delivery (%s)", (answered) => {
+    const events = captureTrajectory({
+      currentAttemptAssistant: answered ? assistant("stop") : undefined,
+      lastToolError: { toolName: "bash", error: "Execution denied.", executionStarted: false },
+    });
+    expect(events["session.ended"]).toMatchObject({
+      status: answered ? "success" : "error",
+      terminalError: answered ? undefined : "non_deliverable_terminal_turn",
+    });
   });
 });

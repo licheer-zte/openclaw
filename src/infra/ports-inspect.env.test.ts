@@ -27,7 +27,14 @@ it.skipIf(process.platform === "win32").each([
     withTempDir("diagnostic-env-", async (directory) => {
       const root = await realpath(directory);
       const reportPath = path.join(root, "children.jsonl");
-      const routing = createDiagnosticFixtureRouting({ PATH: root, HOME: root, TMPDIR: root });
+      const routing = createDiagnosticFixtureRouting({
+        PATH: root,
+        HOME: root,
+        TMPDIR: root,
+        LANG: "C",
+        LC_ALL: "C",
+        TZ: "UTC",
+      });
       const report = diagnosticEnvReportScript(routing);
       const expectedReport = (defined: boolean) => ({
         defined: Object.fromEntries(Object.keys(diagnosticCanaries).map((key) => [key, defined])),
@@ -48,7 +55,7 @@ it.skipIf(process.platform === "win32").each([
           String.raw`#!${process.execPath}
 const fs = require('node:fs');
 const command = ${JSON.stringify(command)};
-fs.appendFileSync(${JSON.stringify(reportPath)}, ${report} + '\n');
+fs.appendFileSync(${JSON.stringify(reportPath)}, JSON.stringify({command, ...JSON.parse(${report})}) + '\n');
 const output = command === 'lsof' ? ${JSON.stringify(fallback ? "" : lsofOutput)}
   : command === 'ss' ? ${JSON.stringify(ssOutput)}
   : process.argv.includes('user=') ? 'fixture-user\n' : '1 node fixture-server\n';
@@ -60,6 +67,15 @@ process.exitCode = command === 'lsof' ? ${fallback ? 2 : 0} : 0;
       }
       await withSyntheticDiagnosticEnv(routing, async () => {
         const parent = { ...process.env };
+        const payload = async () => {
+          const result = await runCommandWithTimeout(
+            [process.execPath, "-e", `process.stdout.write(${report})`],
+            { timeoutMs: 5000 },
+          );
+          expect(result.code).toBe(0);
+          expect(JSON.parse(result.stdout)).toEqual(expectedReport(true));
+        };
+        await payload();
         const entries =
           family === "connections"
             ? (await inspectPortConnections(port)).connections
@@ -69,18 +85,16 @@ process.exitCode = command === 'lsof' ? ${fallback ? 2 : 0} : 0;
         expect(entries).toMatchObject([
           { pid: 424242, commandLine: "node fixture-server", ppid: 1, user: "fixture-user" },
         ]);
-        const payload = await runCommandWithTimeout(
-          [process.execPath, "-e", `process.stdout.write(${report})`],
-          { timeoutMs: 5000 },
-        );
-        expect(payload.code).toBe(0);
-        expect(JSON.parse(payload.stdout)).toEqual(expectedReport(true));
+        await payload();
         expect(process.env).toEqual(parent);
         const reports = (await readFile(reportPath, "utf8"))
           .trim()
           .split("\n")
           .map((line) => JSON.parse(line));
-        expect(reports).toEqual(Array(fallback ? 4 : 3).fill(expectedReport(false)));
+        const commands = fallback ? ["lsof", "ss", "ps", "ps"] : ["lsof", "ps", "ps"];
+        expect(reports.toSorted((a, b) => a.command.localeCompare(b.command))).toEqual(
+          commands.toSorted().map((command) => Object.assign({ command }, expectedReport(false))),
+        );
       });
     }),
 );

@@ -60,7 +60,7 @@ import {
   listManagedPlugins,
 } from "./management-service.js";
 import { isBundledManifestOwner } from "./manifest-owner-policy.js";
-import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
+import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
 import { setPluginEnabledInConfig } from "./toggle-config.js";
@@ -70,28 +70,22 @@ type ManagedPluginMutationOptions = {
   signal?: AbortSignal;
   applyRuntime?: PluginLifecycleRuntimeApply;
   beforePersistentApply?: () => void;
-  beforePersistentEffect?: () => void | Promise<void>;
 };
 
 function withManagedPluginMutation<T>(
   params: ManagedPluginMutationOptions,
-  run: (beforePersistentApply: () => void, prepareEffect: () => Promise<void>) => Promise<T>,
+  run: (beforePersistentApply: () => void) => Promise<T>,
 ): Promise<T> {
-  return withPluginLifecycleLeaseAsync(
+  return withPluginLifecycleLease(
     { env: params.env ?? process.env, signal: params.signal },
-    async (lease) => {
+    (lease) => {
       const beforePersistentApply = composeConfigWriteAssertions(
         () => params.signal?.throwIfAborted(),
-        lease.assertCurrent,
+        lease.assertOwned,
         params.beforePersistentApply,
       );
       beforePersistentApply();
-      const prepareEffect = async () => {
-        await params.beforePersistentEffect?.();
-        await lease.assertOwned();
-        beforePersistentApply();
-      };
-      return run(beforePersistentApply, prepareEffect);
+      return run(beforePersistentApply);
     },
   );
 }
@@ -136,7 +130,7 @@ export async function installManagedPlugin(
   const env = params.env ?? process.env;
   const clawhubUrl = resolveClawHubBaseUrl(undefined, env);
   const { installManagedPluginSource } = await import("./management-install.js");
-  return await withManagedPluginMutation(params, async (beforePersistentApply, prepareEffect) => {
+  return await withManagedPluginMutation(params, async (beforePersistentApply) => {
     const performInstall = async () => {
       const useHostedCatalog =
         params.request.source === "official" ||
@@ -213,7 +207,7 @@ export async function installManagedPlugin(
         requireCapabilityConsent: params.clawManaged === true,
         requireClawHubTrust: params.clawManaged === true,
         onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
-        beforePersistentEffect: prepareEffect,
+        beforePersistentEffect: params.beforePersistentEffect,
         ...(params.request.acknowledgeCapabilities
           ? { acknowledgeCapabilities: params.request.acknowledgeCapabilities }
           : {}),
@@ -319,7 +313,7 @@ export async function mutateManagedPluginEnabled(
   const env = params.env ?? process.env;
   const cli = params.caller === "cli";
   const preserveAllowlist = cli || params.allowlistPolicy === "preserve";
-  return await withManagedPluginMutation(params, async (beforePersistentApply, prepareEffect) => {
+  return await withManagedPluginMutation(params, async (beforePersistentApply) => {
     if (cli) {
       assertConfigWriteAllowedInCurrentMode({ env });
     }
@@ -355,7 +349,6 @@ export async function mutateManagedPluginEnabled(
           acknowledge: params.acknowledgeCapabilities,
           onCapabilityConsent: params.onCapabilityConsent,
           beforePersistentApply: params.beforePersistentApply,
-          beforePersistentEffect: prepareEffect,
           metadata,
         });
       }
@@ -400,7 +393,6 @@ export async function mutateManagedPluginEnabled(
             // CLI alias writes preserve merged canonical settings during source projection.
             writeOptions: {
               ...snapshot.writeOptions,
-              beforeCommit: prepareEffect,
               assertConfigPathForWrite: () => {
                 snapshot.writeOptions.assertConfigPathForWrite?.();
                 beforePersistentApply();
@@ -455,7 +447,7 @@ export async function setManagedPluginEnabled(params: ManagedPluginEnableRequest
   application?: PluginRuntimeApplication;
 }> {
   const env = params.env ?? process.env;
-  return await withManagedPluginMutation(params, async (beforePersistentApply, prepareEffect) => {
+  return await withManagedPluginMutation(params, async (beforePersistentApply) => {
     const result = await mutateManagedPluginEnabled({ ...params, caller: "management" });
     if (result.status !== "committed") {
       throw new ManagedPluginLifecycleError(
@@ -469,7 +461,6 @@ export async function setManagedPluginEnabled(params: ManagedPluginEnableRequest
       env,
       assertCurrent: beforePersistentApply,
     });
-    await prepareEffect();
     const application = await params.applyRuntime?.({
       config: result.config,
       write: result.write,
@@ -501,7 +492,7 @@ export async function reloadManagedPlugin(
     },
 ) {
   const env = params.env ?? process.env;
-  return await withManagedPluginMutation(params, async (beforePersistentApply, prepareEffect) => {
+  return await withManagedPluginMutation(params, async (beforePersistentApply) => {
     const config = await readPluginRuntimeConfig();
     const metadata = await loadFreshManagedPluginMetadata(config, env);
     const targets = params.plugins;
@@ -558,7 +549,6 @@ export async function reloadManagedPlugin(
         metadata,
         acknowledge: params.acknowledgeCapabilities,
         beforePersistentApply: params.beforePersistentApply,
-        beforePersistentEffect: prepareEffect,
       });
     }
     const resolved = await resolveTargets();
@@ -572,7 +562,6 @@ export async function reloadManagedPlugin(
         expected.set(id, digest);
       }
     }
-    await prepareEffect();
     return {
       pluginIds: resolved.map((target) => target.pluginId),
       application: await params.applyRuntime({
@@ -594,11 +583,10 @@ export async function refreshManagedPlugins(
   },
 ): Promise<{ application: PluginRuntimeApplication }> {
   const env = params.env ?? process.env;
-  return await withManagedPluginMutation(params, async (beforePersistentApply, prepareEffect) => {
+  return await withManagedPluginMutation(params, async (beforePersistentApply) => {
     const config = await readPluginRuntimeConfig();
     beforePersistentApply();
     await refreshManagedPluginMetadata({ config, env, assertCurrent: beforePersistentApply });
-    await prepareEffect();
     return {
       application: await params.applyRuntime({
         config,

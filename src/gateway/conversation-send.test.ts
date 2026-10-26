@@ -27,7 +27,6 @@ import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-sur
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   conversation,
-  createClickClackConversationConfig,
   createConversationDeliveryTestStore,
   holdConversationWriterForTest,
   queueConversationDeliveryForTest,
@@ -112,7 +111,15 @@ describe("conversation send through an accepted channel response", () => {
     );
     const stateDir = fixtures.tmpDir();
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const config = createClickClackConversationConfig();
+    const config = {
+      channels: {
+        clickclack: {
+          baseUrl: "https://clickclack.example",
+          workspace: "wsp_synthetic",
+          token: "synthetic-token",
+        },
+      },
+    };
     const address = {
       channel: "clickclack",
       accountId: "default",
@@ -334,6 +341,7 @@ describe("runGatewayConversationSend", () => {
       gatewayOwnedDelivery: true,
       forceCoreDelivery: true,
       requireQueuePersistence: true,
+      suppressTranscriptMirror: true,
       sessionKey: "agent:main:telegram:direct:operator",
     });
     expect(deps.runMessageAction.mock.calls[0]?.[0]?.params).not.toHaveProperty("accountId");

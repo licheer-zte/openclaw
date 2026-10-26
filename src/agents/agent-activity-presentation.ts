@@ -116,7 +116,6 @@ export function summarizeAgentActivity(
     status?: string;
     hideFromChannelProgress?: boolean;
     suppressChannelProgress?: boolean;
-    unpairedCall?: boolean;
   }[],
   opts: { ownSessionLaunches?: ReadonlySet<string> } = {},
 ) {
@@ -160,7 +159,7 @@ export function summarizeAgentActivity(
     total += 1;
     if (outcome) {
       outcomes[outcome] += 1;
-    } else if (!item.status && !item.unpairedCall) {
+    } else if (!item.status) {
       outcomes.unknown += 1;
     }
   }

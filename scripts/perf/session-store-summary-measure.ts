@@ -1,16 +1,11 @@
 /**
- * Session-summary owner microbenchmark: 10,000 synthetic resident entries, followed
- * by mutations and reads of every physical store. No Gateway/SQLite costs.
+ * Session-summary owner microbenchmark: 10,000 synthetic resident entries, one row
+ * replacement followed by reads of every physical store. No Gateway/SQLite costs.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-store-summary-measure.ts \
- *   --iterations 3000 --stores 1 --create-burst 8
+ *   --iterations 3000 --stores 40
  * Save baseline session-stores.ts before editing and pass --owner /absolute/base.ts.
  * Alternate base/candidate order; repeat with --allocations in separate processes.
- * Omit --create-burst for row replacements; --warm covers idle reads. Creation
- * warmup only reads, so 3,000 eight-row bursts grow exactly 10,000 to 34,000 rows.
- * --cold measures only the first fleet read (one iteration, no warmup/mutation);
- * use with --allocations for separate cold preparation allocation measurements.
- * Post-GC heap deltas include both retained owner state and synthetic fixture growth;
- * compare the same workload across arms. Forced GC and oracles stay outside timing.
+ * --stores 1 covers the unchanged single-store case; --warm covers idle reads.
  * The loader exposes the private owner function only in this measurement process.
  * Compare identical output checksums and counts, lower CPU/allocation, and host load.
  */
@@ -33,23 +28,13 @@ const { values } = parseArgs({
     stores: { type: "string", default: "40" },
     allocations: { type: "boolean", default: false },
     warm: { type: "boolean", default: false },
-    cold: { type: "boolean", default: false },
-    "create-burst": { type: "string", default: "0" },
   },
 });
 assert(global.gc, "Run with --expose-gc");
 const integer = (name: "iterations" | "stores", fallback: number) =>
   parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min: 1, fallback });
-const iterations = values.cold ? 1 : integer("iterations", 3000);
+const iterations = integer("iterations", 3000);
 const storeCount = integer("stores", 40);
-const createBurst = parseStrictIntegerOption({
-  raw: values["create-burst"],
-  label: "--create-burst",
-  min: 0,
-  fallback: 0,
-});
-assert(!values.warm || createBurst === 0, "--warm cannot create rows");
-assert(!values.cold || (!values.warm && createBurst === 0), "--cold measures preparation only");
 const sessionCount = 10000;
 assert(storeCount <= sessionCount);
 const ownerUrl = new URL("../../src/status/session-stores.ts", import.meta.url).href;
@@ -123,46 +108,28 @@ const {
 } = await import(ownerUrl);
 assert(instrumented, "Owner instrumentation was not loaded");
 let sequence = 0;
-let nextSession = sessionCount;
-function publish(row: Row) {
-  projection.state.revision = {};
-  const change: Change = {
-    kind: "row",
-    id: `${row.agentId}\0${row.storeTarget.storePath}\0${row.key}`,
-    key: row.key,
-    agentId: row.agentId,
-    row,
-  };
-  for (const listener of listeners) {
-    listener(change);
-  }
-}
-function run(count: number, mutate = !values.warm && !values.cold) {
+function run(count: number) {
   let checksum = 0;
   for (let index = 0; index < count; index++, sequence++) {
-    if (mutate) {
+    if (!values.warm) {
       const store = stores[sequence % storeCount]!;
-      if (createBurst > 0) {
-        const agentId = store.rows[0]!.agentId;
-        for (let added = 0; added < createBurst; added++, nextSession++) {
-          const row: Row = {
-            key: `agent:${agentId}:session-${String(nextSession).padStart(5, "0")}`,
-            agentId,
-            storeTarget: { storePath: store.path },
-            entry: { sessionId: `session-${nextSession}`, updatedAt: sessionCount + sequence },
-          };
-          store.rows.push(row);
-          publish(row);
-        }
-      } else {
-        const rowIndex = Math.floor(sequence / storeCount) % store.rows.length;
-        const previous = store.rows[rowIndex]!;
-        const row = {
-          ...previous,
-          entry: { ...previous.entry, updatedAt: sessionCount + sequence },
-        };
-        store.rows[rowIndex] = row;
-        publish(row);
+      const rowIndex = Math.floor(sequence / storeCount) % store.rows.length;
+      const previous = store.rows[rowIndex]!;
+      const row = {
+        ...previous,
+        entry: { ...previous.entry, updatedAt: sessionCount + sequence },
+      };
+      store.rows[rowIndex] = row;
+      projection.state.revision = {};
+      const change: Change = {
+        kind: "row",
+        id: `${row.agentId}\0${store.path}\0${row.key}`,
+        key: row.key,
+        agentId: row.agentId,
+        row,
+      };
+      for (const listener of listeners) {
+        listener(change);
       }
     }
     for (const store of stores) {
@@ -178,20 +145,11 @@ function run(count: number, mutate = !values.warm && !values.cold) {
 function sampledBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
   return node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
 }
-const encodeSummary = (summary: Summary) =>
-  JSON.stringify({ ...summary, byAgent: [...summary.byAgent] });
 const inspector = new Session();
 try {
-  const warmup = values.cold ? 0 : 100;
-  run(warmup, !values.warm && createBurst === 0);
-  const snapshots = values.cold
-    ? []
-    : stores.map((store) => {
-        const summary = summarizeProjectionRows(projection, store.path, 10);
-        return { summary, encoded: encodeSummary(summary) };
-      });
+  const warmup = 100;
+  run(warmup);
   global.gc();
-  const retainedMemoryBefore = process.memoryUsage();
   selectionCalls = 0;
   selectedRows = 0;
   if (values.allocations) {
@@ -214,11 +172,6 @@ try {
   const allocatedBytes = values.allocations
     ? sampledBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
     : undefined;
-  global.gc();
-  const retainedMemoryAfter = process.memoryUsage();
-  for (const snapshot of snapshots) {
-    assert.equal(encodeSummary(snapshot.summary), snapshot.encoded, "Read snapshot was mutated");
-  }
   const output = stores.map((store) => {
     const summary = summarizeProjectionRows(projection, store.path, 10);
     const expected = store.rows
@@ -230,10 +183,10 @@ try {
       .slice(0, 10)
       .map((row) => ({ sessionKey: row.key, entry: row.entry }));
     assert.equal(summary.count, store.rows.length);
-    assert.deepEqual(summary.recent, []);
+    assert.equal(summary.byAgent.size, 1);
     assert.deepEqual(
-      summary.byAgent,
-      new Map([[store.rows[0]!.agentId, { count: store.rows.length, recent: expected }]]),
+      [...summary.byAgent.values()],
+      [{ count: store.rows.length, recent: expected }],
     );
     return { path: store.path, count: summary.count, recent: expected };
   });
@@ -241,20 +194,11 @@ try {
     JSON.stringify({
       scope: "summary owner; synthetic resident projection; no Gateway or SQLite",
       mode: values.allocations ? "allocation" : "timing",
-      workload: values.cold
-        ? "cold-first-fleet-read"
-        : values.warm
-          ? "idle"
-          : createBurst > 0
-            ? "creation-burst-per-fleet-read"
-            : "one-row-replacement-per-fleet-read",
+      workload: values.warm ? "idle" : "one-row-replacement-per-fleet-read",
       owner: sourceUrl,
       ownerSha256: createHash("sha256").update(source).digest("hex"),
       node: process.version,
       sessionCount,
-      finalSessionCount: nextSession,
-      createdRows: nextSession - sessionCount,
-      createBurst,
       storeCount,
       iterations,
       warmup,
@@ -268,9 +212,6 @@ try {
       hostLoadAfter: loadavg(),
       memoryBefore,
       memoryAfter,
-      retainedMemoryBefore,
-      retainedMemoryAfter,
-      retainedHeapDeltaBytes: retainedMemoryAfter.heapUsed - retainedMemoryBefore.heapUsed,
     }),
   );
 } finally {

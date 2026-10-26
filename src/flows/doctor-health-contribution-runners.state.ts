@@ -34,7 +34,6 @@ export async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): 
     await import("../commands/doctor/shared/codex-route-warnings.js");
   const result = await maybeRepairCodexSessionRoutes({
     cfg: ctx.cfg,
-    modelReplacements: ctx.options.modelReplacements,
     ...(ctx.configResult.retiredModelRefConfig
       ? { retiredModelRefConfig: ctx.configResult.retiredModelRefConfig }
       : {}),

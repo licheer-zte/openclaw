@@ -14,7 +14,6 @@ import {
   subscribeModelCatalogChanges,
   type ModelCatalogPresentation,
 } from "./model-catalog-store.ts";
-import { listen } from "./reactive/listener.ts";
 
 /** A view's subscription and request lifetime; display rows remain owned by the catalog cache. */
 export class ModelCatalogReader {
@@ -25,7 +24,6 @@ export class ModelCatalogReader {
   };
   private controller?: AbortController;
   private unsubscribe?: () => void;
-  private deferredRead = false;
   failed = false;
 
   constructor(
@@ -36,7 +34,6 @@ export class ModelCatalogReader {
       /** Observes admitted reads, including event refreshes; current failures reject. */
       onRead?: (read: Promise<ModelCatalogResult | undefined>) => void;
       onError?: (error: unknown) => void;
-      isPresented?: () => boolean;
     } = {},
   ) {}
 
@@ -95,11 +92,9 @@ export class ModelCatalogReader {
       },
       scope,
     );
-    const stopVisibility = listen(document, "visibilitychange", () => this.resume());
     this.unsubscribe = () => {
       unwatchCache();
       unwatchEvents();
-      stopVisibility();
     };
     return true;
   }
@@ -119,11 +114,6 @@ export class ModelCatalogReader {
     }
     this.controller?.abort();
     this.controller = undefined;
-    if (document.visibilityState === "hidden" || this.options.isPresented?.() === false) {
-      this.deferredRead = true;
-      return Promise.resolve(undefined);
-    }
-    this.deferredRead = false;
     const cached = peekModelCatalog(binding.client, binding.scope);
     if (cached) {
       this.failed = false;
@@ -170,12 +160,6 @@ export class ModelCatalogReader {
     return this.options.onRead ? read.catch(() => undefined) : read;
   }
 
-  resume(): void {
-    if (this.deferredRead) {
-      void this.read();
-    }
-  }
-
   clear(): void {
     this.binding = undefined;
     this.controller?.abort();
@@ -183,6 +167,5 @@ export class ModelCatalogReader {
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     this.failed = false;
-    this.deferredRead = false;
   }
 }

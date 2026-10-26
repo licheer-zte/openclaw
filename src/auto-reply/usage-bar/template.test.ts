@@ -19,9 +19,8 @@ const temp = useAutoCleanupTempDirTracker(afterEach);
 const subscriptions: observation.WatchSubscription[] = [];
 const states = () => subscriptions.map((subscription) => subscription.health().state);
 let created = createDeferredCore<observation.WatchSubscription>();
-let directory: string;
 beforeEach(() => {
-  directory = temp.make("usage-template-");
+  created = createDeferredCore<observation.WatchSubscription>();
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const original = observation.watch;
   vi.spyOn(observation, "watch").mockImplementation((authority, options) => {
@@ -29,6 +28,7 @@ beforeEach(() => {
     const subscription = original(authority, { ...options, mode: "poll" });
     subscriptions.push(subscription);
     created.resolve(subscription);
+    created = createDeferredCore<observation.WatchSubscription>();
     return subscription;
   });
 });
@@ -41,75 +41,103 @@ afterEach(async () => {
 });
 const tplA = { segments: [{ text: "A" }] };
 const tplB = { output: { default: [{ text: "B" }] } };
-function writeTemplate(data: object | string, file = join(directory, "template.json")) {
-  writeFileSync(file, typeof data === "string" ? data : JSON.stringify(data));
-  return file;
-}
+const warning = "configured usage template could not be used; using built-in footer";
+const writeJSON = (file: string, data: object) => writeFileSync(file, JSON.stringify(data));
 function expectWarningCount(file: string, count: number) {
   expect(loadUsageBarTemplate(file)).toBe(defaultTemplate);
   expect(warnSpy).toHaveBeenCalledTimes(count);
 }
-async function loadObservedTemplate(path: string, expected: object) {
-  created = createDeferredCore<observation.WatchSubscription>();
-  expect(loadUsageBarTemplate(path)).toEqual(expected);
-  const subscription = await created.promise;
+function tmpFile(name: string, contents: string, directory = temp.make("usage-template-")): string {
+  const file = join(directory, name);
+  writeFileSync(file, contents);
+  return file;
+}
+async function loadObservedTemplate(path: string, expected: object, write = true) {
+  if (write) {
+    writeJSON(path, expected);
+  }
+  const started = created.promise;
+  const template = loadUsageBarTemplate(path);
+  expect(template).toEqual(expected);
+  const subscription = await started;
   await subscription.ready;
-  return subscription;
+  return { template, subscription };
 }
 it.each([
-  [() => ({ nope: true }), 1],
-  [() => writeTemplate({ output: { default: [] } }), 0],
+  [(): undefined => undefined, []],
+  [() => ({ nope: true }), [[warning, { source: "inline", reason: "unsupported-shape" }]]],
+  [() => tmpFile("empty.json", '{"output":{"default":[]}}'), []],
 ] as const)("uses the built-in template for input %#", (configured, warnings) => {
   expect(loadUsageBarTemplate(configured())).toBe(defaultTemplate);
-  expect(warnSpy).toHaveBeenCalledTimes(warnings);
+  expect(warnSpy.mock.calls).toEqual(warnings);
 });
-it("bounds invalid-template warnings by LRU path and reloads corrected JSON", () => {
-  const paths = Array.from({ length: 257 }, (_, i) =>
-    writeTemplate("{ not json", join(directory, `${i}.json`)),
-  );
-  paths.slice(0, 256).forEach(loadUsageBarTemplate);
+it("reloads a path after invalid JSON is fixed", () => {
+  const path = tmpFile("bad.json", "{ not json");
+  expectWarningCount(path, 1);
+  writeJSON(path, tplB);
+  expect(loadUsageBarTemplate(path)).toMatchObject(tplB);
+});
+it("bounds invalid-template warnings by least-recently-used path", () => {
+  const dir = temp.make("usage-template-");
+  const paths = Array.from({ length: 257 }, (_, i) => tmpFile(`${i}.json`, "{ not json", dir));
+  for (const path of paths.slice(0, 256)) {
+    expect(loadUsageBarTemplate(path)).toBe(defaultTemplate);
+  }
+  expect(warnSpy).toHaveBeenCalledTimes(256);
   expectWarningCount(paths[0]!, 256); // Keep the oldest key hot before overflowing.
   expectWarningCount(paths[256]!, 257);
   expectWarningCount(paths[0]!, 257);
   expectWarningCount(paths[1]!, 258);
-  writeTemplate(tplB, paths[1]);
-  expect(loadUsageBarTemplate(paths[1])).toMatchObject(tplB);
+  expect(warnSpy).toHaveBeenLastCalledWith(warning, {
+    source: "file",
+    reason: "invalid-json",
+    path: paths[1],
+  });
 });
 it("refreshes atomic replacements and restored files, then rereads after loss of coverage", async () => {
+  const directory = temp.make("usage-template-");
   const file = join(directory, "template.json");
-  const subscription = await loadObservedTemplate(writeTemplate(tplA, file), tplA);
-  const first = loadUsageBarTemplate(file);
+  const { template: first, subscription } = await loadObservedTemplate(file, tplA);
   await subscription.reconcile();
   expect(loadUsageBarTemplate(file)).toBe(first);
-  for (const [change, expected] of [
-    [() => renameSync(writeTemplate(tplB, `${file}.new`), file), tplB],
-    [() => unlinkSync(file), defaultTemplate],
-    [() => writeTemplate(tplA, file), tplA],
-  ] as const) {
-    change();
+  const staged = join(directory, "staged.json");
+  async function update(next: object, atomic = false) {
+    writeJSON(atomic ? staged : file, next);
+    if (atomic) {
+      renameSync(staged, file);
+    }
     await subscription.reconcile();
-    expect(loadUsageBarTemplate(file)).toEqual(expected);
-    expect(loadUsageBarTemplate(file) === defaultTemplate).toBe(expected === defaultTemplate);
+    expect(loadUsageBarTemplate(file)).toEqual(next);
   }
+  await update(tplB, true);
+  await update(tplA, true);
+  unlinkSync(file);
+  await subscription.reconcile();
+  expect(loadUsageBarTemplate(file)).toBe(defaultTemplate);
+  await update(tplA);
+  await update(tplB, true);
   expect(warnSpy).not.toHaveBeenCalled();
   renameSync(directory, join(temp.make("usage-template-"), "retired"));
   await expect(subscription.reconcile()).rejects.toThrow();
   mkdirSync(directory);
-  await loadObservedTemplate(writeTemplate(tplB, file), tplB);
+  const replacement = await loadObservedTemplate(file, tplB);
+  await replacement.subscription.reconcile();
   expect(subscription.health().state).toBe("closed");
 });
 it("evicts the oldest path with its observation, but retains entries when retrying a miss", async () => {
+  const directory = temp.make("usage-template-");
   const files = Array.from({ length: 65 }, (_, i) => join(directory, `template-${i}.json`));
   for (const file of files.slice(0, 63)) {
-    await loadObservedTemplate(writeTemplate(tplA, file), tplA);
+    await loadObservedTemplate(file, tplA);
   }
-  expect(loadUsageBarTemplate(files[63])).toBe(defaultTemplate);
-  await loadObservedTemplate(writeTemplate(tplB, files[63]!), tplB);
-  writeTemplate(tplB, files[0]!);
-  expect(loadUsageBarTemplate(files[0])).toEqual(tplA);
-  await loadObservedTemplate(writeTemplate(tplA, files[64]!), tplA);
+  const miss = files[63]!;
+  expect(loadUsageBarTemplate(miss)).toBe(defaultTemplate);
+  await loadObservedTemplate(miss, tplB);
+  writeJSON(files[0]!, tplB);
+  expect([subscriptions.length, loadUsageBarTemplate(files[0])]).toEqual([64, tplA]);
+  await loadObservedTemplate(files[64]!, tplA);
   expect(states()).toEqual(["closed", ...Array(64).fill("ready")]);
-  await loadObservedTemplate(files[0]!, tplB);
+  await loadObservedTemplate(files[0]!, tplB, false);
   await clearUsageBarTemplateCacheForTest();
   expect(states()).toEqual(Array(66).fill("closed"));
 });

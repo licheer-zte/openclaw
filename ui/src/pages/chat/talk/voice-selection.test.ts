@@ -79,13 +79,18 @@ describe("active Talk voice selection", () => {
     async (order) => {
       f.emit(change);
       f.controller.ready(f.previous);
-      const ready = () => f.controller.ready(f.candidate);
-      const start = () => f.started.resolve(f.candidate);
-      const [first, second] = order === "ready-first" ? [ready, start] : [start, ready];
-      first();
+      if (order === "ready-first") {
+        f.controller.ready(f.candidate);
+      } else {
+        f.started.resolve(f.candidate);
+      }
       await Promise.resolve();
       expect(f.completions()).toEqual([]);
-      second();
+      if (order === "ready-first") {
+        f.started.resolve(f.candidate);
+      } else {
+        f.controller.ready(f.candidate);
+      }
       await vi.waitFor(() => expect(f.completions()).toHaveLength(1));
       expect(f.completions()[0]).toEqual([
         "talk.voice.complete",

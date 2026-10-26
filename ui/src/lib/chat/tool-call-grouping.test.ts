@@ -58,9 +58,8 @@ describe("summarizeToolGroup", () => {
         prepared("approval", "Write report", { status: "blocked" }),
         prepared("steering", "Read context", { status: "skipped" }),
         prepared("unknown", "Outcome unknown", { status: undefined }),
-        prepared("unpaired", "Run build", { status: undefined, unpairedCall: true }),
       ]),
-    ).toBe("5 other operations · 1 failed · 1 blocked · 1 skipped · 1 unknown");
+    ).toBe("4 other operations · 1 failed · 1 blocked · 1 skipped · 1 unknown");
   });
 
   it("keeps the diagnostic disclosure label when all prepared work is quiet", () => {

@@ -2,10 +2,6 @@ import { randomUUID } from "node:crypto";
 import http from "node:http";
 import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import { McpServer } from "@modelcontextprotocol/server";
-import {
-  closeHttpServer,
-  listenLoopback,
-} from "../../test/helpers/gateway-integration-fixtures.js";
 
 export async function startRequesterScopedMcpProofServer(): Promise<{
   url: string;
@@ -43,13 +39,23 @@ export async function startRequesterScopedMcpProofServer(): Promise<{
       }
     });
   });
-  const origin = await listenLoopback(httpServer);
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once("error", reject);
+    httpServer.listen(0, "127.0.0.1", resolve);
+  });
+  const address = httpServer.address();
+  if (!address || typeof address === "string") {
+    throw new Error("requester-scoped MCP proof server did not bind a loopback port");
+  }
   return {
-    url: `${origin}/mcp`,
+    url: `http://127.0.0.1:${address.port}/mcp`,
     session,
     close: async () => {
       await server.close();
-      await closeHttpServer(httpServer);
+      httpServer.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((error) => (error ? reject(error) : resolve()));
+      });
     },
   };
 }

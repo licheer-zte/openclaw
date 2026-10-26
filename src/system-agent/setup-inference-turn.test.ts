@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
 import { FailoverError } from "../agents/failover-error.js";
-import { createFixtureProviderModels } from "../agents/test-helpers/model-fallback-config-fixture.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAgentEventTestHarness } from "../gateway/server-chat.agent-events.test-harness.js";
 import {
@@ -301,7 +300,15 @@ describe("setup inference plugin ownership", () => {
 
   it("does not load plugins for a direct custom provider using the built-in OpenClaw harness", async () => {
     const config = embeddedRoute("openclaw", "fixture", "direct-model").runConfig;
-    config.models = createFixtureProviderModels("https://provider.example/v1");
+    config.models = {
+      providers: {
+        fixture: {
+          api: "openai-completions",
+          baseUrl: "https://provider.example/v1",
+          models: [],
+        },
+      },
+    };
     const { binding } = await createSystemAgentVerifiedInferenceTestFixture(config);
     expect(binding.ownerPluginIds).toEqual([]);
     mocks.loadAgentRuntimePluginRegistryHandle.mockClear();

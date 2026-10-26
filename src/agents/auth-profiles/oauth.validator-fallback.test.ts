@@ -1,8 +1,14 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../plugin-sdk/file-lock.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { captureEnv } from "../../test-utils/env.js";
 import "./oauth-external-auth-passthrough.test-support.js";
 import { createOAuthRefreshCredential as createCredential } from "./credential-fixtures.test-support.js";
+import {
+  OAUTH_AGENT_ENV_KEYS,
+  createOAuthMainAgentDir,
+  createOAuthTestTempRoot,
+  removeOAuthTestTempRoot,
+} from "./oauth-test-utils.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
 import {
   ensureAuthProfileStoreWithoutExternalProfiles as loadStore,
@@ -41,17 +47,16 @@ const accountCredential = (label: string, expires: number) =>
     accountId: `${label}-account`,
   });
 
-function reset() {
-  resetFileLockStateForTest();
-  clearRuntimeAuthProfileStoreSnapshots();
-  refreshCredential.mockReset();
-}
-beforeEach(reset);
-afterEach(reset);
+it.each([false, true])("validates fallback credentials (reject=%s)", async (reject) => {
+  const envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
+  let tempRoot = "";
 
-it.each([false, true])("validates fallback credentials (reject=%s)", (reject) =>
-  withOpenClawTestState({ layout: "state-only", agentEnv: "main" }, async (state) => {
-    const mainAgentDir = state.agentDir();
+  try {
+    resetFileLockStateForTest();
+    clearRuntimeAuthProfileStoreSnapshots();
+    refreshCredential.mockReset();
+    tempRoot = await createOAuthTestTempRoot("openclaw-oauth-validator-fallback-");
+    const mainAgentDir = await createOAuthMainAgentDir(tempRoot);
     const primaryId = "openai:default";
     const fallbackId = "openai:alternate";
     const fallback = accountCredential("fallback", Date.now() + 600_000);
@@ -91,5 +96,10 @@ it.each([false, true])("validates fallback credentials (reject=%s)", (reject) =>
     expect(validateOAuthCredential).toHaveBeenLastCalledWith(fallback);
     expect(refreshCredential).toHaveBeenCalledOnce();
     expect(loadStore(mainAgentDir).profiles[fallbackId]).toEqual(fallback);
-  }),
-);
+  } finally {
+    envSnapshot.restore();
+    resetFileLockStateForTest();
+    clearRuntimeAuthProfileStoreSnapshots();
+    await removeOAuthTestTempRoot(tempRoot);
+  }
+});

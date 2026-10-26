@@ -5,11 +5,7 @@ import type {
 import type { EventLogEntry } from "../api/event-log.ts";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-cache.ts";
-import {
-  bindCronInventory,
-  clearCronInventory,
-  receiveCronInventoryEvent,
-} from "../lib/cron/inventory-connection.ts";
+import { invalidateCronCatalog } from "../lib/cron/catalog.ts";
 import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
 import {
   clearModelCatalogCache,
@@ -138,16 +134,13 @@ export function createGatewayMetadataObserver(
           (previous.phase === "connected" && next.phase !== "connected"))
       ) {
         invalidateUserPreferences(previous.client);
-        clearCronInventory(previous.client);
+        invalidateCronCatalog(previous.client);
         invalidateModelAuthStatusRequests(previous.client);
         clearModelCatalogCache(previous.client);
         invalidateChatMetadataStore(previous.client);
         if (!isCurrent(next)) {
           return false;
         }
-      }
-      if (next.client && next.hello && next.phase === "connected") {
-        bindCronInventory(next.client, next.hello);
       }
       if (
         !next.client ||
@@ -171,8 +164,8 @@ export function createGatewayMetadataObserver(
       event: GatewayEventFrame,
       host: UiSessionDefaultsHost & Pick<ApplicationGatewaySnapshot, "client">,
     ): GatewayEventFrame | undefined {
-      if (host.client) {
-        receiveCronInventoryEvent(host.client, event);
+      if (host.client && (event.event === "cron" || event.event === "config.changed")) {
+        invalidateCronCatalog(host.client);
       }
       if (event.event !== "models.snapshot") {
         return event;

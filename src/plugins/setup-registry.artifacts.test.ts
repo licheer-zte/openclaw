@@ -1,11 +1,11 @@
+import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
-import { writeArtifact } from "./public-surface.test-support.js";
 import { resolvePluginSetupRegistry } from "./setup-registry.js";
 import type { ProviderPlugin } from "./types.js";
 
@@ -30,15 +30,18 @@ function setupManifest(
 }
 
 it.each(["cjs", "mjs"])("reuses bundled %s setup", async (extension) => {
+  const event = `bundled-setup-evaluation-${extension}`;
+  const evaluated = vi.fn();
+  process.on(event, evaluated);
   const rootDir = temp.make("bundled-setup-identity-");
   const source = path.join(rootDir, `setup-api.${extension}`);
   const manifestRegistry = setupManifest("bundled-owner", rootDir, source, {
     origin: "bundled",
     setupSource: source,
   });
-  writeArtifact(
+  fs.writeFileSync(
     source,
-    `let registrations = 0;
+    `process.emit(${JSON.stringify(event)}); let registrations = 0;
         ${extension === "mjs" ? "export default" : "module.exports ="} {
         register(api) {
           const registration = ++registrations;
@@ -61,8 +64,10 @@ it.each(["cjs", "mjs"])("reuses bundled %s setup", async (extension) => {
       expect(current.resolveConfigApiKey?.(query)).toBe(String(index + 1));
       previous = current;
     }
+    expect(evaluated).toHaveBeenCalledOnce();
   } finally {
     await Promise.all(caches.map((cache) => retirePluginCache(cache)));
+    process.off(event, evaluated);
   }
 });
 describe("installed setup artifacts", () => {
@@ -78,20 +83,24 @@ describe("installed setup artifacts", () => {
     (artifactDir, declared, extension, competingDist) => {
       const rootDir = temp.make("openclaw-setup-lifecycle-");
       const artifactRoot = path.join(rootDir, artifactDir);
+      fs.mkdirSync(artifactRoot, { recursive: true });
       const setupSource = path.join(artifactRoot, `setup-api.${extension}`);
       const dependencyPath = path.join(artifactRoot, "setup-dependency.cjs");
       if (competingDist) {
-        writeArtifact(
+        fs.mkdirSync(path.join(rootDir, "dist"), { recursive: true });
+        fs.writeFileSync(
           path.join(rootDir, "dist", competingDist),
           'module.exports = { register(api) { api.registerProvider({ id: "setup-lifecycle", label: "wrong-dist-entry" }); } };\n',
+          "utf8",
         );
       }
       const writeSetupArtifact = (version: string) => {
-        writeArtifact(dependencyPath, `module.exports = "dependency-${version}";\n`);
-        writeArtifact(
+        fs.writeFileSync(dependencyPath, `module.exports = "dependency-${version}";\n`, "utf8");
+        fs.writeFileSync(
           setupSource,
           `${extension === "mjs" ? 'import dependency from "./setup-dependency.cjs"; export default' : "module.exports ="}
           { register(api) { api.registerProvider({ id: "setup-lifecycle", label: "entry-${version}:" + ${extension === "mjs" ? "dependency" : 'require("./setup-dependency.cjs")'} }); } };\n`,
+          "utf8",
         );
       };
       const manifestRegistry = setupManifest(

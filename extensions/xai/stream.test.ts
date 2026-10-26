@@ -1,4 +1,9 @@
-import { streamSimple, type Model, type ModelThinkingLevel } from "openclaw/plugin-sdk/llm";
+import {
+  streamSimple,
+  type Model,
+  type ModelThinkingLevel,
+  type ModelRequestHeaders,
+} from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { XAI_BASE_URL } from "./model-definitions.js";
 import { resolveFastModeSupport } from "./provider-policy-api.js";
@@ -6,11 +11,25 @@ import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 import { wrapXaiProviderStream } from "./stream.js";
 import { captureXaiRequest, xaiModel } from "./test-helpers.js";
 
+function captureRequest(
+  model: Model<"openai-responses">,
+  extraParams: Record<string, unknown> = {},
+  headers?: ModelRequestHeaders,
+  payload?: Record<string, unknown>,
+) {
+  const captured = captureXaiRequest(model, {
+    extraParams: { tool_stream: false, ...extraParams },
+    headers,
+    payload: payload ?? {},
+  });
+  return { capturedModelId: captured.modelId, capturedHeaders: captured.headers };
+}
+
 function patchPayload<T extends Record<string, unknown>>(
   payload: T,
   model: Partial<Model<"openai-responses">> = {},
 ): T {
-  captureXaiRequest(xaiModel(model), { extraParams: { tool_stream: false }, payload });
+  captureRequest(xaiModel(model), {}, undefined, payload);
   return payload;
 }
 
@@ -37,18 +56,6 @@ function imageMessage(index: number, ...images: unknown[]) {
   };
 }
 
-function message(role: string, content: string) {
-  return { type: "message", role, content };
-}
-
-function toolCall(call_id: string) {
-  return { type: "function_call", call_id, name: "read", arguments: "{}" };
-}
-
-function imagePart(image_url = "data:image/png;base64,QUJDRA==") {
-  return { type: "input_image", image_url };
-}
-
 it.each([
   { modelId: "grok-4-0709", target: "grok-4-fast", supported: true },
   { modelId: "grok-4.3", target: "grok-4.3", supported: false },
@@ -63,8 +70,7 @@ it.each([
     }),
   ).toBe(supported);
   const capture = (fastMode: boolean | "ultrafast" | (() => "ultrafast")) =>
-    captureXaiRequest(xaiModel({ id: modelId }), { extraParams: { tool_stream: false, fastMode } })
-      .modelId;
+    captureRequest(xaiModel({ id: modelId }), { fastMode }).capturedModelId;
   expect([capture(true), capture("ultrafast"), capture(() => "ultrafast"), capture(false)]).toEqual(
     [target, target, target, modelId],
   );
@@ -107,12 +113,38 @@ async function captureXaiResponsesPayloadWithThinking(
 }
 
 describe("xai stream wrappers", () => {
-  it("does not add Grok OAuth headers for a lookalike host", () => {
-    const { headers } = captureXaiRequest(
-      xaiModel({ id: "grok-4.5", baseUrl: "https://cli-chat-proxy.grok.com.example/v1" }),
-      { extraParams: { tool_stream: false }, headers: { "X-Existing": "kept" } },
+  it("adds the Grok OAuth proxy request contract", () => {
+    const id = "grok-4.7";
+    const { capturedModelId, capturedHeaders } = captureRequest(
+      xaiModel({
+        id,
+        name: "Subscription default",
+        input: ["text"],
+        params: { canonicalModelId: "grok-fixture-unselected" },
+        baseUrl: "https://cli-chat-proxy.grok.com/v1",
+      }),
+      {},
+      { "X-XAI-Token-Auth": "operator-value", "X-Existing": "kept", "x-delete": null },
     );
-    expect(headers).toEqual({ "X-Existing": "kept" });
+
+    expect(capturedModelId).toBe(id);
+    expect(capturedHeaders).toEqual({
+      "X-Existing": "kept",
+      "x-delete": null,
+      "x-grok-client-version": "2026.7.2",
+      "x-grok-model-override": id,
+      "X-XAI-Token-Auth": "xai-grok-cli",
+    });
+  });
+
+  it("does not add Grok OAuth headers for a lookalike host", () => {
+    const { capturedHeaders } = captureRequest(
+      xaiModel({ id: "grok-4.5", baseUrl: "https://cli-chat-proxy.grok.com.example/v1" }),
+      {},
+      { "X-Existing": "kept" },
+    );
+
+    expect(capturedHeaders).toEqual({ "X-Existing": "kept" });
   });
 
   it("strips unsupported reasoning controls from non-reasoning xai payloads", () => {
@@ -153,7 +185,17 @@ describe("xai stream wrappers", () => {
   it("preserves native Responses image output arrays for x-ai", () => {
     const callId = `${"a".repeat(63)}🙈`;
     const input = [
-      toolOutput([inputText("Read image"), { ...imagePart(), detail: "auto" }], callId),
+      toolOutput(
+        [
+          inputText("Read image"),
+          {
+            type: "input_image",
+            detail: "auto",
+            image_url: "data:image/png;base64,QUJDRA==",
+          },
+        ],
+        callId,
+      ),
     ];
     expect(
       project(input, {
@@ -164,23 +206,20 @@ describe("xai stream wrappers", () => {
   });
 
   it("keeps parallel compatibility image history as a prefix across turns", () => {
-    const image = {
-      type: "input_image",
-      source: { type: "base64", media_type: "image/png", data: "QUJDRA==" },
-    };
+    const image = { type: "input_image", image_url: "data:image/png;base64,QUJDRA==" };
     const result = toolOutput([inputText("Read image"), image], "call_image");
     const group = [result, toolOutput("No image", "call_text")];
     const history = [
-      message("user", "Read the files"),
-      toolCall("call_image"),
-      toolCall("call_text"),
+      { type: "message", role: "user", content: "Read the files" },
+      { type: "function_call", call_id: "call_image", name: "read", arguments: "{}" },
+      { type: "function_call", call_id: "call_text", name: "read", arguments: "{}" },
       ...group,
     ];
     const first = project(history);
     const nextTurns = [
-      message("assistant", "I read the files."),
-      message("user", "Read another image"),
-      toolCall("call_next"),
+      { type: "message", role: "assistant", content: "I read the files." },
+      { type: "message", role: "user", content: "Read another image" },
+      { type: "function_call", call_id: "call_next", name: "read", arguments: "{}" },
       { ...result, call_id: "call_next" },
     ];
     const next = project([...history, ...nextTurns]);
@@ -196,17 +235,31 @@ describe("xai stream wrappers", () => {
     expect(project(next)).toEqual(next);
 
     // Compaction replaces old history; the retained tail establishes a fresh prefix.
-    const compactedHistory = [message("user", "Summary: the first files were read."), ...nextTurns];
+    const compactedHistory = [
+      { type: "message", role: "user", content: "Summary: the first files were read." },
+      ...nextTurns,
+    ];
     const compacted = project(compactedHistory);
     expect(compacted.at(-1)).toEqual(first.at(-1));
     expect(compacted).toHaveLength(compactedHistory.length + 1);
     expect(
       project([
         ...compactedHistory,
-        message("assistant", "The next image is blue."),
-        message("user", "Thanks"),
+        { type: "message", role: "assistant", content: "The next image is blue." },
+        { type: "message", role: "user", content: "Thanks" },
       ]).slice(0, compacted.length),
     ).toEqual(compacted);
+  });
+
+  it("replays source-based input_image parts from tool results", () => {
+    const image = {
+      type: "input_image",
+      source: { type: "base64", media_type: "image/png", data: "QUJDRA==" },
+    };
+    expect(project([toolOutput([inputText("Read image"), image])])).toEqual([
+      toolOutput("Read image"),
+      imageMessage(1, image),
+    ]);
   });
 
   it("preserves interleaved text and image references for image placeholders", () => {
@@ -214,7 +267,7 @@ describe("xai stream wrappers", () => {
       type: "input_image",
       source: { type: "url", url: "https://example.com/first.png" },
     };
-    const secondImage = imagePart("data:image/png;base64,QkJCQg==");
+    const secondImage = { type: "input_image", image_url: "data:image/png;base64,QkJCQg==" };
     const originalParts = [inputText(""), firstImage, inputText(""), secondImage];
     const originalBytes = JSON.stringify(originalParts);
     const payload = {
@@ -225,6 +278,9 @@ describe("xai stream wrappers", () => {
     const input = payload.input as Array<Record<string, unknown>>;
     expect(input[0]).toEqual(toolOutput("(see attached image)"));
     expect(input[1]).toEqual(imageMessage(1, firstImage, secondImage));
+    const replayParts = input[1]?.content as unknown[];
+    expect(replayParts[1]).toBe(firstImage);
+    expect(replayParts[2]).toBe(secondImage);
     expect(JSON.stringify(originalParts)).toBe(originalBytes);
   });
 
@@ -234,17 +290,21 @@ describe("xai stream wrappers", () => {
       "a".repeat(63) + "🙈",
       ...["c", "d"].map((suffix) => `${"x".repeat(64)}${suffix}`),
     ];
-    const firstImage = { ...imagePart("data:image/png;base64,QUFBQQ=="), detail: "auto" };
+    const firstImage = {
+      type: "input_image",
+      detail: "auto",
+      image_url: "data:image/png;base64,QUFBQQ==",
+    };
     const secondImage = { ...firstImage, image_url: "data:image/png;base64,QkJCQg==" };
     const input = [
-      message("user", "Read the tool results"),
+      { type: "message", role: "user", content: "Read the tool results" },
       toolOutput("No image", callIds[0]),
       toolOutput([inputText("first"), structuredClone(firstImage)], callIds[1]),
       toolOutput([inputText("Still no image")], callIds[2]),
       toolOutput([inputText("second"), structuredClone(secondImage)], callIds[3]),
     ];
     expect(project(input, { baseUrl: "https://cli-chat-proxy.grok.com/v1" })).toEqual([
-      message("user", "Read the tool results"),
+      { type: "message", role: "user", content: "Read the tool results" },
       toolOutput("No image", callIds[0]),
       toolOutput("first", callIds[1]),
       toolOutput("Still no image", callIds[2]),
@@ -254,7 +314,11 @@ describe("xai stream wrappers", () => {
   });
 
   it.each([
-    ["image", { ...imagePart(), detail: "auto" }, "call_1"],
+    [
+      "image",
+      { type: "input_image", detail: "auto", image_url: "data:image/png;base64,QUJDRA==" },
+      "call_1",
+    ],
     ["audio", { type: "input_audio", mimeType: "audio/wav", data: "QUJDRA==" }, "call_audio"],
   ] as const)(
     "uses %s fallback text without forwarding unsupported media",

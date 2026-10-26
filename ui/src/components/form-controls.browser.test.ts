@@ -48,10 +48,13 @@ function readStyles(
 ) {
   return page.evaluate(
     (options) =>
-      options.selectors.map(
-        (selector) =>
-          getComputedStyle(document.querySelector(selector)!, options.pseudo)[options.property],
-      ),
+      options.selectors.map((selector) => {
+        const node = document.querySelector(selector);
+        if (!(node instanceof HTMLElement)) {
+          throw new Error(`Missing style fixture ${selector}`);
+        }
+        return getComputedStyle(node, options.pseudo)[options.property];
+      }),
     { selectors, property, pseudo },
   );
 }
@@ -153,7 +156,12 @@ describeBrowserLayout("form controls and app chrome styles", () => {
     await withBrowserPage(desktopContext.newPage(), async (page) => {
       await setFixture(
         page,
-        `<span class="oc-sensitive-input" data-sensitive-input data-sensitive-mask-ready="true" data-revealed="true">
+        `<span
+          class="oc-sensitive-input"
+          data-sensitive-input
+          data-sensitive-mask-ready="true"
+          data-revealed="true"
+        >
           <span class="oc-sensitive-mask" data-sensitive-mask hidden>
             <span data-sensitive-mask-text>*******************************</span>
           </span>
@@ -186,7 +194,10 @@ describeBrowserLayout("form controls and app chrome styles", () => {
       const metrics = await page
         .getByRole("button", { name: "Remove synthetic server", exact: true })
         .evaluate((button) => {
-          const glyph = button.querySelector("svg")!;
+          const glyph = button.querySelector("svg");
+          if (!(glyph instanceof SVGElement)) {
+            throw new Error("Missing remove button glyph");
+          }
           const buttonRect = button.getBoundingClientRect();
           const glyphRect = glyph.getBoundingClientRect();
           return {
@@ -371,8 +382,11 @@ describeBrowserLayout("form controls and app chrome styles", () => {
       const measure = () =>
         page.locator(".settings-row").evaluateAll((rows) =>
           rows.map((row) => {
-            const select = row.querySelector<HTMLElement>(".settings-select--media-device")!;
-            const button = row.querySelector<HTMLElement>(".btn--icon")!;
+            const select = row.querySelector(".settings-select--media-device");
+            const button = row.querySelector(".btn--icon");
+            if (!(select instanceof HTMLElement) || !(button instanceof HTMLElement)) {
+              throw new Error("Missing media device controls");
+            }
             const selectRect = select.getBoundingClientRect();
             const buttonRect = button.getBoundingClientRect();
             return {
@@ -575,6 +589,19 @@ describeBrowserLayout("form controls and app chrome styles", () => {
   it.each([
     { label: "merged chat chrome", nativeClass: "", merged: true, search: "visible" },
     { label: "topbar still shown", nativeClass: "", merged: false, search: "hidden" },
+    {
+      label: "native macOS",
+      nativeClass: "openclaw-native-macos",
+      merged: false,
+      search: "hidden",
+    },
+    { label: "native nav", nativeClass: "openclaw-native-nav", merged: false, search: "hidden" },
+    {
+      label: "native web chrome",
+      nativeClass: "openclaw-native-web-chrome",
+      merged: false,
+      search: "hidden",
+    },
   ])(
     "shows the mobile drawer command palette button only where nothing else carries it ($label)",
     async ({ nativeClass, merged, search }) => {

@@ -406,8 +406,12 @@ export function createSessionRowEntrySelector(owner: {
   state: () => SessionRowEntrySelection;
 }) {
   const noDirtyRows = new Set<string>();
-  return (query: records.Query = {}, metadataPrepared = false) => {
-    if (!owner.isActive() || query.candidateSessionIdsOrKeys?.size === 0) {
+  return (
+    query: records.Query = {},
+    metadataPrepared = false,
+    selectionKind?: "running-candidate",
+  ) => {
+    if (!owner.isActive()) {
       return [];
     }
     const task = getMainThreadTaskName();
@@ -421,9 +425,8 @@ export function createSessionRowEntrySelector(owner: {
       );
     });
     recordSessionRowSelection(
-      query.candidateSessionIdsOrKeys
-        ? "running-candidate"
-        : query.sessionIdOrKey
+      selectionKind ??
+        (query.sessionIdOrKey
           ? "session-id"
           : query.parentSessionKey
             ? "parent"
@@ -433,7 +436,7 @@ export function createSessionRowEntrySelector(owner: {
                 ? "store"
                 : query.agentId
                   ? "agent"
-                  : "broad",
+                  : "broad"),
       selected.length,
       task,
     );
@@ -481,9 +484,8 @@ function selectSessionRowEntries(
       }
     }
   }
-  const identities =
-    query.candidateSessionIdsOrKeys ?? (query.sessionIdOrKey ? [query.sessionIdOrKey] : undefined);
-  if (identities) {
+  const sessionIdOrKey = query.sessionIdOrKey;
+  if (sessionIdOrKey) {
     // Broad publications can change IDs before the resident index has caught up.
     for (const id of dirty) {
       const row = rows.get(id);
@@ -497,13 +499,8 @@ function selectSessionRowEntries(
         acquire(row);
       }
     }
-    keys = new Set<string>();
-    for (const identity of identities) {
-      const indexed = { ...query, key: identity };
-      for (const row of [...matching(indexed, "id"), ...matching(indexed)]) {
-        keys.add(row.key);
-      }
-    }
+    const indexed = { ...query, key: sessionIdOrKey };
+    keys = new Set([...matching(indexed, "id"), ...matching(indexed)].map((row) => row.key));
   }
   // Keep every physical competitor; federation precedes ID, parent, and visibility filtering.
   const candidates = keys
@@ -528,7 +525,7 @@ function selectSessionRowEntries(
     }
   }
   const acquired =
-    identities || dirty.size === 0
+    sessionIdOrKey || dirty.size === 0
       ? candidates
       : candidates.map((row) => (dirty.has(records.identity(row)) ? acquire(row) : row));
   // Each candidate path returns an owned array. Finish all acquisitions before

@@ -223,7 +223,7 @@ export async function handoffSessionTool(
                   {
                     agentId: caller.agentId,
                     sessionKey: caller.sessionKey,
-                    source: "tool_handoff",
+                    source: "plugin",
                     contextKey,
                     expectedTarget: target,
                     assertCurrent: retained.assertCurrent,
@@ -237,9 +237,7 @@ export async function handoffSessionTool(
                 throw new Error(accepted.error);
               }
               const outcome = await receipt.settled;
-              // Once execution starts, the resumed turn owns its failure/restart recovery.
-              // It is no longer an undelivered tool result.
-              if (outcome.status === "failed" && !outcome.executionStarted) {
+              if (outcome.status === "failed") {
                 throw new Error(outcome.error ?? "Tool result resume failed");
               }
             },

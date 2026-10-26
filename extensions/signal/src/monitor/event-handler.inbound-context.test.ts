@@ -17,8 +17,8 @@ import {
 import type { TestDispatchResult } from "./event-handler.test-harness.js";
 import type {
   SignalDataMessage,
+  SignalEnvelope,
   SignalEventHandlerDeps,
-  SignalReceivePayload,
 } from "./event-handler.types.js";
 vi.useRealTimers();
 let createBaseSignalEventHandlerDeps: typeof import("./event-handler.test-harness.js").createBaseSignalEventHandlerDeps;
@@ -275,8 +275,8 @@ function nextTimerTick(): Promise<void> {
 type SignalHandler = ReturnType<typeof createSignalEventHandler>;
 type SignalMessagesConfig = NonNullable<OpenClawConfig["messages"]>;
 type SignalChannelConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["signal"]>;
-type DirectMessageOverrides = NonNullable<SignalReceivePayload["envelope"]> & {
-  dataMessage?: SignalDataMessage;
+type DirectMessageOverrides = Omit<SignalEnvelope, "dataMessage"> & {
+  dataMessage?: NonNullable<SignalEnvelope["dataMessage"]>;
 };
 
 type TestMessagesConfig = Partial<SignalMessagesConfig>;
@@ -376,7 +376,7 @@ function receiveDirectMessage(
 function receiveMessage(
   handler: SignalHandler,
   dataMessage: SignalDataMessage,
-  envelope: Omit<DirectMessageOverrides, "dataMessage"> = {},
+  envelope: Omit<SignalEnvelope, "dataMessage"> = {},
 ): ReturnType<SignalHandler> {
   return handler(createSignalReceiveEvent({ ...envelope, dataMessage }));
 }
@@ -385,7 +385,7 @@ function receiveGroupMessage(
   handler: SignalHandler,
   message: string,
   dataMessage: Partial<SignalDataMessage> = {},
-  envelope: Omit<DirectMessageOverrides, "dataMessage"> = {},
+  envelope: Omit<SignalEnvelope, "dataMessage"> = {},
 ): ReturnType<SignalHandler> {
   return receiveMessage(
     handler,

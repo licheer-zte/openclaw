@@ -24,10 +24,6 @@ export async function admitProviderRateLimitStream(
   assertProviderAuthAuthority(model);
   options?.signal?.throwIfAborted();
   const stream = await start(request.options);
-  // Unkeyed and delegated requests cannot establish a gate; leave their streams alone.
-  if (!request.observe) {
-    return stream;
-  }
   let observer: typeof request.observe | undefined = request.observe;
   const observe = (message: AssistantMessage) => {
     const pending = observer;

@@ -39,6 +39,28 @@ function formatMatrixPostHealthySyncDecryptionHint(accountId: string): string {
   );
 }
 
+function isFreshPostHealthySyncDecryptFailure(params: {
+  event: MatrixRawEvent;
+  healthySyncSinceMs?: number;
+  nowMs: number;
+}): boolean {
+  const { event, healthySyncSinceMs, nowMs } = params;
+  if (typeof healthySyncSinceMs !== "number" || !Number.isFinite(healthySyncSinceMs)) {
+    return false;
+  }
+  const eventTs = event.origin_server_ts;
+  if (!Number.isFinite(eventTs) || eventTs <= 0) {
+    return false;
+  }
+  if (eventTs < healthySyncSinceMs) {
+    return false;
+  }
+  if (eventTs > nowMs + 60_000) {
+    return false;
+  }
+  return true;
+}
+
 function createMatrixPostHealthySyncDecryptFailureTracker(params: {
   getHealthySyncSinceMs?: () => number | undefined;
 }) {
@@ -68,15 +90,12 @@ function createMatrixPostHealthySyncDecryptFailureTracker(params: {
         trackedHealthySyncSinceMs = healthySyncSinceMs;
         resetObservations();
       }
-      if (typeof healthySyncSinceMs !== "number" || !Number.isFinite(healthySyncSinceMs)) {
-        return { freshAfterHealthySync: false, failureCount: 0 } as const;
-      }
-      const eventTs = event.origin_server_ts;
       if (
-        !Number.isFinite(eventTs) ||
-        eventTs <= 0 ||
-        eventTs < healthySyncSinceMs ||
-        eventTs > nowMs + 60_000
+        !isFreshPostHealthySyncDecryptFailure({
+          event,
+          healthySyncSinceMs,
+          nowMs,
+        })
       ) {
         return { freshAfterHealthySync: false, failureCount: 0 } as const;
       }

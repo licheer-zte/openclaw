@@ -238,10 +238,7 @@ describe("public-session post-deploy app handoff", () => {
     page.on("request", observeDocument);
     const start = requests.length;
     const held = holdAppDelivery();
-    // The reader replaces its document during handoff; the app readiness checks below own completion.
-    const navigation = reload
-      ? page.reload({ waitUntil: "commit" })
-      : page.goto(baseUrl + publicPath, { waitUntil: "commit" });
+    const navigation = reload ? page.reload() : page.goto(baseUrl + publicPath);
     // Observe rejection immediately while the HTML owner remains intentionally held.
     void navigation.catch(() => {});
     try {

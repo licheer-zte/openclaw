@@ -29,7 +29,6 @@ export type PluginCacheManagement<TCache> = {
     snapshot: PluginMetadataSnapshot;
   };
   dependencyStatus: WeakMap<PluginManifestRecord, PluginDependencyStatus>;
-  officialCatalog?: { value: OfficialCatalogResult; pending?: Promise<OfficialCatalogResult> };
-  pluginVersionCategories?: Map<string, PluginCacheFact<Map<string, string[] | null> | null>>;
-  pluginPublisherHandles?: Map<string, PluginCacheFact<string | undefined>>;
+  officialCatalog?: Promise<OfficialCatalogResult>;
+  pluginVersionCategories?: Map<string, Promise<Map<string, string[] | null>>>;
 };

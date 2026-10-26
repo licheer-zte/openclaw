@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import { expect, it } from "vitest";
 import {
   validateCronAddParams,
@@ -16,12 +15,6 @@ import { loadCronStore } from "./store.js";
 
 const { makeStorePath } = createCronStoreHarness({ prefix: "cron-automation-policy-" });
 const prompt = " \tReview the checklist.\r\n  Keep authored spacing.\n ";
-const policy = {
-  activeHours: { start: "22:00", end: "07:00", timezone: "UTC" },
-  idleOnly: true,
-  payload: { kind: "agentTurn", message: prompt, skipIfScratchEmpty: true, includeReasoning: true },
-  delivery: { mode: "announce", target: "owner", directPolicy: "block" },
-};
 
 it("persists and edits ordinary automation policy through the public Cron boundary", async () => {
   await withCronServiceForTest(
@@ -39,26 +32,52 @@ it("persists and edits ordinary automation policy through the public Cron bounda
         schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "main",
         wakeMode: "now",
-        ...structuredClone(policy),
+        activeHours: { start: "22:00", end: "07:00", timezone: "UTC" },
+        idleOnly: true,
+        payload: {
+          kind: "agentTurn",
+          message: prompt,
+          skipIfScratchEmpty: true,
+          includeReasoning: true,
+        },
+        delivery: { mode: "announce", target: "owner", directPolicy: "block" },
       });
       expect(validateCronAddParams(input)).toBe(true);
-      assert(input, "expected normalized automation input");
+      if (!input) {
+        throw new Error("expected normalized automation input");
+      }
       const job = await cron.add(input);
       const reload = async () => {
         const stored = (await loadCronStore(state.deps.storePath)).jobs.find(
           (row) => row.id === job.id,
         );
-        assert(stored, "expected persisted automation");
+        if (!stored) {
+          throw new Error("expected persisted automation");
+        }
         return cronJobReadView(stored);
       };
-      expect(await reload()).toMatchObject({
+      const first = await reload();
+      expect(first).toMatchObject({
         agentId: "helper",
         sessionTarget: "main",
-        ...policy,
+        activeHours: { start: "22:00", end: "07:00", timezone: "UTC" },
+        idleOnly: true,
+        payload: {
+          kind: "agentTurn",
+          message: prompt,
+          skipIfScratchEmpty: true,
+          includeReasoning: true,
+        },
+        delivery: { mode: "announce", target: "owner", directPolicy: "block" },
       });
       await cron.update(job.id, { name: "Renamed check" });
+      expect(await reload()).toMatchObject({
+        activeHours: { start: "22:00", end: "07:00", timezone: "UTC" },
+        idleOnly: true,
+        payload: { message: prompt, skipIfScratchEmpty: true, includeReasoning: true },
+        delivery: { target: "owner", directPolicy: "block" },
+      });
       const beforePolicyEdit = await reload();
-      expect(beforePolicyEdit).toMatchObject(policy);
       const patch = normalizeCronJobPatch({
         activeHours: null,
         idleOnly: null,
@@ -66,15 +85,23 @@ it("persists and edits ordinary automation policy through the public Cron bounda
         delivery: { target: null, directPolicy: null, channel: "telegram", to: "synthetic-owner" },
       });
       expect(validateCronUpdateParams({ id: job.id, patch })).toBe(true);
-      assert(patch, "expected normalized automation patch");
+      if (!patch) {
+        throw new Error("expected normalized automation patch");
+      }
       await cron.update(job.id, patch);
       const edited = await reload();
       expect(edited.configRevision).not.toBe(beforePolicyEdit.configRevision);
       expect(edited).not.toHaveProperty("activeHours");
       expect(edited).not.toHaveProperty("idleOnly");
-      expect(edited).toMatchObject({
-        payload: { message: prompt, skipIfScratchEmpty: false, includeReasoning: false },
-        delivery: { mode: "announce", channel: "telegram", to: "synthetic-owner" },
+      expect(edited.payload).toMatchObject({
+        message: prompt,
+        skipIfScratchEmpty: false,
+        includeReasoning: false,
+      });
+      expect(edited.delivery).toMatchObject({
+        mode: "announce",
+        channel: "telegram",
+        to: "synthetic-owner",
       });
       expect(edited.delivery).not.toHaveProperty("target");
       expect(edited.delivery).not.toHaveProperty("directPolicy");

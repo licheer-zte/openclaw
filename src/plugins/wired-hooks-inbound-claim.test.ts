@@ -15,6 +15,8 @@ const inboundClaimCtx = {
   accountId: "default",
   conversationId: "channel:1",
 };
+const forumEvent = { ...inboundClaimEvent, channel: "forum", conversationId: "123:topic:77" };
+const forumCtx = { ...inboundClaimCtx, channelId: "forum", conversationId: "123:topic:77" };
 
 describe("inbound_claim hook runner", () => {
   const runTargeted = (
@@ -38,7 +40,7 @@ describe("inbound_claim hook runner", () => {
 
       const result = target
         ? await runner.runInboundClaimForPlugin(target, inboundClaimEvent, inboundClaimCtx)
-        : await runner.runInboundClaim(inboundClaimEvent, inboundClaimCtx);
+        : await runner.runInboundClaim(forumEvent, forumCtx);
 
       expect(result).toEqual({ handled: true });
       expect(first).toHaveBeenCalledTimes(target ? 0 : 1);
@@ -58,7 +60,10 @@ describe("inbound_claim hook runner", () => {
       { logger },
     );
 
-    const result = await runner.runInboundClaim(inboundClaimEvent, inboundClaimCtx);
+    const result = await runner.runInboundClaim(
+      { ...forumEvent, content: "hi", conversationId: "123", isGroup: false },
+      { ...forumCtx, conversationId: "123" },
+    );
 
     expect(result).toEqual({ handled: true });
     expect(logger.error).toHaveBeenCalledExactlyOnceWith(

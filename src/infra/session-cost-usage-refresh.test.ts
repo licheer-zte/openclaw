@@ -68,7 +68,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 it("doubles consecutive busy delays, caps them, and resets after success", async () => {
   await withRefreshFixture(
-    async ({ agentId, files: [sessionFile], refresh, hold, request }) => {
+    async ({ agentId, files: [sessionFile], refresh, hold }) => {
       const params = { config, agentId, startMs: 0, endMs: Date.now() };
       const fullRefresh = hold("refreshed");
       let queuedSubset: ReturnType<typeof loadSessions> | undefined;
@@ -82,8 +82,9 @@ it("doubles consecutive busy delays, caps them, and resets after success", async
       });
       refresh.mockResolvedValueOnce("busy");
       try {
-        // A full refresh request starts the busy retry ladder.
-        request();
+        expect(await loadSummary(params)).toMatchObject({
+          cacheStatus: { status: "refreshing", pendingFiles: 1 },
+        });
         await tick(0, 1);
         for (const [index, delayMs] of [
           50, 100, 200, 400, 800, 1_600, 3_200, 5_000, 5_000,

@@ -199,7 +199,7 @@ export function createModelLifecycle(params: {
 }) {
   const callId = params.ctx.nextCallId();
   const runContext = getAgentRunContext(params.ctx.runId);
-  const transportContext: Parameters<typeof withModelTransportContext>[0] = {
+  const transportContext = {
     sessionKey: params.ctx.sessionKey,
     runId: params.ctx.runId,
     requestId: callId,
@@ -476,7 +476,6 @@ export function createModelLifecycle(params: {
   const notifyFinished = () => {
     if (!finishedNotified) {
       finishedNotified = true;
-      transportContext.onRateLimitWait = undefined;
       clearWait();
       signal?.removeEventListener("abort", clearWait);
       params.ctx.onFinished?.(callId);

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveNodeStartupTlsEnvironment } from "../bootstrap/node-startup-env.js";
@@ -13,7 +14,7 @@ import {
   resolveNodeServiceIdentityEnvironment,
 } from "./constants.js";
 import { resolveGatewayHeapNodeOptions } from "./gateway-heap.js";
-import { resolveServiceTmpDir } from "./service-tmp-dir.js";
+import { resolveGatewayStateDir } from "./paths.js";
 
 export const SERVICE_PROXY_ENV_KEYS = [
   "OPENCLAW_PROXY_URL",
@@ -287,6 +288,20 @@ export function buildNodeServiceEnvironment(
     NODE_DISABLE_COMPILE_CACHE: platform === "darwin" ? "1" : undefined,
     ...resolveNodeServiceIdentityEnvironment(env),
   };
+}
+
+function resolveServiceTmpDir(
+  env: Record<string, string | undefined>,
+  platform: NodeJS.Platform,
+): string {
+  if (platform === "darwin") {
+    try {
+      return path.join(resolveGatewayStateDir(env), "tmp");
+    } catch {
+      // Fall back to the same host temporary directory used by other platforms.
+    }
+  }
+  return env.TMPDIR?.trim() || os.tmpdir();
 }
 
 function buildCommonServiceEnvironment(

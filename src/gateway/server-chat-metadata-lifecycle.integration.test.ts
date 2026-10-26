@@ -42,7 +42,6 @@ import {
 import {
   configureAuthFixture,
   configureHarnessOwnedUnresolvedAuth,
-  createMetadataConfig,
   model,
 } from "./server-chat-metadata-lifecycle.auth.test-support.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
@@ -85,7 +84,16 @@ function nativeConfig(refs: string[], primary?: string): OpenClawConfig {
   };
 }
 let state: OpenClawTestState;
-const config = createMetadataConfig();
+const config = {
+  agents: {
+    defaults: {
+      model: { primary: "openai/gpt-5.4" },
+      models: { "openai/gpt-5.4": {} },
+      modelPolicy: { allow: ["openai/gpt-5.4"] },
+    },
+    entries: { main: {} },
+  },
+} as OpenClawConfig;
 const context = {
   broadcast: vi.fn(),
   getRuntimeConfig: () => config,

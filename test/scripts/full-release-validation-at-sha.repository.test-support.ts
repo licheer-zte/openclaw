@@ -27,6 +27,7 @@ export function runGit(cwd: string, args: string[]): string {
 
 type DispatchRepositoryOptions = {
   candidateOwned?: boolean;
+  releaseRef?: string;
   workflowSource?: string;
   targetSource?: Record<string, string>;
   targetAlreadyRemote?: boolean;
@@ -41,7 +42,7 @@ const dispatchRepositoryTemplates = new Map<string, ReturnType<typeof createDisp
 function createDispatchRepository(root: string, options: DispatchRepositoryOptions = {}) {
   const origin = join(root, "origin.git");
   const checkout = join(root, "checkout");
-  const releaseRef = "release/2026.8.1";
+  const releaseRef = options.releaseRef ?? "release/2026.8.1";
   const write = (path: string, content: string | Buffer) => {
     const destination = join(checkout, path);
     mkdirSync(dirname(destination), { recursive: true });
@@ -150,6 +151,7 @@ This audited record covers the complete ${oldWorkflowSha}..${recordTarget} histo
 
 export function prepareDispatchRepository(root: string, options: DispatchRepositoryOptions) {
   const key = JSON.stringify([
+    options.releaseRef ?? "release/2026.8.1",
     options.workflowSource ?? CURRENT_WORKFLOW_SOURCE,
     options.targetSource ?? {},
     options.targetAlreadyRemote !== false,

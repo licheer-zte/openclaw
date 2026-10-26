@@ -162,9 +162,7 @@ if (!await accessor.replaceSessionEntry(scope, rebound)) throw new Error("proof 
   ]);
 
   expect(result, JSON.stringify(result)).toMatchObject({ code: 1, signal: null });
-  expect(result.stderr).toContain(
-    "SQLite session state changed while preparing session-entry.patch",
-  );
+  expect(result.stderr).toContain("CLI turn failed and its fork successor could not be persisted");
   closeOpenClawAgentDatabasesForTest();
   expect(
     loadSessionEntryReadOnly({ sessionKey, storePath, env })?.cliSessionBindings?.["proof-cli"]

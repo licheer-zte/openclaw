@@ -24,15 +24,10 @@ export async function writeTemporaryBundleMcpJson(
 ): Promise<{ filePath: string; cleanup: () => Promise<void> }> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   const filePath = path.join(tempDir, fileName);
-  try {
-    if (atomic) {
-      await writeJson(filePath, value, { trailingNewline: true });
-    } else {
-      await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
-    }
-  } catch (error) {
-    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
-    throw error;
+  if (atomic) {
+    await writeJson(filePath, value, { trailingNewline: true });
+  } else {
+    await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf-8");
   }
   return {
     filePath,

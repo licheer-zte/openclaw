@@ -5,7 +5,7 @@ import {
   type SessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createRuntimeEnv, setupFeishuBroadcastTestHarness } from "./bot.broadcast.test-support.js";
 
 const channelAccount = { channel: "feishu", accountId: "default" };
@@ -17,9 +17,11 @@ describe("broadcast routing", () => {
     createBroadcastConfig,
     createBroadcastEvent,
     handleFeishuMessage,
+    mockCreateFeishuReplyDispatcher: createDispatcher,
     mockDispatchReply: dispatchReply,
-    mockRecordInboundSession: recordSession,
+    mockGetChatInfo: getChatInfo,
     mockResolveAgentRoute: routeMock,
+    runtimeStub,
   } = setupFeishuBroadcastTestHarness();
 
   async function dispatch(messageId: string, cfg = createBroadcastConfig()) {
@@ -69,20 +71,28 @@ describe("broadcast routing", () => {
 
         await dispatch("msg-broadcast-bound-route", cfg);
 
+        expect(dispatchReply).toHaveBeenCalledTimes(2);
         expect(
           contexts.toSorted((a, b) => String(a.AgentId).localeCompare(String(b.AgentId))),
         ).toMatchObject([
           { AgentId: "main", SessionKey: targetSessionKey, ...groupLabels },
           { AgentId: "susan", SessionKey: observerSessionKey, ...groupLabels },
         ]);
-        const recordedRoutes = recordSession.mock.calls
-          .map(([{ updateLastRoute: last }]) => [last?.sessionKey, last?.channel, last?.to])
-          .toSorted((a, b) => String(a[0]).localeCompare(String(b[0])));
-        expect(recordedRoutes).toEqual(
-          [targetSessionKey, observerSessionKey]
-            .map((key) => [key, "feishu", "chat:oc-broadcast-group"])
-            .toSorted((a, b) => String(a[0]).localeCompare(String(b[0]))),
+        const recordCalls = vi.mocked(runtimeStub.channel.session.recordInboundSession).mock.calls;
+        expect(
+          recordCalls
+            .map(([call]) => call.updateLastRoute)
+            .toSorted((a, b) => String(a?.sessionKey).localeCompare(String(b?.sessionKey))),
+        ).toMatchObject(
+          [targetSessionKey, observerSessionKey].toSorted().map((sessionKey) => ({
+            sessionKey,
+            channel: "feishu",
+            to: "chat:oc-broadcast-group",
+          })),
         );
+        expect(getChatInfo).toHaveBeenCalledTimes(1);
+        expect(createDispatcher).toHaveBeenCalledTimes(1);
+        expect(createDispatcher.mock.calls[0]?.[0]).toMatchObject({ agentId: "main" });
         const routeMetadataKeys = Object.getOwnPropertySymbols(route);
         expect(routeMetadataKeys).not.toHaveLength(0);
         for (const ctx of contexts) {

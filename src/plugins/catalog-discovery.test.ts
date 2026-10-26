@@ -13,9 +13,15 @@ import {
   joinLocalPluginDetail,
   resolvePluginDiscoveryIdentity,
 } from "./catalog-discovery.js";
-import { createRemotePluginCatalogFixture } from "./catalog-discovery.test-support.js";
 
-const remote = createRemotePluginCatalogFixture();
+const remote = {
+  packageName: "@alice/memory-plus",
+  displayName: "Memory Plus",
+  family: "code-plugin" as const,
+  isOfficial: false,
+  categories: ["memory"],
+  runtimeId: "memory-plus",
+};
 
 function catalogState(plugins: PluginCatalogEntry[], mutationAllowed = true): PluginsListResult {
   return { plugins, diagnostics: [], mutationAllowed };

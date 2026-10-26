@@ -19,7 +19,6 @@ export interface SessionOrganizerDependencies {
   readonly sidebarEntries: readonly string[];
   readonly onUpdateSidebarEntries?: (entries: string[]) => void;
   sessionsGrouping: SidebarSessionsGrouping;
-  effectiveSessionsGrouping(): SidebarSessionsGrouping;
   sessionsShowCron: boolean;
   sessionsShowPreview: boolean;
   sessionsShowSystem: boolean;

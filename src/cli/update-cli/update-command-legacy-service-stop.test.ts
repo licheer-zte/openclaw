@@ -10,14 +10,14 @@ const uninspected: PreManagedServiceStop = {
   inspected: false,
   runtimeInspected: false,
   running: false,
+  serviceMutationAllowed: false,
   serviceUpdateVerdict: { kind: "unavailable", message: "inspection unavailable" },
 };
 
 type AdoptionParams = Parameters<typeof adoptCandidateManagedServiceStop>[0];
-let params: AdoptionParams;
 
-beforeEach(() => {
-  params = {
+function adoptionParams(overrides: Partial<AdoptionParams> = {}): AdoptionParams {
+  return {
     transferred: uninspected,
     shouldRestart: true,
     mode: "npm",
@@ -28,7 +28,11 @@ beforeEach(() => {
     assertCurrent: vi.fn(),
     onStopped: vi.fn(),
     onStep: vi.fn(),
+    ...overrides,
   };
+}
+
+beforeEach(() => {
   mockProcessPlatform("linux");
   vi.spyOn(updateRunReader, "getUpdateRunAsync").mockResolvedValue(undefined);
   vi.spyOn(serviceMaintenance, "maybeStopManagedServiceBeforeMutableUpdate").mockResolvedValue(
@@ -38,24 +42,34 @@ beforeEach(() => {
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each<[string, Partial<AdoptionParams>]>([
-  ["restart disabled", { shouldRestart: false }],
-  ["unknown install mode", { mode: "unknown" }],
-  ["no transferred state", { transferred: undefined }],
-  ["parent inspected the service", { transferred: { ...uninspected, inspected: true } }],
-  [
-    "not an unavailable legacy verdict",
-    {
-      transferred: {
-        ...uninspected,
-        serviceUpdateVerdict: { kind: "unresolved", root: "/r", fingerprint: "f" },
-      },
+it.each([
+  { name: "restart disabled", shouldRestart: false },
+  { name: "unknown install mode", mode: "unknown" as const },
+  { name: "no transferred state", transferred: undefined },
+  {
+    name: "parent inspected the service",
+    transferred: {
+      ...uninspected,
+      inspected: true,
     },
-  ],
-  ["parent already stopped the service", { transferred: { ...uninspected, stopped: true } }],
-  ["parent suspended Windows autostart", { windowsTaskAutoStartSuspended: true }],
-])("leaves the transferred state alone when %s", async (_name, overrides) => {
-  Object.assign(params, overrides);
+  },
+  {
+    name: "not an unavailable legacy verdict",
+    transferred: {
+      ...uninspected,
+      serviceUpdateVerdict: { kind: "unresolved" as const, root: "/r", fingerprint: "f" },
+    },
+  },
+  {
+    name: "parent already stopped the service",
+    transferred: { ...uninspected, stopped: true },
+  },
+  {
+    name: "parent suspended Windows autostart",
+    windowsTaskAutoStartSuspended: true,
+  },
+])("leaves the transferred state alone when $name", async ({ name: _name, ...overrides }) => {
+  const params = adoptionParams(overrides);
   await expect(adoptCandidateManagedServiceStop(params)).resolves.toEqual({
     stopped: params.transferred,
     restartRequired: false,
@@ -68,11 +82,13 @@ it.each<[string, Partial<AdoptionParams>]>([
 it("stops a transferred uninspected service when restart is allowed", async () => {
   const stopped = { ...uninspected, stopped: true, inspected: true };
   vi.mocked(serviceMaintenance.maybeStopManagedServiceBeforeMutableUpdate).mockImplementation(
-    async (request) => {
-      request.onStopped?.(stopped);
+    async (params) => {
+      params.onStopped?.(stopped);
       return stopped;
     },
   );
+  const params = adoptionParams();
+
   await expect(adoptCandidateManagedServiceStop(params)).resolves.toEqual({
     stopped,
     restartRequired: false,

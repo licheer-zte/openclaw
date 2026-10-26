@@ -3,7 +3,6 @@ import {
   assignMcpCatalogSafeServerNames,
   type McpToolCatalog,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   asOptionalRecord,
   normalizeOptionalString,
@@ -14,11 +13,6 @@ import { projectCodexMcpServerMetadata, projectCodexMcpToolMetadata } from "./mc
 import type { CodexMcpServerStatus } from "./protocol.js";
 import { sessionBindingIdentity, type CodexAppServerBindingStore } from "./session-binding.js";
 import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js";
-
-const loadMcpAppSessionPreparation = createLazyRuntimeModule(
-  () => import("./mcp-app-session-preparation.js"),
-);
-const loadNativeMcpApp = createLazyRuntimeModule(() => import("./native-mcp-app.js"));
 
 type AgentHarnessMcpCatalogParams = Parameters<NonNullable<AgentHarness["loadMcpToolCatalog"]>>[0];
 
@@ -163,7 +157,7 @@ export async function acquireCodexMcpAppRuntime(
   if (!retained && params.prepareSession) {
     const preparation = await params.prepareSession();
     params.assertCurrent();
-    const { prepareCodexMcpAppSession } = await loadMcpAppSessionPreparation();
+    const { prepareCodexMcpAppSession } = await import("./mcp-app-session-preparation.js");
     await prepareCodexMcpAppSession({
       preparation,
       bindingStore: options.bindingStore,
@@ -193,7 +187,7 @@ export async function acquireCodexMcpAppRuntime(
     };
     params.assertCurrent();
     assertBinding();
-    const { createNativeMcpRuntime } = await loadNativeMcpApp();
+    const { createNativeMcpRuntime } = await import("./native-mcp-app.js");
     params.assertCurrent();
     const runtime = createNativeMcpRuntime({
       client: retained.client,

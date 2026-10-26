@@ -15,7 +15,6 @@ import { projectPresentation } from "../../../lib/reactive/presentation.ts";
 import { sessionPullRequestStateIcons } from "../../../lib/session-pull-request-presentation.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { showToast } from "../../../lib/toast.ts";
-import { ChatCiAutomationPanel, ChatCiDetailsPanel } from "./chat-ci-panels.tsx";
 import { createPullRequestCopy } from "./chat-pull-request-copy.ts";
 import {
   ChecksRows,
@@ -24,6 +23,8 @@ import {
   STATE_LABEL_KEYS,
   type ChatPullRequestsProps,
 } from "./chat-pull-request-shared.tsx";
+import "./chat-ci-details.tsx";
+import "./chat-ci-automation-control.tsx";
 
 const CHECK_ROLLUP = {
   failing: ["failed", "chat.pullRequests.checksFailed", "circleX"],
@@ -46,9 +47,7 @@ export function PullRequestActions(props: {
   const parentPresented = useContext(ContentPresentation);
   let menu: MenuHandle | undefined;
   const [page, setPage] = createSignal<"home" | "checks" | "monitoring">("home");
-  const [visited, setVisited] = createSignal({ checks: false, monitoring: false });
   const navigate = (next: "checks" | "monitoring") => {
-    setVisited((current) => ({ ...current, [next]: true }));
     setPage(next);
     queueMicrotask(() => menu?.itemElement("back")?.focus());
   };
@@ -95,7 +94,7 @@ export function PullRequestActions(props: {
   };
   // The enclosing page supplies visibility; CI owners retain requests, errors and mutations.
   const checksContent = (
-    <Show when={visited().checks ? props.pullRequest : undefined}>
+    <Show when={props.pullRequest}>
       {(pullRequest) => (
         <div
           class="chat-pr-menu__page"
@@ -108,21 +107,21 @@ export function PullRequestActions(props: {
               <ChecksRows checks={checks()} runningFirst />
             </div>
           </div>
-          <ChatCiDetailsPanel
-            pullRequest={pullRequest()}
-            gateway={props.owner.gateway}
-            sessionKey={props.owner.sessionKey ?? ""}
-            presented={presented() && menuOpen() && page() === "checks"}
-            inline
-            menuControls
-            controls={controls}
+          <openclaw-chat-ci-details
+            prop:pullRequest={pullRequest()}
+            prop:gateway={props.owner.gateway}
+            prop:sessionKey={props.owner.sessionKey ?? ""}
+            prop:presented={presented() && menuOpen() && page() === "checks"}
+            prop:inline={true}
+            prop:menuControls={true}
+            prop:controls={controls}
           />
         </div>
       )}
     </Show>
   );
   const monitoringContent = (
-    <Show when={visited().monitoring ? props.pullRequest : undefined}>
+    <Show when={props.pullRequest}>
       {(pullRequest) => (
         <div
           class="chat-pr-menu__page"
@@ -130,15 +129,15 @@ export function PullRequestActions(props: {
           aria-label={t("chat.pullRequests.ciMonitoring")}
         >
           <div class="chat-pr-menu__caption">{t("chat.pullRequests.ciMonitoring")}</div>
-          <ChatCiAutomationPanel
-            pullRequest={pullRequest()}
-            gateway={props.owner.gateway}
-            sessionKey={props.owner.sessionKey ?? ""}
-            sessionId={props.owner.sessionId ?? ""}
-            presented={presented() && menuOpen() && page() === "monitoring"}
-            inline
-            menuPresentation
-            controls={controls}
+          <openclaw-chat-ci-automation
+            prop:pullRequest={pullRequest()}
+            prop:gateway={props.owner.gateway}
+            prop:sessionKey={props.owner.sessionKey ?? ""}
+            prop:sessionId={props.owner.sessionId ?? ""}
+            prop:presented={presented() && menuOpen() && page() === "monitoring"}
+            prop:inline={true}
+            prop:menuPresentation={true}
+            prop:controls={controls}
           />
         </div>
       )}

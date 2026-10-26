@@ -1,24 +1,45 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import * as events from "../../infra/diagnostic-events.js";
-import * as activity from "../../logging/diagnostic-run-activity.js";
+import {
+  resetDiagnosticEventsForTest,
+  setDiagnosticsEnabledForProcess,
+  waitForDiagnosticEventsDrained,
+} from "../../infra/diagnostic-events.js";
+import {
+  getDiagnosticSessionActivitySnapshot,
+  markDiagnosticEmbeddedRunStarted,
+  resetDiagnosticRunActivityForTest,
+  resolveRunStaleThresholdMs,
+  startDiagnosticRunActivityTracking,
+} from "../../logging/diagnostic-run-activity.js";
+import { classifySessionAttention } from "../../logging/diagnostic-session-attention.js";
+import { isCodeModeControlTool } from "../code-mode-control-tools.js";
 import { resetCodeModeTestState, resultDetails } from "../code-mode.test-support.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import { jsonResult, type AnyAgentTool } from "../tools/common.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "./tool-surface-bridge.js";
 
 beforeEach(() => {
-  events.setDiagnosticsEnabledForProcess(true);
-  activity.startDiagnosticRunActivityTracking();
+  setDiagnosticsEnabledForProcess(true);
+  startDiagnosticRunActivityTracking();
 });
 
 afterEach(async () => {
   await resetCodeModeTestState();
-  activity.resetDiagnosticRunActivityForTest();
-  events.resetDiagnosticEventsForTest();
+  resetDiagnosticRunActivityForTest();
+  resetDiagnosticEventsForTest();
   vi.restoreAllMocks();
 });
+
+function attention(activity: ReturnType<typeof getDiagnosticSessionActivitySnapshot>) {
+  return classifySessionAttention({
+    state: "processing",
+    queueDepth: 0,
+    activity,
+    staleMs: 120_000,
+  });
+}
 
 it.each([
   { control: "exec", terminal: "complete" },
@@ -51,7 +72,7 @@ it.each([
           call.signal,
           call.onUpdate,
         );
-        await events.waitForDiagnosticEventsDrained();
+        await waitForDiagnosticEventsDrained();
         nestedCompleted.resolve();
         // Source execution has ended; its caller still owns the pending result.
         await release.promise;
@@ -64,13 +85,14 @@ it.each([
         tools.find((tool) => tool.name === name),
         `${name} control`,
       );
-    activity.markDiagnosticEmbeddedRunStarted(ref);
+    const exec = getControl("exec");
+    markDiagnosticEmbeddedRunStarted(ref);
     const code = "return await sessions_spawn({});";
     const input =
       control === "wait"
         ? {
             runId: resultDetails(
-              await getControl("exec").execute("park", {
+              await exec.execute("park", {
                 title: "Start nested spawn",
                 code: `await yield_control(); ${code}`,
               }),
@@ -82,16 +104,16 @@ it.each([
     try {
       await nestedCompleted.promise;
       now.mockReturnValue(1_000 + 7 * 60_000);
-      const pending = activity.getDiagnosticSessionActivitySnapshot(ref);
-      expect(pending).toMatchObject({
+      const activity = getDiagnosticSessionActivitySnapshot(ref);
+      expect(isCodeModeControlTool(active)).toBe(true);
+      expect(activity).toMatchObject({
         activeWorkKind: "tool_call",
         activeToolName: control,
         activeToolCallId: "outer-call",
         lastProgressReason: "tool:sessions_spawn:ended",
       });
-      expect(activity.resolveRunStaleThresholdMs(pending)).toBeGreaterThan(
-        pending.lastProgressAgeMs!,
-      );
+      expect(attention(activity)).toMatchObject({ classification: "blocked_tool_call" });
+      expect(resolveRunStaleThresholdMs(activity)).toBeGreaterThan(activity.lastProgressAgeMs!);
 
       if (terminal === "abort") {
         abort.abort();
@@ -101,10 +123,11 @@ it.each([
       expect(resultDetails(await execution)).toMatchObject(
         terminal === "abort" ? { status: "failed", code: "aborted" } : { status: "completed" },
       );
-      await events.waitForDiagnosticEventsDrained();
+      await waitForDiagnosticEventsDrained();
       now.mockReturnValue(1_000 + 14 * 60_000);
-      const settled = activity.getDiagnosticSessionActivitySnapshot(ref);
+      const settled = getDiagnosticSessionActivitySnapshot(ref);
       expect(settled.activeToolName).toBeUndefined();
+      expect(attention(settled)).toMatchObject({ classification: "stalled_agent_run" });
     } finally {
       abort.abort();
       release.resolve();

@@ -39,7 +39,6 @@ import { publishDurableNextRunChanges } from "./runtime-publication.js";
 import {
   assertCronHostExecutionAllowed,
   describeCronHostExecutionRestriction,
-  emitCronDefinitionChanges,
   type CronAddOptions,
   type CronServiceState,
   type DeferredCronNotifications,
@@ -200,7 +199,6 @@ export async function ensureLoaded(
     jobs.push(hydrated);
     durableNextRunAtMsByJobId.set(hydrated.id, hydrated.state.nextRunAtMs);
   }
-  const previousJobs = state.store?.jobs;
   state.store = {
     version: 1,
     jobs,
@@ -211,9 +209,6 @@ export async function ensureLoaded(
   loadedCronStoreRevisions.set(state, {
     revision: loadedRevision,
   });
-  if (previousJobs) {
-    emitCronDefinitionChanges(state, previousJobs, jobs);
-  }
 
   if (quarantinedConfigJobs.length > 0 && !opts?.deferQuarantinePersist) {
     // Config decoding and runtime validation reject rows in separate passes;
@@ -512,7 +507,6 @@ export async function persistCronJobMutation(params: {
         if (unchanged) {
           publishCronJobNames(source.storeKey, source.context, names);
         }
-        const previousJobs = state.store?.jobs ?? [];
         state.store = store;
         state.storeLoadedAtMs = state.deps.nowMs();
         loadedCronStoreRevisions.set(state, {
@@ -522,7 +516,6 @@ export async function persistCronJobMutation(params: {
           params.afterCommit?.();
         } finally {
           try {
-            emitCronDefinitionChanges(state, previousJobs, store.jobs);
             publishDurableNextRunChanges({
               state,
               storeJobs: store.jobs,

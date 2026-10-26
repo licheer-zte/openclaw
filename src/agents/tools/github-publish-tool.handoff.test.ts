@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
-import type { SessionGitHubPublicationResult } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
 import * as events from "../../auto-reply/reply/session-event-handoff.js";
@@ -13,7 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareGitHubPublicationRequesterV2 } from "../../gateway/github-publication-requester.js";
 import type { OperatorScope } from "../../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../../gateway/server-methods/types.js";
-import * as gatewayContinuation from "../../gateway/server-plugin-in-process-dispatch.js";
+import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
 import {
   createContext,
   createOperatorClient,
@@ -30,7 +29,6 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { wrapToolWithAbortSignal } from "../agent-tools.abort.js";
-import { completionConfig } from "../bash-tools.lifecycle.test-support.js";
 import { applyCodeModeCatalog } from "../code-mode.js";
 import { createCodeModeHarness } from "../code-mode.test-support.js";
 import { SESSIONS_YIELD_ABORT_REASON } from "../embedded-agent-runner/run/attempt-sessions-yield.js";
@@ -63,27 +61,9 @@ afterEach(() => {
   resetSystemEventsForTest();
 });
 
-it.for([
-  "prepared",
-  "published",
-  "publication-failed",
-  "failed",
-  "stop",
-  "undelivered",
-  "interrupted",
-  "reset",
-] as const)(
+it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
   "hands PR preparation to its registered owner after cleanup: %s",
   async (outcome, { signal }) => {
-    const localPublication = outcome === "published" || outcome === "publication-failed";
-    const failedPublication = {
-      status: "failed",
-      requestId: "local-publication",
-      code: "github_rejected",
-      message: "Branch pushed; pull request creation failed.",
-      nextAction: "Inspect the existing branch before retrying publication.",
-      effect: { kind: "push", status: "observed", headCommit: "a".repeat(40) },
-    } satisfies SessionGitHubPublicationResult;
     await withOpenClawTestState(
       { scenario: "minimal", prepareProfileCatalog: true, env: { OPENCLAW_TEST_FAST: "0" } },
       async (state) => {
@@ -92,11 +72,17 @@ it.for([
         const runId = "pr-handoff-run";
         const scope = { agentId: "main", sessionKey };
         const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-        const scopes: OperatorScope[] = localPublication
-          ? ["operator.read", "operator.write"]
-          : ["operator.sessions.read", "operator.sessions.write"];
+        const scopes: OperatorScope[] = ["operator.sessions.read", "operator.sessions.write"];
         const config: OpenClawConfig = {
-          agents: completionConfig(state.workspaceDir).agents,
+          agents: {
+            entries: { main: { workspace: state.workspaceDir } },
+            defaults: {
+              workspace: state.workspaceDir,
+              skipBootstrap: true,
+              model: { primary: "mock-openai/gpt-5.6-luna" },
+              models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
+            },
+          },
           gateway: {
             roles: {
               default: "guest",
@@ -145,27 +131,12 @@ it.for([
         const resumed = createDeferredCore<string>();
         const order: string[] = [];
         const endpoint = vi.fn<GatewayRequestHandler>(async ({ params, respond }) => {
-          expect(params).toMatchObject(
-            localPublication
-              ? { sessionKey, workspacePath: state.workspaceDir }
-              : { sessionKey, action: "prepare_pr" },
-          );
+          expect(params).toMatchObject({ sessionKey, action: "prepare_pr" });
           expect(getGatewayToolCallerIdentity()?.workspacePrAdoptionSessionId).toBe(sessionId);
           expect(getSessionControllerEntryForOperation(operation).successorBarrier).toBeDefined();
           order.push("prepare");
           if (outcome === "failed") {
             respond(false, undefined, { code: "UNAVAILABLE", message: "Saved source preserved" });
-          } else if (outcome === "publication-failed") {
-            respond(true, failedPublication);
-          } else if (localPublication) {
-            respond(true, {
-              status: "published",
-              requestId: "local-publication",
-              url: "https://github.com/example/repo/pull/1",
-              repository: "example/repo",
-              branch: "openclaw/task",
-              headCommit: "a".repeat(40),
-            });
           } else {
             respond(true, {
               status: "prepared",
@@ -179,10 +150,6 @@ it.for([
           }
         });
         const publish = vi.fn<GatewayRequestHandler>(async (options) => {
-          if (localPublication) {
-            await endpoint(options);
-            return;
-          }
           const admitted = await prepareGitHubPublicationRequesterV2(options, scope);
           try {
             admitted.requester.assertCurrent();
@@ -223,17 +190,15 @@ it.for([
             "resumed guest caller",
           );
           await withGatewayToolCallerIdentity(caller, async () => {
-            if (!localPublication) {
-              expect(
-                (await createGitHubPublishTool().execute("resumed-publish", {})).details,
-              ).toMatchObject({ status: "requested", requestId: "synthetic-publication" });
-              await expect(
-                callAgentToolGatewayRequest({
-                  method: "tools.effective",
-                  params: scope,
-                }),
-              ).rejects.toThrow("operator.read");
-            }
+            expect(
+              (await createGitHubPublishTool().execute("resumed-publish", {})).details,
+            ).toMatchObject({ status: "requested", requestId: "synthetic-publication" });
+            await expect(
+              callAgentToolGatewayRequest({
+                method: "tools.effective",
+                params: scope,
+              }),
+            ).rejects.toThrow("operator.read");
             await expect(
               callAgentToolGatewayRequest({ method: "plugins.reload", params: {} }),
             ).rejects.toThrow("operator.admin");
@@ -244,23 +209,6 @@ it.for([
         const enqueueReal = events.enqueueSessionEventForHost;
         let resumedCaller: { identity: unknown; error?: unknown } | undefined;
         const noticed = createDeferredCore();
-        const released = createDeferredCore();
-        if (outcome === "interrupted") {
-          const capture = gatewayContinuation.captureOperatorToolGatewayContinuationContext;
-          vi.spyOn(
-            gatewayContinuation,
-            "captureOperatorToolGatewayContinuationContext",
-          ).mockImplementation((...args) =>
-            capture(...args)?.then((captured) => {
-              const release = captured.release;
-              captured.release = () => {
-                release();
-                released.resolve(undefined);
-              };
-              return captured;
-            }),
-          );
-        }
         const appendNotice = transcript.appendAssistantMessageToSessionTranscript;
         const notice = vi
           .spyOn(transcript, "appendAssistantMessageToSessionTranscript")
@@ -275,11 +223,7 @@ it.for([
         const enqueue = vi
           .spyOn(events, "enqueueSessionEventForHost")
           .mockImplementation((text, options) => {
-            expect(options).toMatchObject({
-              sessionKey,
-              source: "tool_handoff",
-              expectedTarget: { sessionId },
-            });
+            expect(options).toMatchObject({ sessionKey, expectedTarget: { sessionId } });
             const authority =
               options.expectedTarget &&
               readSessionEventTargetOperatorAuthority(options.expectedTarget);
@@ -299,7 +243,7 @@ it.for([
             }
             order.push("resume");
             resumed.resolve(text);
-            if (outcome === "prepared" || localPublication) {
+            if (outcome === "prepared") {
               receipt = enqueueReal(text, options);
               return receipt;
             }
@@ -320,12 +264,9 @@ it.for([
                   : { ok: true as const };
               })(),
               settled: Promise.resolve({
-                status: outcome === "interrupted" ? "failed" : "completed",
+                status: "completed",
                 executionStarted: true,
                 delivered: false,
-                ...(outcome === "interrupted"
-                  ? { error: "Session event execution aborted", interruptedByRestart: true }
-                  : {}),
               }),
             };
           });
@@ -336,15 +277,13 @@ it.for([
                 sessionId,
                 runId,
                 // An ordinary local Docker conversation, as the visibility rule admits.
-                sandbox: localPublication
-                  ? undefined
-                  : createSandboxTestContext({
-                      overrides: {
-                        sessionKey,
-                        workspaceSource: undefined,
-                        backend: { id: "docker" } as never,
-                      },
-                    }),
+                sandbox: createSandboxTestContext({
+                  overrides: {
+                    sessionKey,
+                    workspaceSource: undefined,
+                    backend: { id: "docker" } as never,
+                  },
+                }),
                 onYield() {
                   order.push("yield");
                   runAbort.abort(SESSIONS_YIELD_ABORT_REASON);
@@ -371,12 +310,10 @@ it.for([
             surface.tools.find((candidate) => candidate.name === "github_publish"),
             "direct github_publish",
           );
-          const result = await tool.execute(
-            "prepare",
-            localPublication
-              ? { workspacePath: state.workspaceDir, title: "Publish the task" }
-              : { action: "prepare_pr", pullRequestUrl: "https://github.com/example/repo/pull/1" },
-          );
+          const result = await tool.execute("prepare", {
+            action: "prepare_pr",
+            pullRequestUrl: "https://github.com/example/repo/pull/1",
+          });
           expect(result.details).toMatchObject({
             status: "started",
             async: true,
@@ -394,18 +331,12 @@ it.for([
             expect(enqueue).not.toHaveBeenCalled();
           } else {
             expect(await resumed.promise).toContain(
-              outcome === "publication-failed"
-                ? JSON.stringify(failedPublication)
-                : outcome === "failed"
-                  ? "Saved source preserved"
-                  : localPublication
-                    ? '"status":"published"'
-                    : '"status":"prepared"',
+              outcome === "failed" ? "Saved source preserved" : '"status":"prepared"',
             );
             expect(order).toEqual(["yield", "cleanup", "prepare", "resume"]);
             expect(enqueue).toHaveBeenCalledOnce();
             expect(resumedCaller).toEqual({ identity: undefined });
-            if (outcome === "prepared" || localPublication) {
+            if (outcome === "prepared") {
               const settled = await withinTest(
                 expectDefined(receipt, "actual event receipt").settled,
                 signal,
@@ -418,9 +349,6 @@ it.for([
               expect(forbidden).not.toHaveBeenCalled();
               expect(publish).toHaveBeenCalledOnce();
             }
-          }
-          if (outcome === "interrupted") {
-            await withinTest(released.promise, signal);
           }
           if (outcome === "undelivered" || outcome === "reset") {
             await noticed.promise;
@@ -459,7 +387,7 @@ it.for([
               isWebchatConnect: () => false,
             },
             () =>
-              gatewayContinuation.withOperatorToolGatewayAuthority({ scopes }, () =>
+              withOperatorToolGatewayAuthority({ scopes }, () =>
                 exec.withExecRequestTurn({ identity: { ...scope, sessionId, runId } }, () =>
                   // Production callers carry the turn batch receipt and the run abort signal.
                   withGatewayToolCallerIdentity(

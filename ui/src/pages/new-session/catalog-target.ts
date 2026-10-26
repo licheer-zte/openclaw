@@ -7,7 +7,7 @@ import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import type { ChatModelPickerTargetGroup } from "../chat/components/chat-model-picker-options.ts";
-import { isNewSessionCatalogTarget as isTarget, type NewSessionRouteData } from "./location.ts";
+import type { NewSessionRouteData } from "./location.ts";
 import { newSessionModelLocationFromSearch } from "./model-location.ts";
 
 registerNewSessionSetupEnglish();
@@ -56,7 +56,9 @@ export function requestedModelForAgent(
     : undefined;
 }
 
-export { isTarget };
+export function isTarget(data?: NewSessionRouteData): boolean {
+  return Boolean(data?.catalogId);
+}
 
 function isResolvedTarget(data?: NewSessionRouteData): boolean {
   return Boolean(data?.catalogId && data.startTerminal && data.catalogLabel);

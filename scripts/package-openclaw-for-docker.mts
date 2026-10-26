@@ -996,10 +996,9 @@ export async function packOpenClawPackageForDocker(
       );
       // AI staging materializes the bundled tree; pack must not inherit the
       // source workspace's isolated linker setting for that prepared bundle.
-      // npm's silent level hides failure causes as well as routine notices.
       const packArgs = [
         "pack",
-        packTool === "npm" ? "--loglevel=error" : "--silent",
+        "--silent",
         ...(packTool === "pnpm"
           ? ["--config.ignore-scripts=true", "--config.node-linker=hoisted"]
           : ["--ignore-scripts"]),

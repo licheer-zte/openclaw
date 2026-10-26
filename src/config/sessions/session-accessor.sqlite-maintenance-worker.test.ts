@@ -50,10 +50,6 @@ import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintena
 
 afterEach(() => vi.restoreAllMocks());
 
-function cleanup(...callbacks: Array<() => void>) {
-  return { [Symbol.dispose]: () => callbacks.forEach((callback) => callback()) };
-}
-
 function withMaintenanceFixture(
   run: (fixture: ReturnType<typeof maintenanceFixture>) => Promise<void>,
 ) {
@@ -102,6 +98,8 @@ it.for(["cold", "warm-cap", "removal"] as const)(
       if (scenario === "warm-cap") {
         await maintain(active, "warm", policy, { workerGuard: {} });
         vi.restoreAllMocks();
+      }
+      if (scenario === "warm-cap") {
         seed(locked.sessionKey, "locked", Date.now() - 3, { modelSelectionLocked: true });
         seed(protectedEntry.sessionKey, "protected", Date.now() - 2);
         seedStale(Date.now() - 1);
@@ -323,8 +321,11 @@ describe("automatic worker planning protections", () => {
       });
       release = () => lease.release();
     }
-    using _ = cleanup(release);
-    await run();
+    try {
+      await run();
+    } finally {
+      release();
+    }
   });
 });
 
@@ -355,11 +356,14 @@ it("rolls back archive metadata when a run registers at planning commit", async 
         }
       },
     });
-    using _ = cleanup(() => clearAgentRunContext("maintenance-live-run"));
-    await maintain(active, "updated", maintenancePolicy());
-    expect(protectedNow).toBe(true);
-    expect(loadSessionEntry(scope(protectedKey))?.archivedAt).toBeUndefined();
-    expect(loadSessionEntry(scope(staleKey))?.archivedAt).toEqual(expect.any(Number));
+    try {
+      await maintain(active, "updated", maintenancePolicy());
+      expect(protectedNow).toBe(true);
+      expect(loadSessionEntry(scope(protectedKey))?.archivedAt).toBeUndefined();
+      expect(loadSessionEntry(scope(staleKey))?.archivedAt).toEqual(expect.any(Number));
+    } finally {
+      clearAgentRunContext("maintenance-live-run");
+    }
   });
 });
 
@@ -466,17 +470,20 @@ it("retains a managed backdate during synchronous maintenance publication reentr
       replaceSessionEntrySync(victim, { sessionId: "victim", updatedAt: 1 });
       observed.push({ before, after: loadSessionEntry(victim)?.updatedAt });
     });
-    using _ = cleanup(unsubscribe);
-    await maintain(
-      active,
-      "publish",
-      policy,
-      {},
-      (result) => result.archived === 1 && loadSessionEntry(victim)?.archivedAt !== undefined,
-    );
-    expect(observed).toEqual([{ before: undefined, after: 1 }]);
-    expect(loadSessionEntry(victim)?.archivedAt).toEqual(expect.any(Number));
-    expect(loadSessionEntry(stale)?.archivedAt).toEqual(expect.any(Number));
+    try {
+      await maintain(
+        active,
+        "publish",
+        policy,
+        {},
+        (result) => result.archived === 1 && loadSessionEntry(victim)?.archivedAt !== undefined,
+      );
+      expect(observed).toEqual([{ before: undefined, after: 1 }]);
+      expect(loadSessionEntry(victim)?.archivedAt).toEqual(expect.any(Number));
+      expect(loadSessionEntry(stale)?.archivedAt).toEqual(expect.any(Number));
+    } finally {
+      unsubscribe();
+    }
   });
 });
 

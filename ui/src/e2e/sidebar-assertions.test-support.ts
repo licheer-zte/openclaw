@@ -25,7 +25,12 @@ export async function pressAndExpectFocus(
   await expectFocused(target, within);
 }
 
-export { expectText, expectAttribute, expectCount } from "./session-page.test-support.ts";
+export const expectText = (locator: Locator, text: string) =>
+  expect.poll(() => locator.textContent()).toContain(text);
+export const expectAttribute = (locator: Locator, name: string, value: string) =>
+  expect.poll(() => locator.getAttribute(name)).toBe(value);
+export const expectCount = (locator: Locator, count: number) =>
+  expect.poll(() => locator.count()).toBe(count);
 export const expectVisible = (locator: Locator, visible = true) =>
   expect.poll(() => locator.isVisible()).toBe(visible);
 export const expectPath = (page: Page, pathname: string) =>

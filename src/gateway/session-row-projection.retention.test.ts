@@ -38,7 +38,6 @@ it("collects superseded resident rows and their materializations after metadata 
     // Optional transcript work must not borrow a row while collection is measured.
     const release = holdForeground();
     const projection = await createTestProjection({ cfg, modelCatalog: [] });
-    const rows = () => projection.selectEntries().filter(ready);
     const retired: WeakRef<object>[] = [];
     const selections: WeakRef<object>[] = [];
     const snapshots: WeakRef<object>[] = [];
@@ -55,7 +54,7 @@ it("collects superseded resident rows and their materializations after metadata 
     }
     const control = weak({});
     function refreshEntries(revision: number) {
-      for (const row of rows()) {
+      for (const row of projection.selectEntries().filter(ready)) {
         retired.push(...[row, row.entry, row.materialized].map(weak));
         write(row.key, revision);
       }
@@ -84,15 +83,21 @@ it("collects superseded resident rows and their materializations after metadata 
       refreshEntries(5);
       await projection.ensureMaterialized();
       await expectCollected([control, ...retired, ...selections, ...snapshots]);
-      expect(rows()).toHaveLength(keys.length);
+      expect(projection.selectEntries().filter(ready)).toHaveLength(keys.length);
       await listProjectedSessions({ projection, opts: {}, acceptsSerializedJson: true });
-      const materializations = rows().map((row) => weak(row.materialized));
+      const materializations = projection
+        .selectEntries()
+        .filter(ready)
+        .map((row) => weak(row.materialized));
       // An unchanged catalog refresh preserves the current materializations until disposal.
       sessionChanges.emit({ all: true, scope: "catalog" });
       await projection.ensureMaterialized();
-      rows().forEach((row, index) => {
-        expect(row.materialized).toBe(materializations[index]!.deref());
-      });
+      projection
+        .selectEntries()
+        .filter(ready)
+        .forEach((row, index) => {
+          expect(row.materialized).toBe(materializations[index]!.deref());
+        });
       await listProjectedSessions({ projection, opts: {}, acceptsSerializedJson: true });
       const disposedEntries = projection.selectEntries().map((row) => weak(row.entry));
       captureSelections();

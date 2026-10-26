@@ -2,7 +2,10 @@ import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
-import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
+import {
+  assertExistingDatabaseIdentity,
+  type DatabasePathIdentity,
+} from "../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import {
   openSharedStateSqliteWorkerStore,
@@ -265,6 +268,11 @@ function createSharedStateWorkerOwner() {
       }
       const assertCurrent = () => {
         assertOwned();
+        assertExistingDatabaseIdentity(
+          databasePath,
+          expectedIdentity.key,
+          expectedIdentity.birthtime,
+        );
         for (const entry of activeEntries) {
           if (
             matches(entry, expectedIdentity) &&
@@ -293,16 +301,7 @@ function createSharedStateWorkerOwner() {
         }
       }
       return openSharedStateSqliteWorkerStore<OpenClawStateWorkerCleanupOperations>(
-        {
-          ...captureRuntimeWorkerSource(moduleUrl),
-          databasePath,
-          existingOnly: true,
-          admission: {
-            identity: expectedIdentity.key,
-            birthtime: expectedIdentity.birthtime,
-            assertCurrent,
-          },
-        },
+        { ...captureRuntimeWorkerSource(moduleUrl), databasePath, existingOnly: true },
         context,
         assertCurrent,
         {
@@ -389,10 +388,6 @@ function createSharedStateWorkerOwner() {
               openingGuard.assertCurrent,
               {
                 maintenanceScope: context.maintenanceScope,
-                // Opening binds the captured file; later commands retain their own authority.
-                ...(existingOnly && admission.identity.key.startsWith("file:")
-                  ? { createAdmission: openingGuard.createAdmission }
-                  : {}),
                 retireIdle: retireIdle.bind(undefined, admitted),
                 retainCleanup: (cleanup) => {
                   admitted.cleanup = cleanup;
@@ -465,10 +460,7 @@ function createSharedStateWorkerOwner() {
       }
       try {
         if (!entry.bound) {
-          publishOpenClawStateDatabaseWorkerAdmission(
-            entry.context.admission,
-            getSqliteWorkerActorIdentity(store).identity,
-          );
+          publishOpenClawStateDatabaseWorkerAdmission(entry.context.admission);
           entry.bound = true;
         }
       } catch (error) {

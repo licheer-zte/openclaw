@@ -147,14 +147,12 @@ function createDnsResultOrderLookup(order: TelegramDnsResultOrder): LookupFuncti
 
 const TELEGRAM_KEEPALIVE_INITIAL_DELAY_MS = 30_000;
 
-function resolveTelegramDispatcherPolicy(params: {
+function buildTelegramConnectOptions(params: {
   autoSelectFamily: boolean;
   dnsResultOrder: TelegramDnsResultOrder;
-  useEnvProxy: boolean;
   forceIpv4: boolean;
-  proxyUrl?: string;
-}): PinnedDispatcherPolicy {
-  const connect = {
+}) {
+  return {
     keepAlive: true,
     keepAliveInitialDelay: TELEGRAM_KEEPALIVE_INITIAL_DELAY_MS,
     ...(params.forceIpv4
@@ -165,6 +163,16 @@ function resolveTelegramDispatcherPolicy(params: {
         }),
     lookup: createDnsResultOrderLookup(params.dnsResultOrder),
   };
+}
+
+function resolveTelegramDispatcherPolicy(params: {
+  autoSelectFamily: boolean;
+  dnsResultOrder: TelegramDnsResultOrder;
+  useEnvProxy: boolean;
+  forceIpv4: boolean;
+  proxyUrl?: string;
+}): PinnedDispatcherPolicy {
+  const connect = buildTelegramConnectOptions(params);
   const explicitProxyUrl = params.proxyUrl?.trim();
   if (explicitProxyUrl) {
     return {
@@ -359,6 +367,58 @@ export type TelegramTransport = {
   close(): Promise<void>;
 };
 
+function createTelegramTransportAttempts(params: {
+  defaultDispatcher: ReturnType<typeof createTelegramDispatcher>;
+  fallbackPolicy?: PinnedDispatcherPolicy;
+  ownedDispatchers: Set<TelegramDispatcher>;
+}): TelegramTransportAttempt[] {
+  const createAttempt = (
+    policy: PinnedDispatcherPolicy,
+    initial?: TelegramDispatcher,
+  ): TelegramTransportAttempt => {
+    const dispatchers = new Map<boolean, TelegramDispatcher>();
+    if (initial) {
+      dispatchers.set(false, initial);
+      params.ownedDispatchers.add(initial);
+    }
+    return {
+      exportAttempt: { dispatcherPolicy: policy },
+      createDispatcher: (freshConnection = false) => {
+        let dispatcher = dispatchers.get(freshConnection);
+        if (!dispatcher) {
+          // A separate bounded pool with pipelining=0 never borrows or retains
+          // idle sockets. Connection: close alone could still borrow a stale one.
+          dispatcher = createTelegramDispatcher(policy, freshConnection ? 0 : 1).dispatcher;
+          dispatchers.set(freshConnection, dispatcher);
+          params.ownedDispatchers.add(dispatcher);
+        }
+        return dispatcher;
+      },
+    };
+  };
+  const attempts = [
+    createAttempt(params.defaultDispatcher.effectivePolicy, params.defaultDispatcher.dispatcher),
+  ];
+  if (!params.fallbackPolicy) {
+    return attempts;
+  }
+  attempts.push({
+    ...createAttempt(params.fallbackPolicy),
+    logLevel: "debug",
+    logMessage: "fetch fallback: enabling sticky IPv4-only dispatcher",
+  });
+  attempts.push({
+    ...createAttempt({
+      ...params.fallbackPolicy,
+      pinnedHostname: { hostname: TELEGRAM_API_HOSTNAME, addresses: [...TELEGRAM_FALLBACK_IPS] },
+    }),
+    logLevel: "warn",
+    logMessage:
+      "fetch fallback: primary connection path failed; trying alternative Telegram API IP",
+  });
+  return attempts;
+}
+
 export function resolveTelegramTransport(
   proxyFetch?: typeof fetch,
   options?: { network?: TelegramNetworkConfig },
@@ -422,49 +482,11 @@ export function resolveTelegramTransport(
       })
     : undefined;
   const ownedDispatchers = new Set<TelegramDispatcher>();
-  const createAttempt = (
-    policy: PinnedDispatcherPolicy,
-    initial?: TelegramDispatcher,
-  ): TelegramTransportAttempt => {
-    const dispatchers = new Map<boolean, TelegramDispatcher>();
-    if (initial) {
-      dispatchers.set(false, initial);
-      ownedDispatchers.add(initial);
-    }
-    return {
-      exportAttempt: { dispatcherPolicy: policy },
-      createDispatcher: (freshConnection = false) => {
-        let dispatcher = dispatchers.get(freshConnection);
-        if (!dispatcher) {
-          // A separate bounded pool with pipelining=0 never borrows or retains
-          // idle sockets. Connection: close alone could still borrow a stale one.
-          dispatcher = createTelegramDispatcher(policy, freshConnection ? 0 : 1).dispatcher;
-          dispatchers.set(freshConnection, dispatcher);
-          ownedDispatchers.add(dispatcher);
-        }
-        return dispatcher;
-      },
-    };
-  };
-  const transportAttempts = [
-    createAttempt(defaultDispatcher.effectivePolicy, defaultDispatcher.dispatcher),
-  ];
-  if (fallbackDispatcherPolicy) {
-    transportAttempts.push({
-      ...createAttempt(fallbackDispatcherPolicy),
-      logLevel: "debug",
-      logMessage: "fetch fallback: enabling sticky IPv4-only dispatcher",
-    });
-    transportAttempts.push({
-      ...createAttempt({
-        ...fallbackDispatcherPolicy,
-        pinnedHostname: { hostname: TELEGRAM_API_HOSTNAME, addresses: [...TELEGRAM_FALLBACK_IPS] },
-      }),
-      logLevel: "warn",
-      logMessage:
-        "fetch fallback: primary connection path failed; trying alternative Telegram API IP",
-    });
-  }
+  const transportAttempts = createTelegramTransportAttempts({
+    defaultDispatcher,
+    fallbackPolicy: fallbackDispatcherPolicy,
+    ownedDispatchers,
+  });
 
   let stickyAttemptIndex = 0;
   let stickySuccessCount = 0;

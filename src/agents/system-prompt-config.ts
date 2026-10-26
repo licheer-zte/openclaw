@@ -22,11 +22,11 @@ type ConfiguredAgentSystemPromptParams = Parameters<typeof buildAgentSystemPromp
   agentId?: string;
   preparedTtsPreferences?: PreparedTtsPreferences;
   tools?: { name: string; parameters: unknown }[];
-  preparedModelRuntime?: Pick<PreparedModelRuntimeSnapshot, "configuredModelAliases">;
+  preparedModelRuntime?: Pick<PreparedModelRuntimeSnapshot, "configuredModelAliases" | "isCurrent">;
 };
 
 function buildModelAliasLines(owner: ConfiguredAgentSystemPromptParams["preparedModelRuntime"]) {
-  if (!owner) {
+  if (!owner?.isCurrent()) {
     return [];
   }
   return (owner.configuredModelAliases ?? [])

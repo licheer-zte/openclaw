@@ -82,21 +82,11 @@ export function mergeParamsWithApprovalOverrides(
   originalParams: unknown,
   approvalParams?: unknown,
 ): unknown {
-  if (!isPlainObject(approvalParams)) {
-    return originalParams;
-  }
-  if (!isPlainObject(originalParams)) {
-    return approvalParams;
-  }
-  // Hook snapshots omit private properties such as Code Mode launch identity.
-  // Apply overrides before defining originals so even non-configurable keys can be rewritten.
-  return Object.defineProperties(
-    {},
-    {
-      ...Object.getOwnPropertyDescriptors(originalParams),
-      ...Object.getOwnPropertyDescriptors(approvalParams),
-    },
-  );
+  return isPlainObject(approvalParams)
+    ? isPlainObject(originalParams)
+      ? { ...originalParams, ...approvalParams }
+      : approvalParams
+    : originalParams;
 }
 
 function notifyPluginApprovalResolution(

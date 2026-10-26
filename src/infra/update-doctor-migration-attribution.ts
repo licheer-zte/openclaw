@@ -243,7 +243,7 @@ export function runUpdateSqliteMigration<T>(
               : readMatchingUpdateDatabaseGeneration(pathname, expected);
         assertCurrent();
         if (before === undefined || (mode === "exclusive" && before !== expected)) {
-          throw new Error(`SQLite migration source changed after update capture: ${pathname}`);
+          throw new Error("SQLite migration source changed after update capture.");
         }
         if (before !== expected) {
           capture.accept(pathname, expected, before);
@@ -276,9 +276,7 @@ export function runUpdateSqliteMigration<T>(
           return result;
         });
       } catch (error) {
-        capture.refuse(
-          `SQLite migration publication could not be verified: ${formatErrorMessage(error)}`,
-        );
+        capture.refuse("SQLite migration publication could not be verified.");
         throw error;
       }
     },

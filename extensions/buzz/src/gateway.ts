@@ -7,7 +7,6 @@ import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
-import { resolveBuzzAccountConfig } from "./account-config.js";
 import { sendBuzzTextOneShot, startBuzzBus, type BuzzBus } from "./buzz-bus.js";
 import { handleBuzzInbound } from "./inbound.js";
 import { openBuzzRecoveryWatermarkStore, resolveBuzzRecoverySince } from "./recovery-watermark.js";
@@ -16,6 +15,7 @@ import { buildBuzzTarget, isConfiguredBuzzChannel, parseBuzzTarget } from "./tar
 import {
   assertBuzzAccountAvailable,
   resolveBuzzAccount,
+  resolveBuzzAccountConfig,
   type ResolvedBuzzAccount,
 } from "./types.js";
 

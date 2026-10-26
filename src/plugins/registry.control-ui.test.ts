@@ -3,8 +3,6 @@ import type { PluginControlUiDescriptor } from "./host-hooks.js";
 import { expectDiagnostic, registrationFixture } from "./registry-registration.test-support.js";
 
 const tab = { surface: "tab", id: "panel", label: "Reports" } as const;
-const invalidSlug = "descriptor slug requires";
-const foreignRoute = "must be owned by its bundled plugin";
 function fixture() {
   const { registry, register: registerPlugin } = registrationFixture();
   const register = (
@@ -13,20 +11,37 @@ function fixture() {
   ) =>
     registerPlugin(fields, (api) => api.session.controls.registerControlUiDescriptor(descriptor));
   const expectDescriptor = (pluginId: string, descriptor: Partial<PluginControlUiDescriptor>) =>
-    expect(registry.controlUiDescriptors).toMatchObject([{ pluginId, descriptor }]);
+    expect(registry.controlUiDescriptors).toEqual([
+      expect.objectContaining({ pluginId, descriptor: expect.objectContaining(descriptor) }),
+    ]);
   return { registry, register, registerPlugin, expectDescriptor };
 }
 
 describe("plugin registry Control UI descriptors", () => {
   it.each([
-    [{ slug: "api" }, {}, invalidSlug],
-    [{ slug: "health" }, {}, invalidSlug],
-    [{ slug: "reports", placement: "route:reports" }, { origin: "bundled" }, invalidSlug],
-    [{ placement: "route:workboard" }, { id: "workboard", origin: "workspace" }, foreignRoute],
-    [{ placement: "route:workboard" }, { id: "logbook", origin: "bundled" }, foreignRoute],
-    [{ path: "//attacker.example/panel" }, {}, undefined],
-    [{ path: "/\\attacker.example/panel" }, {}, undefined],
-  ] as const)("rejects %j", (descriptor, fields, message) => {
+    ["reserved API slug", { slug: "api" }, {}, "descriptor slug requires"],
+    ["HTTP health slug", { slug: "health" }, {}, "descriptor slug requires"],
+    [
+      "slug with native route",
+      { slug: "reports", placement: "route:reports" },
+      { origin: "bundled" },
+      "descriptor slug requires",
+    ],
+    [
+      "workspace native route",
+      { placement: "route:workboard" },
+      { id: "workboard", origin: "workspace" },
+      "must be owned by its bundled plugin",
+    ],
+    [
+      "foreign bundled route",
+      { placement: "route:workboard" },
+      { id: "logbook", origin: "bundled" },
+      "must be owned by its bundled plugin",
+    ],
+    ["protocol-relative path", { path: "//attacker.example/panel" }, {}, undefined],
+    ["backslash host path", { path: "/\\attacker.example/panel" }, {}, undefined],
+  ] as const)("rejects %s", (_name, descriptor, fields, message) => {
     const { registry, register } = fixture();
     const record = { id: "reports", ...fields };
     register({ ...tab, ...descriptor }, record);
@@ -57,13 +72,14 @@ describe("plugin registry Control UI descriptors", () => {
 
   it("keeps legacy flat descriptors loadable for shipped JavaScript plugins", () => {
     const { registerPlugin, expectDescriptor } = fixture();
-    registerPlugin({ id: "legacy" }, (api) =>
+    registerPlugin({ id: "legacy-descriptor-fixture" }, (api) =>
       api.registerControlUiDescriptor({
         id: "legacy-card",
         name: "Legacy Card",
+        description: "Legacy descriptor from a JavaScript plugin",
       } as never),
     );
-    expectDescriptor("legacy", {
+    expectDescriptor("legacy-descriptor-fixture", {
       id: "legacy-card",
       surface: "session",
       label: "Legacy Card",
@@ -90,11 +106,13 @@ describe("plugin registry Control UI descriptors", () => {
       { surface: "widget", id: "card", label: "Workboard card", requiredScopes: ["operator.read"] },
       { id: "workboard", uiCapabilities: [] },
     );
-    expectDiagnostic(registry, {
-      level: "warn",
-      pluginId: "workboard",
-      message: expect.stringContaining('UI capability "widget"'),
-    });
+    expect(registry.diagnostics.filter(({ level }) => level === "warn")).toEqual([
+      expect.objectContaining({
+        pluginId: "workboard",
+        message:
+          'Registered UI capability "widget" is missing from uiCapabilities in openclaw.plugin.json.',
+      }),
+    ]);
     expectDescriptor("workboard", { id: "card", surface: "widget", label: "Workboard card" });
   });
 });

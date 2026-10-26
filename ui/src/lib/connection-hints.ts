@@ -56,7 +56,17 @@ export function readConnectionAuthReason(details: unknown): string | null {
   return typeof reason === "string" && PROXY_AUTH_REASONS.has(reason) ? reason : null;
 }
 
-export function resolvePairingHint(lastError: string | null, lastErrorCode?: string | null) {
+export function resolvePairingHint(
+  lastError: string | null,
+  lastErrorCode?: string | null,
+): {
+  kind:
+    | "pairing-required"
+    | "scope-upgrade-pending"
+    | "role-upgrade-pending"
+    | "metadata-upgrade-pending";
+  requestId: string | null;
+} | null {
   if (!lastError) {
     return null;
   }

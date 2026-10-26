@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
+  BootstrapBudgetAnalysis,
   BootstrapInjectionStat,
   BootstrapPromptWarning,
   BootstrapPromptWarningMode,
@@ -41,9 +42,7 @@ function appendSeenSignature(signatures: string[], signature: string): string[] 
     : next.slice(-DEFAULT_BOOTSTRAP_PROMPT_WARNING_SIGNATURE_HISTORY_MAX);
 }
 
-function buildBootstrapTruncationSignature(
-  analysis: ReturnType<typeof analyzeBootstrapBudget>,
-): string | undefined {
+function buildBootstrapTruncationSignature(analysis: BootstrapBudgetAnalysis): string | undefined {
   if (!analysis.hasTruncation) {
     return undefined;
   }
@@ -172,7 +171,7 @@ export function analyzeBootstrapBudget(params: {
   files: BootstrapInjectionStat[];
   bootstrapMaxChars: number;
   bootstrapTotalMaxChars: number;
-}) {
+}): BootstrapBudgetAnalysis {
   const bootstrapMaxChars = normalizePositiveLimit(params.bootstrapMaxChars);
   const bootstrapTotalMaxChars = normalizePositiveLimit(params.bootstrapTotalMaxChars);
   const nearLimitRatio = DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO;
@@ -259,7 +258,7 @@ export function buildBootstrapBudgetState(params: {
 
 /** Serializes truncation warning state for run reports and future dedupe. */
 export function buildBootstrapTruncationReportMeta(params: {
-  analysis: ReturnType<typeof analyzeBootstrapBudget>;
+  analysis: BootstrapBudgetAnalysis;
   warning: BootstrapPromptWarning;
 }): BootstrapTruncationReportMeta {
   return {

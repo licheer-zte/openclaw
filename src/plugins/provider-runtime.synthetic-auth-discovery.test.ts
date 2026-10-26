@@ -1,7 +1,6 @@
 /** Verifies provider runtime discovery includes synthetic-auth provider hooks. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareSyntheticLocalProviderAuth } from "../agents/model-auth-runtime.js";
-import { configForProviders } from "../agents/model-auth.fixtures.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { ProviderPlugin } from "./provider-plugin.types.js";
 
@@ -216,13 +215,17 @@ describe("resolveProviderSyntheticAuthWithPlugin", () => {
               if (result === marker) {
                 expect(
                   await prepareSyntheticLocalProviderAuth({
-                    cfg: configForProviders({
-                      [provider.id]: {
-                        apiKey: { source: "env", provider: "default", id: "MISSING_KEY" },
-                        baseUrl: "https://fixture.example/v1",
-                        models: [],
+                    cfg: {
+                      models: {
+                        providers: {
+                          [provider.id]: {
+                            apiKey: { source: "env", provider: "default", id: "MISSING_KEY" },
+                            baseUrl: "https://fixture.example/v1",
+                            models: [],
+                          },
+                        },
                       },
-                    }),
+                    },
                     provider: provider.id,
                     allowPluginSyntheticAuth: false,
                   }),
@@ -407,9 +410,13 @@ describe("resolveProviderSyntheticAuthWithPlugin", () => {
   );
 
   it("captures the canonical pure result when it precedes an async alias fallback", async () => {
-    const config = configForProviders({
-      "custom-native": { api: "ollama" as const, baseUrl: "http://localhost", models: [] },
-    });
+    const config = {
+      models: {
+        providers: {
+          "custom-native": { api: "ollama" as const, baseUrl: "http://localhost", models: [] },
+        },
+      },
+    };
     const resolveSyntheticAuth = vi.fn(() => nativeAuth);
     resolveProviderRuntimePlugin
       .mockReturnValueOnce({

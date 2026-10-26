@@ -18,7 +18,7 @@ import {
 import {
   normalizeChatFastModeInput,
   resolveChatModelOverrideValue,
-  resolveChatModelSelectValues,
+  resolveChatModelSelectState,
 } from "../../lib/chat/model-select-state.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
@@ -359,7 +359,7 @@ export async function switchChatModel(
   // A newer intent retires even a confirmation for a previous selection.
   const selection = claimChatModelSelection(host, targetSessionKey);
   const { ownsSelection, agentScope } = selection;
-  const { currentOverride, defaultModel } = resolveChatModelSelectValues({
+  const { currentOverride, defaultModel } = resolveChatModelSelectState({
     activeSession: activeRow,
     agentDefaultModel,
     modelSelectionPolicy: host.chatModelSelectionPolicy,
@@ -421,19 +421,12 @@ export async function switchChatModel(
       if (nextValue && nextValue !== currentValue && nextRuntime?.local !== true && hasHistory) {
         const { showConfirmDialog } = await import("../../components/confirm-dialog.ts");
         const displayLookup = buildCatalogDisplayLookup(host.chatModelCatalog);
-        const currentEntry = host.chatModelCatalog.find(
-          (entry) => buildQualifiedChatModelValue(entry.id, entry.provider) === currentValue,
-        );
         const confirmed = await showConfirmDialog({
           title: t("chat.modelControls.switchTitle", {
-            new:
-              nextEntry?.name.trim() ||
-              formatCatalogChatModelDisplayFromLookup(nextValue, displayLookup),
+            new: formatCatalogChatModelDisplayFromLookup(nextValue, displayLookup),
           }),
           message: t("chat.modelControls.switchWarning", {
-            current:
-              currentEntry?.name.trim() ||
-              formatCatalogChatModelDisplayFromLookup(currentValue, displayLookup),
+            current: formatCatalogChatModelDisplayFromLookup(currentValue, displayLookup),
           }),
           confirmLabel: t("chat.modelControls.switchConfirm"),
           skipPreference: {

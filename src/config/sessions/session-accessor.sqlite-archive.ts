@@ -4,7 +4,6 @@ import { isMainThread, threadId, type Worker } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { DEFAULT_WORKER_PENDING_TASKS, WorkerTaskError } from "@openclaw/worker-runtime";
 import { getDatabaseEngineSelection } from "../../infra/database-engine/context.js";
-import { captureStateDatabaseAccess } from "../../infra/gateway-state-owner.js";
 import {
   createPostgresPoolEndpoints,
   postgresPoolTransferList,
@@ -194,12 +193,7 @@ function runSqliteColdMutation<Result>(
     }),
   };
   return withSqliteTranscriptArchiveSession(params.workerData.plan.databaseOptions, () =>
-    runExclusiveSqliteTranscriptArchiveWorker(async () => {
-      params.assertCurrent?.();
-      const stateAccess = await captureStateDatabaseAccess(
-        params.stateContext.admission.databasePath,
-      );
-      params.stateContext.admission.assertCurrent();
+    runExclusiveSqliteTranscriptArchiveWorker(() => {
       params.assertCurrent?.();
       return runScopedSqliteArchiveMutation(
         params.workerData,
@@ -221,7 +215,7 @@ function runSqliteColdMutation<Result>(
                 operationId: transport.initialOperationId,
                 completion: "exit",
                 databaseAuthority: {
-                  stateAccess,
+                  databasePath: params.stateContext.admission.databasePath,
                   maintenanceScope: params.stateContext.maintenanceScope,
                   creationPaths: [
                     params.workerData.plan.databaseOptions.path,

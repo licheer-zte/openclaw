@@ -14,7 +14,6 @@ import { useMenuMachine, type MenuBinding, type MenuControls } from "./menu-mach
 import { MenuNavigationError } from "./menu-navigation-error.tsx";
 import { useOverlayControl } from "./overlay-control.ts";
 import { retainShadowStyles } from "./shadow-styles.ts";
-import kbdStyles from "../kbd.css?inline";
 import overlayStyles from "./overlay.css?inline";
 import "./overlay.css";
 
@@ -122,7 +121,6 @@ export type MenuProps = {
     | "tabindex"
     | "aria-hidden"
     | "aria-disabled"
-    | "aria-description"
     | "aria-keyshortcuts"
     | "aria-busy"
     | "value"
@@ -195,7 +193,7 @@ export function Menu(props: BranchProps): JSX.Element {
       ),
     acquireOcclusion: acquireNativeOverlaySurface,
     onRootChange: (root) =>
-      root instanceof ShadowRoot ? retainShadowStyles(root, [overlayStyles, kbdStyles]) : undefined,
+      root instanceof ShadowRoot ? retainShadowStyles(root, [overlayStyles]) : undefined,
     onInitialFocus: (intent) => focusItem(intent),
     onEscape(event) {
       if (props.onEscape?.(event)) {

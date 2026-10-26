@@ -101,15 +101,18 @@ it.each(["local", "remote"] as const)(
 
     await agentCliCommand({ message: "resume", agent: "main", sessionId: "saved-id" }, runtime);
 
-    expect(callGateway.mock.calls[0]?.[0]).toMatchObject({
-      method: "agent",
-      requiredCapabilities: ["agent-session-id-create-v1"],
-      params: {
-        agentId: "main",
-        sessionId: "saved-id",
-        sessionKey: undefined,
-        createSessionIfMissing: true,
-      },
-    });
+    expect(runtime.log).toHaveBeenCalledWith("resumed by Gateway");
+    expect(callGateway).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        method: "agent",
+        requiredCapabilities: ["agent-session-id-create-v1"],
+        params: expect.objectContaining({
+          agentId: "main",
+          sessionId: "saved-id",
+          sessionKey: undefined,
+          createSessionIfMissing: true,
+        }),
+      }),
+    );
   },
 );

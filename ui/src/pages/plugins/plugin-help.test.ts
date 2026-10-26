@@ -16,35 +16,47 @@ function createHelp(pathname: string) {
     return { ...harness, help: createPluginHelp(harness.context), dispose };
   });
 }
-const installedModel = (
-  id: string,
-): Parameters<ReturnType<typeof createPluginHelp>["update"]>[0] => ({
-  connected: true,
-  result: createResult(createPlugin({ id, name: id })),
-  detail: { pluginId: id },
-  catalogDetail: null,
-});
+function installedModel(id: string): Parameters<ReturnType<typeof createPluginHelp>["update"]>[0] {
+  return {
+    connected: true,
+    result: createResult(createPlugin({ id, name: id })),
+    detail: { pluginId: id },
+    catalogDetail: null,
+  };
+}
 
 afterEach(() => {
   window.history.replaceState({}, "", "/");
   vi.restoreAllMocks();
 });
 
-it.each(["plugin", "disconnect"])(
+it.each(["plugin", "route", "connection", "disconnect"])(
   "ignores a retained setting action after its %s changes",
   async (change) => {
-    const { context, help, dispose } = createHelp("/settings/plugins/first");
+    const { context, setPathname, setGatewayToken, help, dispose } =
+      createHelp("/settings/plugins/first");
     help.update(installedModel("first"));
     const ask = help.ask;
     if (change === "plugin") {
       help.update(installedModel("second"));
+    } else if (change === "route") {
+      setPathname("/sessions");
+    } else if (change === "connection") {
+      setGatewayToken("replacement-operator");
+      help.update(installedModel("first"));
     } else {
       dispose();
     }
     const toggled = vi.fn();
     window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, toggled);
     onTestFinished(() => window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, toggled));
-    await ask();
+    await ask({
+      path: ["plugins", "entries", "first", "config", "limit"],
+      label: "Limit",
+      value: 5,
+      schema: { type: "number" },
+      hints: {},
+    } as PluginSettingsField);
     expect(toggled).not.toHaveBeenCalled();
     expect(takePluginHelpDraft(context)).toBe("");
   },
@@ -66,23 +78,31 @@ it.each<[string, string, Record<string, string[]> | undefined]>([
     origin: local ? "local" : "clawhub",
     packageName: local ? undefined : id,
     contracts,
+    providers: [],
+    channels: [],
     configuration: [{ name: "credential", required: true, sensitive: true }],
     readme: "Do not inject this document.",
   };
-  const model = {
+  const model: Parameters<ReturnType<typeof createPluginHelp>["update"]>[0] = {
     connected: true,
     result: createResult([]),
     detail: null,
     catalogDetail: { result: catalog },
   };
   help.update(model);
-  const reference = currentPluginHelpReference(context);
-  expect(reference).toMatchObject({ id, name, installed: false });
-  expect(reference?.declared?.contracts).toEqual(
-    contracts ? (install ? [] : ["videoGenerationProviders: video"]) : undefined,
-  );
-  expect(reference?.declared?.tools).toEqual(install ? ["known_tool"] : undefined);
-  expect(JSON.stringify(reference)).not.toMatch(/credential|Do not inject/);
+  expect(currentPluginHelpReference(context)).toEqual({
+    id,
+    name,
+    installed: false,
+    declared: {
+      providers: [],
+      channels: [],
+      skills: [],
+      mcpServers: [],
+      ...(contracts ? { contracts: install ? [] : ["videoGenerationProviders: video"] } : {}),
+      ...(install ? { tools: ["known_tool"] } : {}),
+    },
+  });
   if (install) {
     help.update({
       ...model,
@@ -116,5 +136,6 @@ it.each<[string[], string, boolean | string[], string, boolean]>([
     expect(currentPluginHelpReference(context)?.setting?.path).toEqual(path);
     const draft = takePluginHelpDraft(context);
     expect(draft).toBe(`Explain ${label}\n\nCurrent value: ${expected}`);
+    expect(draft).not.toContain("synthetic-sensitive-value");
   },
 );

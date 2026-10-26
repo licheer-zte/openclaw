@@ -72,7 +72,8 @@ function configuredRegistry(disabled = false) {
   return { ...fixture, rootDir, config };
 }
 
-function bundledRegistry(tempRoot = makeTempDir()) {
+function bundledRegistry() {
+  const tempRoot = makeTempDir();
   const packageRoot = path.join(tempRoot, "openclaw");
   const bundledRoot = path.join(packageRoot, "dist", "extensions");
   const sourceRoot = path.join(packageRoot, "extensions");
@@ -181,10 +182,6 @@ function persistFirstPlugin(
   );
 }
 
-function packageMetadata(filePath: string, relativePath = path.basename(filePath)) {
-  return { path: relativePath, hash: fileHash(filePath), fileSignature: fileSignature(filePath) };
-}
-
 function expectPersisted(result: ReturnType<typeof loadPluginRegistrySnapshotWithMetadata>) {
   expect(result.source).toBe("persisted");
   expect(result.diagnostics).toStrictEqual([]);
@@ -206,11 +203,15 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
   it.each(["persisted", "current"])(
     "reselects checkout plugins for a fresh config request after a %s global selection",
     async (cache) => {
-      const { packageRoot, bundledRoot, stateDir, env } = bundledRegistry(
-        fs.realpathSync(makeTempDir()),
-      );
+      const root = fs.realpathSync(makeTempDir());
+      const packageRoot = path.join(root, "openclaw");
+      const bundledRoot = path.join(packageRoot, "dist", "extensions");
       const bundledPlugin = path.join(bundledRoot, "demo");
-      const globalPlugin = path.join(stateDir, "extensions", "demo");
+      const globalPlugin = path.join(root, "state", "extensions", "demo");
+      const env: NodeJS.ProcessEnv = {
+        ...createHermeticEnv(root),
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+      };
       fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
       fs.mkdirSync(path.join(packageRoot, "extensions"));
       fs.writeFileSync(path.join(packageRoot, "package.json"), '{"name":"openclaw"}');
@@ -291,6 +292,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     ["entry", { entries: { "memory-demo": { enabled: true } } }],
     ["allowlist", { allow: ["memory-demo"] }],
     ["memory slot", { slots: { memory: " memory-demo " } }],
+    ["context-engine slot", { slots: { contextEngine: " memory-demo " } }],
   ])(
     "recovers a global source plugin selected by %s from a stale registry",
     async (_selection, plugins) => {
@@ -307,7 +309,8 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
 
       expect(result.source).toBe("derived");
       expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
-      expect(requirePluginRecord(result.snapshot.plugins, "memory-demo").origin).toBe("global");
+      const memoryPlugin = requirePluginRecord(result.snapshot.plugins, "memory-demo");
+      expect(memoryPlugin.origin).toBe("global");
     },
   );
 
@@ -422,16 +425,40 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     const metaDir = path.join(rootDir, "..meta");
     fs.mkdirSync(metaDir, { recursive: true });
     const packageJsonPath = path.join(metaDir, "package.json");
-    writeJson(packageJsonPath, { name: "demo", version: "1.0.0" });
+    writeJson(packageJsonPath, {
+      name: "demo",
+      version: "1.0.0",
+      openclaw: {
+        channel: {
+          id: "demo",
+          label: "Demo",
+          commands: { nativeCommandsAutoEnabled: true, nativeSkillsAutoEnabled: false },
+        },
+      },
+    });
     const index = loadInstalledPluginIndex({ config, env });
     await persistFirstPlugin(index, stateDir, {
-      packageJson: packageMetadata(packageJsonPath, "..meta/package.json"),
+      packageJson: {
+        path: "..meta/package.json",
+        hash: fileHash(packageJsonPath),
+        fileSignature: fileSignature(packageJsonPath),
+      },
     });
 
     const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
 
     expectPersisted(result);
     expect(result.manifestRegistry).toBeUndefined();
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: result.snapshot,
+      config,
+      env,
+      includeDisabled: true,
+    });
+    expect(registry.plugins[0]?.channelCatalogMeta?.commands).toEqual({
+      nativeCommandsAutoEnabled: true,
+      nativeSkillsAutoEnabled: false,
+    });
   });
 
   it.runIf(process.platform !== "win32")(
@@ -448,12 +475,17 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
       fs.symlinkSync(outsidePackageJsonPath, packageJsonPath);
       const index = loadInstalledPluginIndex({ config, env });
       await persistFirstPlugin(index, stateDir, {
-        packageJson: packageMetadata(packageJsonPath),
+        packageJson: {
+          path: "package.json",
+          hash: fileHash(packageJsonPath),
+          fileSignature: fileSignature(packageJsonPath),
+        },
       });
 
       const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
 
-      expectStale(result);
+      expect(result.source).toBe("derived");
+      expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
     },
   );
 
@@ -475,7 +507,8 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
 
         const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
 
-        expectStale(result);
+        expect([artifact, result.source]).toEqual([artifact, "derived"]);
+        expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
       }
     },
   );

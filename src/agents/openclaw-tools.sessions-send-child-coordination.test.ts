@@ -106,22 +106,6 @@ async function settleSessionWork() {
   expect(getActiveGatewayRootWorkCount(), getActiveGatewayRootWorkHolders().join(", ")).toBe(0);
 }
 
-async function releaseAndObserve(predicate: () => boolean, release: () => void) {
-  const observed = observeSubagentChange(predicate);
-  try {
-    release();
-    await observed.promise;
-  } finally {
-    observed.stop();
-  }
-}
-
-async function cleanupFollowup() {
-  await settleSessionWork();
-  await resetSubagentRegistryForTests();
-  announceTesting.setDepsForTest();
-}
-
 const calls: GatewayCall[] = [];
 function mockGatewayReply(
   waitResult: Record<string, unknown> = {
@@ -496,6 +480,7 @@ describe("child followups", () => {
         requesterSessionKey,
         acknowledgment === "ACK lost",
       );
+      let stopObserving = () => {};
       try {
         const result = await followup(timeoutSeconds, watch === undefined ? {} : { watch });
         expect(result.details).toMatchObject({
@@ -518,7 +503,7 @@ describe("child followups", () => {
           await settlePair(requesterSessionKey, requesterTurnRunId, childSessionKey, [runId]),
         ).toBe(true);
         expect(requesterCalls(requesterSessionKey)).toHaveLength(0);
-        await releaseAndObserve(() => {
+        const settled = observeSubagentChange(() => {
           const child = getSubagentRunByRunId(runId);
           return (
             !child ||
@@ -528,7 +513,10 @@ describe("child followups", () => {
             ((child.delivery?.status === "delivered" || child.cleanupCompletedAt !== undefined) &&
               !child.requesterSettleWake)
           );
-        }, childPending.resolve);
+        });
+        stopObserving = settled.stop;
+        childPending.resolve();
+        await settled.promise;
         await settleSessionWork();
         expect(getSubagentRunByRunId(runId)).toMatchObject({ delivery: { status: "delivered" } });
         expect(getSubagentRunByRunId(runId)?.requesterSettleWake).toBeUndefined();
@@ -551,7 +539,10 @@ describe("child followups", () => {
         expect(requesterCalls(requesterSessionKey)).toHaveLength(1);
       } finally {
         childPending.resolve();
-        await cleanupFollowup();
+        stopObserving();
+        await settleSessionWork();
+        await resetSubagentRegistryForTests();
+        announceTesting.setDepsForTest();
       }
     },
   );
@@ -590,6 +581,7 @@ describe("child followups", () => {
       );
       // The fixture requester has no controller operation; model its live inline claim.
       const requesterTurn = holdLiveRequesterTurns(requesterTurnRunId);
+      let stopObserving = () => {};
       try {
         const sent = await followup(1);
         expect(sent.details).toMatchObject({
@@ -606,15 +598,18 @@ describe("child followups", () => {
         await settlePair(requesterSessionKey, requesterTurnRunId, childSessionKey, [runId], false);
         if (status !== "ok") {
           // Only the registry's wait observes these endings, after the inline result was consumed.
-          await releaseAndObserve(
+          const settled = observeSubagentChange(
             () => getSubagentRunByRunId(runId)?.cleanupCompletedAt !== undefined,
-            registryWait.resolve,
           );
+          stopObserving = settled.stop;
+          registryWait.resolve();
+          await settled.promise;
         }
         await settleSessionWork();
         expect(requesterCalls(requesterSessionKey)).toHaveLength(0);
         await expectChildCleanupSettled(runId, requesterSessionKey);
       } finally {
+        stopObserving();
         requesterTurn.restore();
         await closeRequester();
         await settleSessionWork();
@@ -633,6 +628,7 @@ describe("child followups", () => {
       await childPending.promise;
       return completeFollowup();
     }, cronRequesterKey);
+    let stopObserving = () => {};
     try {
       const result = await followup(0, {}, cronRequesterKey);
       expect(result.details).toMatchObject({
@@ -644,15 +640,21 @@ describe("child followups", () => {
         expectsCompletionMessage: false,
         execution: { status: "running" },
       });
-      await releaseAndObserve(() => {
+      const settled = observeSubagentChange(() => {
         const child = getSubagentRunByRunId(runId);
         return !child || child.cleanupCompletedAt !== undefined;
-      }, childPending.resolve);
+      });
+      stopObserving = settled.stop;
+      childPending.resolve();
+      await settled.promise;
       await settleSessionWork();
       expect(requesterCalls(cronRequesterKey)).toHaveLength(0);
     } finally {
       childPending.resolve();
-      await cleanupFollowup();
+      stopObserving();
+      await settleSessionWork();
+      await resetSubagentRegistryForTests();
+      announceTesting.setDepsForTest();
     }
   });
 });
@@ -708,6 +710,7 @@ it("yields two watched followups when the first settles during yield preparation
         options,
       );
     });
+  let stopObserving = () => {};
   try {
     const tool = sendTool(requesterSessionKey, requesterTurnRunId);
     for (const runId of runIds) {
@@ -732,17 +735,23 @@ it("yields two watched followups when the first settles during yield preparation
     ).execute("yield-raced-followups", {});
     void yielded.catch(() => {});
     await enteredPreparation.promise;
-    await releaseAndObserve(
+    const settled = observeSubagentChange(
       () => getSubagentRunByRunId(runIds[0]!)?.execution.status === "terminal",
-      replies[0]!.resolve,
     );
+    stopObserving = settled.stop;
+    replies[0]!.resolve();
+    await settled.promise;
     releasePreparation.resolve();
     expect((await yielded).details).toEqual({ status: "yielded" });
     expect(onYield).toHaveBeenCalledOnce();
     expect(await settlePair(requesterSessionKey, requesterTurnRunId, childSessionKey, runIds)).toBe(
       true,
     );
-    await releaseAndObserve(() => runIds.every(childDeliverySettled), replies[1]!.resolve);
+    stopObserving();
+    const delivered = observeSubagentChange(() => runIds.every(childDeliverySettled));
+    stopObserving = delivered.stop;
+    replies[1]!.resolve();
+    await delivered.promise;
     await settleSessionWork();
     const batches = calls.filter(
       (call) =>
@@ -756,8 +765,11 @@ it("yields two watched followups when the first settles during yield preparation
   } finally {
     releasePreparation.resolve();
     replies.forEach((reply) => reply.resolve());
+    stopObserving();
     barrier.mockRestore();
-    await cleanupFollowup();
+    await settleSessionWork();
+    await resetSubagentRegistryForTests();
+    announceTesting.setDepsForTest();
   }
 });
 

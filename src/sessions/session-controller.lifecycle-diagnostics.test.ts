@@ -4,6 +4,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { expectDefined, isRecord } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   areDiagnosticsEnabledForProcess as diagnosticsEnabled,
   setDiagnosticsEnabledForProcess as setDiagnostics,
@@ -43,7 +44,6 @@ const messages = {
 };
 type RecordKind = keyof typeof messages;
 type Target = { scope: string; identities: string[] };
-const targetFor = (scope: string): Target => ({ scope, identities: [`${scope}-session`] });
 
 async function records(kind: RecordKind): Promise<Record<string, unknown>[]> {
   await flushLogger();
@@ -74,13 +74,6 @@ async function advance(ms: number) {
 async function finish(releases: (() => void)[], ...work: Promise<unknown>[]) {
   releases.forEach((release) => release());
   await Promise.allSettled(work);
-}
-
-async function finishHolds(...holds: ReturnType<typeof hold>[]) {
-  await finish(
-    holds.map(({ release }) => release),
-    ...holds.map(({ promise }) => promise),
-  );
 }
 
 async function expectRecords(kind: RecordKind, rows: Record<string, unknown>[], unordered = false) {
@@ -164,7 +157,7 @@ afterEach(async () => {
 it.each([false, true])(
   "reports a long acquired effect only when contended=%s",
   async (contended) => {
-    const target = targetFor("acquired-effect-store");
+    const target = { scope: "acquired-effect-store", identities: ["acquired-effect-session"] };
     const owner = Symbol("effect-producer");
     const effect = await withTrace(traces.first, () =>
       beginEffect({ ...target, owner, serializeOwner: true }),
@@ -209,7 +202,7 @@ it.each([false, true])(
 );
 
 it("reports the current holder after turnover and preserves the waiter's trace and FIFO order", async () => {
-  const target = targetFor("private-store-path");
+  const target = { scope: "private-store-path", identities: ["private-session-key"] };
   const order: string[] = [];
   const firstGate = gate(() => order.push("first"));
   const secondGate = gate(() => order.push("second"));
@@ -264,7 +257,7 @@ it("reports the current holder after turnover and preserves the waiter's trace a
 });
 
 it("distinguishes mutation and lifecycle holders of the same normalized identity", async () => {
-  const target = targetFor("namespace-store");
+  const target = { scope: "namespace-store", identities: ["namespace-session"] };
   const lifecycle = hold("lifecycle", target, traces.first);
   await lifecycle.entered;
   const mutation = hold("mutation", target, traces.second);
@@ -292,7 +285,12 @@ it("distinguishes mutation and lifecycle holders of the same normalized identity
     expect(waiting).toHaveLength(2);
     expect(new Set(waiting.map((record) => record.identityHash)).size).toBe(1);
   } finally {
-    await finishHolds(lifecycle, mutation, waiter);
+    await finish(
+      [lifecycle.release, mutation.release, waiter.release],
+      lifecycle.promise,
+      mutation.promise,
+      waiter.promise,
+    );
   }
 });
 
@@ -337,28 +335,30 @@ it("leaves the holder unknown while waiting on a turn instead of naming an unrel
 it.each([true, false])(
   "preserves an outer holder through reentry when initially enabled=%s",
   async (initiallyEnabled) => {
-    const target = targetFor(`reentry-store-${initiallyEnabled}`);
-    const outerGate = gate();
+    const target = { scope: `reentry-store-${initiallyEnabled}`, identities: ["reentry-session"] };
+    const [outerStarted, beginNested] = [createDeferred(), createDeferred()];
     const nested = gate();
-    const outerTail = gate();
+    const [nestedDone, releaseOuter] = [createDeferred(), createDeferred()];
     setDiagnostics(initiallyEnabled);
     const outer = mutate(target, traces.first, {
       diagnosticLabel: "create",
       run: async () => {
-        await outerGate.run();
+        outerStarted.resolve();
+        await beginNested.promise;
         await mutate(target, traces.second, { diagnosticLabel: "delete", run: nested.run });
-        await outerTail.run();
+        nestedDone.resolve();
+        await releaseOuter.promise;
       },
     });
-    await outerGate.entered;
+    await outerStarted.promise;
     setDiagnostics(true);
-    outerGate.release();
+    beginNested.resolve();
     await nested.entered;
     const waiter = hold("mutation", target, traces.waiter);
     try {
       await advance(500);
       nested.release();
-      await outerTail.entered;
+      await nestedDone.promise;
       await advance(500);
       const row = await expectRecord("waiting", {
         operationTraceId: traces.waiter.traceId,
@@ -368,7 +368,7 @@ it.each([true, false])(
       expect(row.holderTraceId).not.toBe(traces.second.traceId);
     } finally {
       await finish(
-        [outerGate.release, nested.release, outerTail.release, waiter.release],
+        [beginNested.resolve, nested.release, releaseOuter.resolve, waiter.release],
         outer,
         waiter.promise,
       );
@@ -377,7 +377,7 @@ it.each([true, false])(
 );
 
 it("measures prepare and finalize separately while successors wait for real finalization", async () => {
-  const target = targetFor("phase-store");
+  const target = { scope: "phase-store", identities: ["phase-session"] };
   const [prepare, finalize] = [gate(), gate()];
   const first = mutate(target, traces.first, {
     diagnosticLabel: "create",
@@ -421,7 +421,10 @@ it("measures prepare and finalize separately while successors wait for real fina
 });
 
 it("keeps canceled validator custody visible until the real callback returns", async () => {
-  const target = targetFor("cancelled-validator-store");
+  const target = {
+    scope: "cancelled-validator-store",
+    identities: ["cancelled-validator-session"],
+  };
   const controller = new AbortController();
   const validator = gate();
   const error = new Error("cancel validator");
@@ -457,7 +460,7 @@ it("keeps canceled validator custody visible until the real callback returns", a
 });
 
 it("stops pending and terminal emissions when diagnostics are disabled without changing results", async () => {
-  const target = targetFor("disabled-store");
+  const target = { scope: "disabled-store", identities: ["disabled-session"] };
   const holder = hold("mutation", target, traces.first);
   await holder.entered;
   const waiter = hold("mutation", target, traces.waiter);
@@ -483,10 +486,10 @@ it("stops pending and terminal emissions when diagnostics are disabled without c
 
 it("bounds holder, timer and warning state without inventing a holder", async () => {
   const holders = Array.from({ length: 128 }, (_, index) =>
-    hold("lifecycle", targetFor(`bounded-holder-${index}`)),
+    hold("lifecycle", { scope: `bounded-holder-${index}`, identities: ["session"] }),
   );
   await Promise.all(holders.map((holder) => holder.entered));
-  const target = targetFor("sensitive-capacity-store");
+  const target = { scope: "sensitive-capacity-store", identities: ["sensitive-capacity-session"] };
   const owner = Symbol("bounded-effect-producer");
   const unobserved = hold("lifecycle", target, traces.first, owner);
   await unobserved.entered;
@@ -509,13 +512,17 @@ it("bounds holder, timer and warning state without inventing a holder", async ()
       ),
     ).toBe(true);
   } finally {
-    await finishHolds(unobserved, ...holders, ...waiters);
+    const held = [unobserved, ...holders, ...waiters];
+    await finish(
+      held.map((holder) => holder.release),
+      ...held.map((holder) => holder.promise),
+    );
   }
   const waiting = await records("waiting");
   const completed = await records("slow");
   expect(waiting.length + completed.length).toBe(60);
   await advance(60_000);
-  const later = hold("mutation", targetFor("after-budget"));
+  const later = hold("mutation", { scope: "after-budget", identities: ["session"] });
   await later.entered;
   await advance(1_000);
   later.release();
@@ -552,7 +559,10 @@ it("gates and hashes phase events without consuming the slow-warning budget", as
   });
   expect(JSON.stringify(phases)).not.toContain("sensitive-phase-");
   expect(consoleLog).not.toHaveBeenCalled();
-  const holder = hold("mutation", targetFor("phase-budget-store"));
+  const holder = hold("mutation", {
+    scope: "phase-budget-store",
+    identities: ["phase-budget-session"],
+  });
   await holder.entered;
   try {
     await advance(1_000);
@@ -583,22 +593,23 @@ it("preserves operation errors and queue release when the native logging sink th
   });
   transport.write = failedSink;
   const lifecycle = await import("./session-controller.lifecycle.js");
-  const held = gate();
+  const [started, release] = [createDeferred(), createDeferred()];
   const operationError = new Error("original operation failure");
   const finalize = vi.fn(async () => {});
-  const target = targetFor("failed-sink-store");
+  const target = { scope: "failed-sink-store", identities: ["failed-sink-session"] };
   const first = lifecycle.runSessionMutation({
     diagnosticLabel: "delete",
     policy: "wait",
     ...target,
     finalize,
     run: async () => {
-      await held.run();
+      started.resolve();
+      await release.promise;
       throw operationError;
     },
   });
   const firstOutcome = first.catch((error: unknown) => error);
-  await held.entered;
+  await started.promise;
   const second = lifecycle.runSessionMutation({
     diagnosticLabel: "sharing",
     policy: "wait",
@@ -608,13 +619,13 @@ it("preserves operation errors and queue release when the native logging sink th
   try {
     await advance(1_000);
     expect(failedSink).toHaveBeenCalled();
-    held.release();
+    release.resolve();
     await expect(firstOutcome).resolves.toBe(operationError);
     expect(finalize).toHaveBeenCalledOnce();
     await expect(second).resolves.toBe("next operation");
     expect(lifecycle.getSessionMutationCount()).toBe(0);
   } finally {
-    held.release();
+    release.resolve();
     await Promise.allSettled([first, second]);
     Object.defineProperty(transport, "write", previousWrite);
     await logging.flushLogger();

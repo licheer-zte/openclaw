@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { createRequire, isBuiltin } from "node:module";
+import Module, { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isMainThread, workerData } from "node:worker_threads";
@@ -21,10 +21,6 @@ import {
   type PluginGenerationArtifact,
 } from "./plugin-generation-artifact.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
-import {
-  registerPluginInstanceModuleResolver,
-  retainedNativeEsmOwners,
-} from "./plugin-instance-module-resolver.js";
 import { getPluginInstanceOwner } from "./plugin-instance-scope.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import {
@@ -37,6 +33,7 @@ import { bindSharedPluginModuleLoader } from "./plugin-shared-module-loader.js";
 import {
   buildPluginTypeScriptSource,
   PLUGIN_SOURCE_RESOLVE_PREFIX,
+  type PluginSourceBuild,
   type PluginSourceFile,
   type PluginSourceLoadMode,
 } from "./plugin-source-build.js";
@@ -48,13 +45,14 @@ import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.j
 import { preparePluginLoaderAliases, isPluginSdkAliasSpecifier } from "./sdk-alias.js";
 import { recordPluginSdkDeprecatedImport } from "./sdk-deprecated-imports.js";
 
-type SourceBuilds = Map<string, ReturnType<typeof buildPluginTypeScriptSource>>;
+type SourceBuilds = Map<string, PluginSourceBuild>;
 type RetainedNativeEsm = {
   artifact?: PluginGenerationArtifact;
   builds: SourceBuilds;
   modules: Map<string, unknown>;
   loaded: boolean;
   owners: Set<PluginInstanceModuleLoaderParams["instance"]>;
+  knownOwners: WeakSet<PluginInstanceModuleLoaderParams["instance"]>;
 };
 
 const retainedNativeEsmModules = resolveGlobalMap<string, RetainedNativeEsm>(
@@ -161,6 +159,7 @@ function retainedNativeEsmFor(
       modules: new Map(),
       loaded: false,
       owners: new Set(),
+      knownOwners: new WeakSet(),
     };
     entries.set(key, retained);
   }
@@ -213,7 +212,7 @@ function ownsNativeEsmResolution(
   if (!requested) {
     return true;
   }
-  if (retainedNativeEsmOwners.get(requested) !== retained) {
+  if (!retained.knownOwners.has(requested)) {
     return false;
   }
   if (!retained.owners.has(requested)) {
@@ -262,7 +261,6 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
         source: params.source,
         devSourceRoot: params.devSourceRoot,
         pluginSdkResolution: params.pluginSdkResolution,
-        preparedArtifact: params.preparedArtifact?.artifact,
       }),
     });
     return;
@@ -273,9 +271,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
   const sourceBuilds: SourceBuilds = retained?.builds ?? new Map();
   const { sourceForOutput, moduleSource } = createSourceOutputLookup(sourceBuilds);
   retained?.owners.add(params.instance);
-  if (retained) {
-    retainedNativeEsmOwners.set(params.instance, retained);
-  }
+  retained?.knownOwners.add(params.instance);
   const reusedArtifact = retained?.artifact;
   let artifact: PluginGenerationArtifact;
   try {
@@ -454,8 +450,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
   };
   // Captured sources and compiled outputs share this instance's private namespace.
   const boundaryUrl = pathToFileURL(artifact.boundaryRoot + path.sep).href;
-  const unregister = registerPluginInstanceModuleResolver(boundaryUrl, {
-    instance: params.instance,
+  const hooks = Module.registerHooks({
     resolve(specifier, context, nextResolve) {
       if (retained && !ownsNativeEsmResolution(retained, params.instance)) {
         return nextResolve(specifier, context);
@@ -680,7 +675,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
       return resolved;
     },
   });
-  params.instance.onModuleDispose(unregister);
+  params.instance.onModuleDispose(() => hooks.deregister());
   const results = new Map<string, { value: unknown } | { error: unknown }>();
   bindModuleLoader(
     (source) =>

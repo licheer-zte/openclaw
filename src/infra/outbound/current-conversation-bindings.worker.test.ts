@@ -243,33 +243,35 @@ it("keeps inspection noncreating and performs durable read, expiry, and scoped t
   expect(row.get(expired.bindingId)).toEqual(before);
   const callerConversation = { ...current.conversation, callerContext: () => "host only" };
   const hostSql = observeHostDataSql();
-  onTestFinished(() => hostSql.restore());
-  expect(await inspectRecord(callerConversation)).toEqual(current);
-  expect(await resolveRecord(callerConversation)).toEqual(current);
-  const at = current.boundAt + 1_000;
-  const policy = {
-    idleTimeoutMs: 60_000,
-    maxAgeMs: 60_500,
-    targetKinds: {
-      subagent: "subagent" as const,
-      session: "session" as const,
+  try {
+    expect(await inspectRecord(callerConversation)).toEqual(current);
+    expect(await resolveRecord(callerConversation)).toEqual(current);
+    const at = current.boundAt + 1_000;
+    const policy = {
+      idleTimeoutMs: 60_000,
+      maxAgeMs: 60_500,
+      targetKinds: {
+        subagent: "subagent" as const,
+        session: "session" as const,
+        callerContext: () => "host only",
+      },
       callerContext: () => "host only",
-    },
-    callerContext: () => "host only",
-  };
-  const touched = await touchRecord({
-    conversation: callerConversation,
-    bindingId: current.bindingId,
-    at,
-    accountPolicy: policy,
-  });
-  expect(touched).toMatchObject({
-    expiresAt: current.boundAt + 60_500,
-    metadata: { opaque: current.metadata!.opaque, lastActivityAt: at },
-  });
-  expect(await resolveRecord(expired.conversation)).toBeNull();
-  expect(hostSql.queries).toEqual([]);
-  hostSql.restore();
+    };
+    const touched = await touchRecord({
+      conversation: callerConversation,
+      bindingId: current.bindingId,
+      at,
+      accountPolicy: policy,
+    });
+    expect(touched).toMatchObject({
+      expiresAt: current.boundAt + 60_500,
+      metadata: { opaque: current.metadata!.opaque, lastActivityAt: at },
+    });
+    expect(await resolveRecord(expired.conversation)).toBeNull();
+    expect(hostSql.queries).toEqual([]);
+  } finally {
+    hostSql.restore();
+  }
   expect(row.get(expired.bindingId)).toBeUndefined();
 });
 
@@ -438,56 +440,58 @@ it("keeps account touch bytes identical and rejects a manager shadowed by anothe
     listBySession: () => [],
     resolveByConversation: () => null,
   };
-  onTestFinished(() => {
+  try {
+    manager.bindConversation({
+      conversationId: "thread",
+      targetSessionKey: "agent:main:target",
+      targetKind: "session",
+      metadata: { label: "owned", opaque: { stable: [1, 2] } },
+    });
+    const original = await inspectRecord(ref);
+    assert(original, "Missing fixture account binding");
+    const row = bindingRows("record_json, metadata_json, expires_at");
+    const at = original.boundAt + 1_000;
+    manager.touchConversation("thread", at);
+    const expected = row.get(original.bindingId);
+    seed(original);
+    await service.touchAsync(original.bindingId, at, ref);
+    expect(row.get(original.bindingId)).toEqual(expected);
+
+    const pending = service.touchAsync(original.bindingId, at + 1_000, ref);
+    registerSessionBindingAdapter(replacement);
+    await expect(pending).rejects.toThrow("no longer active");
+    expect(row.get(original.bindingId)).toEqual(expected);
+  } finally {
     unregisterSessionBindingAdapter({ ...ref, adapter: replacement });
     manager.stop();
-  });
-  manager.bindConversation({
-    conversationId: "thread",
-    targetSessionKey: "agent:main:target",
-    targetKind: "session",
-    metadata: { label: "owned", opaque: { stable: [1, 2] } },
-  });
-  const original = await inspectRecord(ref);
-  assert(original, "Missing fixture account binding");
-  const row = bindingRows("record_json, metadata_json, expires_at");
-  const at = original.boundAt + 1_000;
-  manager.touchConversation("thread", at);
-  const expected = row.get(original.bindingId);
-  seed(original);
-  await service.touchAsync(original.bindingId, at, ref);
-  expect(row.get(original.bindingId)).toEqual(expected);
-
-  const pending = service.touchAsync(original.bindingId, at + 1_000, ref);
-  registerSessionBindingAdapter(replacement);
-  await expect(pending).rejects.toThrow("no longer active");
-  expect(row.get(original.bindingId)).toEqual(expected);
+  }
 });
 
 it("joins expiry pruning refused by the stopped manager without deleting its row", async () => {
   const manager = createManager(managerOptions());
-  onTestFinished(() => {
+  try {
+    const bound = await bindSession(
+      record("expired-list", "owner").conversation,
+      "agent:main:current",
+    );
+    seed({ ...bound, expiresAt: 1 });
+    const query = bindingRows();
+    const before = query.get(bound.bindingId);
+    expect(before).toBeDefined();
+    probe.admission(admission, (request, grant, admit) => {
+      if (request.stage === "transaction") {
+        manager.stop();
+      }
+      admit(request, grant);
+    });
+    await expect(
+      resolveBoundDeliveryDestination({ targetSessionKey: bound.targetSessionKey }),
+    ).rejects.toMatchObject({ code: "BINDING_ADAPTER_UNAVAILABLE" });
+    expect(query.get(bound.bindingId)).toEqual(before);
+  } finally {
     vi.restoreAllMocks();
     manager.stop();
-  });
-  const bound = await bindSession(
-    record("expired-list", "owner").conversation,
-    "agent:main:current",
-  );
-  seed({ ...bound, expiresAt: 1 });
-  const query = bindingRows();
-  const before = query.get(bound.bindingId);
-  expect(before).toBeDefined();
-  probe.admission(admission, (request, grant, admit) => {
-    if (request.stage === "transaction") {
-      manager.stop();
-    }
-    admit(request, grant);
-  });
-  await expect(
-    resolveBoundDeliveryDestination({ targetSessionKey: bound.targetSessionKey }),
-  ).rejects.toMatchObject({ code: "BINDING_ADAPTER_UNAVAILABLE" });
-  expect(query.get(bound.bindingId)).toEqual(before);
+  }
 });
 
 it.each(["replaced", "removed", "expired", "malformed"] as const)(

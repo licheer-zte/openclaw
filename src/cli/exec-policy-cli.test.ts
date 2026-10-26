@@ -26,10 +26,6 @@ function approvalsSnapshot(overrides: Partial<ExecApprovalsSnapshot> = {}): Exec
   };
 }
 
-function configSnapshot(path = "/tmp/openclaw.json") {
-  return { path, hash: "config-hash-1", config: mocks.state.config };
-}
-
 function expectNoPolicyWrites() {
   expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   expect(mocks.updateExecApprovals).not.toHaveBeenCalled();
@@ -166,11 +162,16 @@ describe("exec-policy CLI", () => {
     mocks.state.hash = "approvals-hash";
     mocks.runtimeErrors.length = 0;
     mocks.callGateway.mockReset();
-    for (const mock of Object.values(mocks.defaultRuntime)) {
-      mock.mockClear();
-    }
+    mocks.defaultRuntime.log.mockClear();
+    mocks.defaultRuntime.error.mockClear();
+    mocks.defaultRuntime.writeJson.mockClear();
+    mocks.defaultRuntime.exit.mockClear();
     mocks.replaceConfigFile.mockReset().mockImplementation(mocks.replaceConfig);
-    mocks.readConfigFileSnapshot.mockReset().mockImplementation(async () => configSnapshot());
+    mocks.readConfigFileSnapshot.mockReset().mockImplementation(async () => ({
+      path: "/tmp/openclaw.json",
+      hash: "config-hash-1",
+      config: mocks.state.config,
+    }));
     mocks.readExecApprovalsSnapshot.mockReset().mockImplementation(() => approvalsSnapshot());
     mocks.restoreExecApprovalsSnapshot
       .mockReset()
@@ -451,7 +452,17 @@ describe("exec-policy CLI", () => {
   it.each([
     { args: ["preset", "yolo"], askFallback: "full" },
     {
-      args: "set --host gateway --security full --ask off --ask-fallback allowlist".split(" "),
+      args: [
+        "set",
+        "--host",
+        "gateway",
+        "--security",
+        "full",
+        "--ask",
+        "off",
+        "--ask-fallback",
+        "allowlist",
+      ],
       askFallback: "allowlist",
     },
   ])("synchronizes config and approvals with $args", async ({ args, askFallback }) => {
@@ -469,9 +480,11 @@ describe("exec-policy CLI", () => {
   });
 
   it("sanitizes terminal control content before rendering the text table", async () => {
-    mocks.readConfigFileSnapshot.mockImplementationOnce(async () =>
-      configSnapshot("/tmp/openclaw.json\u001B[2J\nforged"),
-    );
+    mocks.readConfigFileSnapshot.mockImplementationOnce(async () => ({
+      path: "/tmp/openclaw.json\u001B[2J\nforged",
+      hash: "config-hash-1",
+      config: mocks.state.config,
+    }));
     mocks.readExecApprovalsSnapshot.mockImplementationOnce(() =>
       approvalsSnapshot({
         path: "/tmp/exec-approvals.json\u0007\nforged",

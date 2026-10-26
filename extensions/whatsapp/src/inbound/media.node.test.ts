@@ -42,9 +42,27 @@ function download(message: Record<string, unknown>, maxBytes?: number) {
 
 describe("downloadInboundMedia", () => {
   beforeEach(() => {
-    downloadMediaMessage.mockReset().mockImplementation(() => Readable.from([Buffer.alloc(15)]));
-    saveMediaStream.mockReset();
-    saveMediaStream.mockImplementation(async (_stream, contentType) => ({ ...SAVED, contentType }));
+    downloadMediaMessage.mockClear();
+    downloadMediaMessage.mockImplementation(() => Readable.from([Buffer.from("fake-media-data")]));
+    saveMediaStream.mockClear();
+    saveMediaStream.mockImplementation(
+      async (
+        stream: AsyncIterable<Buffer>,
+        contentType: string | undefined,
+        _subdir: string,
+        maxBytes: number,
+      ) => {
+        let total = 0;
+        for await (const chunk of stream) {
+          total += chunk.byteLength;
+          if (total > maxBytes) {
+            throw new Error("Media exceeds limit");
+          }
+        }
+        return { ...SAVED, size: total, contentType };
+      },
+    );
+    mockSock.updateMediaMessage.mockClear();
   });
 
   it("returns undefined for messages without media", async () => {
@@ -52,27 +70,31 @@ describe("downloadInboundMedia", () => {
   });
 
   it.each([
-    [{ audioMessage: {} }, "audio/ogg; codecs=opus"],
-    [{ imageMessage: {} }, "image/jpeg"],
-    [{ videoMessage: {} }, "video/mp4"],
-    [{ ptvMessage: {} }, "video/mp4"],
-    [{ stickerMessage: {} }, "image/webp"],
-  ] as const)("downloads %j with MIME %s", async (message, mimetype) => {
+    [{ audioMessage: {} }, "audio/ogg; codecs=opus", undefined],
+    [{ imageMessage: {} }, "image/jpeg", undefined],
+    [{ videoMessage: {} }, "video/mp4", undefined],
+    [{ ptvMessage: {} }, "video/mp4", undefined],
+    [{ stickerMessage: {} }, "image/webp", undefined],
+    [
+      { documentMessage: { mimetype: "application/pdf", fileName: "report.pdf" } },
+      "application/pdf",
+      "report.pdf",
+    ],
+  ] as const)("downloads %j with MIME %s and file name %s", async (message, mimetype, fileName) => {
     expect(await download(message)).toEqual({
       saved: { ...SAVED, contentType: mimetype },
       mimetype,
-      fileName: undefined,
+      fileName,
     });
   });
 
-  it("forwards streams and the configured cap, propagating store rejection", async () => {
-    const stream = Readable.from([Buffer.alloc(4), Buffer.alloc(4)]);
-    const error = new Error("Media exceeds limit");
-    downloadMediaMessage.mockReturnValueOnce(stream);
-    saveMediaStream.mockRejectedValueOnce(error);
-    await expect(download(IMAGE, 7)).rejects.toBe(error);
+  it("downloads in stream mode and rejects over the configured cap", async () => {
+    downloadMediaMessage.mockImplementationOnce(() =>
+      Readable.from([Buffer.alloc(4), Buffer.alloc(4)]),
+    );
+
+    await expect(download(IMAGE, 7)).rejects.toThrow(/Media exceeds/i);
     expect(downloadMediaMessage.mock.calls[0]?.[1]).toBe("stream");
-    expect(saveMediaStream).toHaveBeenCalledWith(stream, "image/jpeg", "inbound", 7, undefined);
   });
 
   it.each([

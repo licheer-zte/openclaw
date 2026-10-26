@@ -4,7 +4,6 @@ import { vi } from "vitest";
 import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
-  createOAuthRefreshCredential,
 } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import {
   readPersistedAuthProfileStateRaw,
@@ -103,11 +102,13 @@ export function mutateAuthStoreBeforeNextPublication(
         ...(readPersistedAuthProfileStateRaw(agentDir) as AuthProfileState | null),
       };
       if (concurrentMutation === "credentials") {
-        concurrentStore.profiles["openai:oauth"] = createOAuthRefreshCredential({
+        concurrentStore.profiles["openai:oauth"] = {
+          type: "oauth",
+          provider: "openai",
           access: "oauth-concurrent",
           refresh: "refresh-concurrent",
           expires: Date.now() + 120_000,
-        });
+        };
       } else {
         concurrentStore.order = { openai: ["openai:oauth", "openai:default"] };
       }

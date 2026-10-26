@@ -113,10 +113,6 @@ async function runCapturedSessionActorUsage(
   resolveCost: UsageCostResolver,
   waitForRefresh: boolean,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
-  if (operation.kind === "overview") {
-    // The overview loader reads private sessions through their whole in-memory rollups.
-    throw new Error("Private session usage has no overview quarter rows");
-  }
   const refresh = operation.kind === "refresh";
   const key = refreshKey(binding);
   if (refresh) {
@@ -275,7 +271,6 @@ async function runCapturedSessionActorUsage(
                 ...operation,
                 files: [...files.values()].map(({ file }) => file),
               }),
-              staleSessionFiles: [],
             }
           : {
               kind: "sessions" as const,

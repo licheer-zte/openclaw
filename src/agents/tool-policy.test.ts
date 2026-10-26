@@ -39,7 +39,10 @@ describe("tool-policy", () => {
     expect([...(declared?.mcpServerNames ?? [])]).toEqual(expected);
   });
 
-  it("ignores unknown profiles", () => {
+  it("resolves known profiles and ignores unknown ones", () => {
+    expect(resolveToolProfilePolicy("coding")?.allow).toEqual(
+      expect.arrayContaining(["read", "automations", "gateway"]),
+    );
     expect(resolveToolProfilePolicy("nope")).toBeUndefined();
   });
 

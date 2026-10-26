@@ -110,6 +110,7 @@ it.each(["owner", "involving-me", "refresh"])(
           ...sidebarBootSnapshot(captureBootRoster(context.sessions.state)),
           ownerId: viewer.id,
           mode: "chip",
+          sessions: rows,
           sections: [
             {
               id: "ungrouped",

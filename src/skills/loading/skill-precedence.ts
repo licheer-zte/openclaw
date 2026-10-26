@@ -107,14 +107,13 @@ export function reportSkillPrecedenceCollisions(
 export function mergeSkillRecords<T extends { skill: Skill }>(
   records: T[],
   sourceKey: string,
-  collisions?: SkillCollision[] | false,
+  collisions?: SkillCollision[],
 ): T[] {
   const discoveredCollisions = collisions ?? [];
   const merged = new Map<string, T>();
   for (const record of records) {
-    const replaced = discoveredCollisions && merged.get(record.skill.name);
+    const replaced = merged.get(record.skill.name);
     if (
-      discoveredCollisions &&
       replaced &&
       canonicalizePath(record.skill.filePath) !== canonicalizePath(replaced.skill.filePath)
     ) {
@@ -122,7 +121,7 @@ export function mergeSkillRecords<T extends { skill: Skill }>(
     }
     merged.set(record.skill.name, record);
   }
-  if (collisions === undefined && discoveredCollisions) {
+  if (!collisions) {
     reportSkillPrecedenceCollisions(discoveredCollisions, sourceKey);
   }
   // oxlint-disable-next-line unicorn/no-array-sort -- The Map spread is a private array.

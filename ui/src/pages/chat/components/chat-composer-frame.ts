@@ -266,14 +266,6 @@ export function createChatComposerContext(
     }
   };
 
-  const settleSubmittedCommandMenus = () => {
-    if (state.composerDraftScope !== draftScope || (props.getDraft?.() ?? props.draft) !== "") {
-      return;
-    }
-    state.slashMenu.reset();
-    state.skillMenu.reset();
-  };
-
   const submitDraft = (
     draft: string,
     submissionAction?: Event,
@@ -293,13 +285,8 @@ export function createChatComposerContext(
       void goalComposer.submit(submissionAction);
       return;
     }
-    const completion = props.onSend(followUpModeOverride, submissionAction);
+    void props.onSend(followUpModeOverride, submissionAction);
     syncComposerDraftAfterSend(state.composerTextarea);
-    if (completion) {
-      void completion.then(settleSubmittedCommandMenus, () => undefined);
-    } else {
-      settleSubmittedCommandMenus();
-    }
   };
 
   const acceptPrediction = () => {

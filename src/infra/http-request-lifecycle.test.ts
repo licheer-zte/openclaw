@@ -3,7 +3,6 @@ import { createServer, request, type IncomingMessage, type ServerResponse } from
 import { connect, type Socket } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { nextEventLoopTurn } from "../../test/helpers/promise.js";
 import { runWithGatewayHttpWorkAdmission } from "../gateway/server/http-work-admission.js";
 import {
   beginWebhookRequestPipelineOrReject,
@@ -422,7 +421,9 @@ describe("bounded HTTP rejection transport", () => {
               postHeaders(`Content-Length: ${maxBytes + 1}`),
           );
           await started.promise;
-          await nextEventLoopTurn();
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
           expect(dispatched).toEqual(["/first"]);
           if (mode === "async handler") {
             release.resolve();

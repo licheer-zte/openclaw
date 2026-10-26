@@ -19,12 +19,7 @@ type RouteCall = (
 
 export async function withChromiumPage(
   pages: Record<string, string>,
-  run: (fixture: {
-    page: Page;
-    call: RouteCall;
-    targetId: string;
-    cdpUrl: string;
-  }) => Promise<void>,
+  run: (fixture: { page: Page; call: RouteCall; targetId: string }) => Promise<void>,
   register: (
     app: ReturnType<typeof createRouteFixture>["app"],
     ctx: ReturnType<typeof createBrowserRouteContext>,
@@ -56,7 +51,6 @@ export async function withChromiumPage(
     register(routes.app, createBrowserRouteContext({ getState: () => state }));
     await run({
       page,
-      cdpUrl,
       targetId,
       call: async (method, route, values, params, signal) => {
         const input = { targetId, ...values };

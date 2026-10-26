@@ -8,6 +8,7 @@ import { acquireGatewayTestWebSocket } from "../../test/helpers/gateway-websocke
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
+  type DeviceIdentity,
 } from "../infra/device-identity.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { rotateDeviceToken } from "../infra/device-pairing-tokens.js";
@@ -19,7 +20,11 @@ export function resolveDeviceIdentityPath(name: string): string {
   return path.join(root, "test-device-identities", name, "client", "credentials.sqlite");
 }
 
-export function loadDeviceIdentity(name: string) {
+export function loadDeviceIdentity(name: string): {
+  identityPath: string;
+  identity: DeviceIdentity;
+  publicKey: string;
+} {
   const identityPath = resolveDeviceIdentityPath(name);
   const identity = loadOrCreateDeviceIdentity({ path: identityPath });
   return {
@@ -38,12 +43,16 @@ export async function pairDeviceIdentity(params: {
   platform?: string;
   deviceFamily?: string;
 }): Promise<ReturnType<typeof loadDeviceIdentity>> {
-  const { name, ...pairing } = params;
-  const loaded = loadDeviceIdentity(name);
+  const loaded = loadDeviceIdentity(params.name);
   const request = await requestDevicePairing({
     deviceId: loaded.identity.deviceId,
     publicKey: loaded.publicKey,
-    ...pairing,
+    role: params.role,
+    scopes: params.scopes,
+    clientId: params.clientId,
+    clientMode: params.clientMode,
+    platform: params.platform,
+    deviceFamily: params.deviceFamily,
   });
   await approveDevicePairing(request.request.requestId, {
     callerScopes: params.scopes,
@@ -57,7 +66,11 @@ export async function issueOperatorToken(params: {
   tokenScopes?: string[];
   clientId?: string;
   clientMode?: string;
-}) {
+}): Promise<{
+  deviceId: string;
+  identityPath: string;
+  token: string;
+}> {
   const paired = await pairDeviceIdentity({
     name: params.name,
     role: "operator",

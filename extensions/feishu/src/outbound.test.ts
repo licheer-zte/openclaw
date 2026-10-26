@@ -213,10 +213,18 @@ function tableText(count: number) {
   );
 }
 
-const textCall = (index = 0) => sendMessageFeishuMock.mock.calls[index]?.[0];
-const mediaCall = (index = 0) => sendMediaFeishuMock.mock.calls[index]?.[0];
-const cardCall = () => sendCardFeishuMock.mock.calls[0]?.[0]?.card;
-const commentCall = (index = 0) => deliverCommentThreadTextMock.mock.calls[index]?.[1];
+function textCall(index = 0) {
+  return sendMessageFeishuMock.mock.calls[index]?.[0];
+}
+function mediaCall(index = 0) {
+  return sendMediaFeishuMock.mock.calls[index]?.[0];
+}
+function cardCall() {
+  return sendCardFeishuMock.mock.calls[0]?.[0]?.card;
+}
+function commentCall(index = 0) {
+  return deliverCommentThreadTextMock.mock.calls[index]?.[1];
+}
 function deliveredText() {
   return sendMessageFeishuMock.mock.calls.map(([params]) => params.text).join("\n");
 }
@@ -668,7 +676,7 @@ describe("Feishu native presentation delivery", () => {
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("keeps fallback controls safe and thread targets sticky before and after core rendering", async () => {
+  it("sends oversized presentation media once before complete safe fallback text", async () => {
     const presentation = oversizedPresentation();
     presentation.blocks.push({
       type: "buttons",

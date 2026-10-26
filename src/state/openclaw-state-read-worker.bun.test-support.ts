@@ -57,6 +57,8 @@ function assertLifecycle(expected: [number, number], message: string) {
     rows.find(({ script }) => script === SUPERVISOR),
     { script: SUPERVISOR, started: 1, retired: 0 },
   );
+  const live = rows.reduce((sum, row) => sum + row.started - row.retired, 0);
+  assert.equal(snapshot.workerCount, live);
   assert.deepEqual([worker.started, worker.retired], expected, message);
 }
 
@@ -83,8 +85,9 @@ async function read(location = filename, checkFreshAdmission = false) {
 }
 
 try {
-  await read();
-  await read();
+  for (let index = 0; index < 5; index++) {
+    await read();
+  }
   assertLifecycle([1, 0], "successful reads reuse");
   await stateCache.closeOpenClawStateDatabaseByPathAsync(filename);
   assertLifecycle([1, capable ? 0 : 1], "host close joins native cleanup");

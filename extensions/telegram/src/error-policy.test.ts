@@ -18,7 +18,8 @@ function suppress(errorMessage: string) {
 
 describe("telegram error policy", () => {
   beforeEach(() => {
-    vi.useFakeTimers({ now: new Date("2026-01-01T00:00:00Z") });
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
     accountId = `work-${scopeSequence++}`;
   });
 
@@ -36,10 +37,17 @@ describe("telegram error policy", () => {
     ).toEqual({ policy: "silent", cooldownMs: 14_400_000 });
   });
 
-  it("isolates error cooldowns by message and prunes them after expiry", () => {
-    expect([suppress("A"), suppress("B"), suppress("A")]).toEqual([false, false, true]);
+  it("keeps cooldowns per error message within the same scope", () => {
+    expect(suppress("A")).toBe(false);
+    expect(suppress("B")).toBe(false);
+    expect(suppress("A")).toBe(true);
+  });
+
+  it("prunes expired cooldowns within a single scope", () => {
+    expect(suppress("A")).toBe(false);
     vi.advanceTimersByTime(1001);
-    expect([suppress("B"), suppress("A")]).toEqual([false, false]);
+    expect(suppress("B")).toBe(false);
+    expect(suppress("A")).toBe(false);
   });
 
   it("does not leak suppression across accounts or threads", () => {

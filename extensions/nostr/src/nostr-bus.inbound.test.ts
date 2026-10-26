@@ -12,21 +12,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import { startNostrBus } from "./nostr-bus.js";
 import { setNostrRuntime } from "./runtime.js";
-import { TEST_HEX_PRIVATE_KEY } from "./test-fixtures.js";
+import { buildResolvedNostrAccount, TEST_HEX_PRIVATE_KEY } from "./test-fixtures.js";
 
 const BOT_PUBKEY = "b".repeat(64);
-const onDelivered = vi.fn(async () => {});
+const defaultOnMessage = vi.fn(async () => {});
 const createGuardPolicy = guardPolicy.createDirectDmPreCryptoGuardPolicy;
 const onRejected = vi.fn<NonNullable<Parameters<typeof startNostrBus>[0]["onRejected"]>>();
-const BACKFILL_RELAYS = ["wss://one.example", "wss://two.example"];
-const ACCOUNT = { accountId: "default", relays: ["wss://relay.example.com"] };
 
 function rateLimit(maxGlobalPerWindow: number, maxPerSenderPerWindow: number) {
   return { windowMs: 60_000, maxGlobalPerWindow, maxPerSenderPerWindow, maxTrackedSenderKeys: 32 };
 }
 
-const countRejection = (reason: Parameters<typeof onRejected>[0]) =>
-  onRejected.mock.calls.filter(([value]) => value === reason).length;
+function countRejection(reason: Parameters<typeof onRejected>[0]): number {
+  return onRejected.mock.calls.filter(([value]) => value === reason).length;
+}
 
 type RelayHandlers = {
   onevent: (event: Record<string, unknown>) => void | Promise<void>;
@@ -34,8 +33,10 @@ type RelayHandlers = {
   onclose?: (reasons: Array<{ url: string; reason: string }>) => void;
 };
 
-const mocks = vi.hoisted(() => ({
+const mockState = vi.hoisted(() => ({
   handlers: [] as RelayHandlers[],
+  subscribeMany: vi.fn(),
+  publish: vi.fn(async (_event: unknown) => "ok"),
   close: vi.fn(),
   subscriptionClose: vi.fn(),
   finalizeEvent: vi.fn((event: unknown) => event),
@@ -49,36 +50,48 @@ const mocks = vi.hoisted(() => ({
   verifyEvent: vi.fn(() => true),
   decrypt: vi.fn(() => "plaintext"),
 }));
-vi.mock("nostr-tools", () => ({
-  SimplePool: class {
+
+vi.mock("nostr-tools", () => {
+  class MockSimplePool {
     maxWaitForConnection = 3_000;
 
-    subscribeMany(relays: string[], _filters: unknown, handlers: RelayHandlers) {
-      mocks.handlers.push(handlers);
+    subscribeMany(relays: string[], filters: unknown, handlers: RelayHandlers) {
+      mockState.subscribeMany(relays, filters, handlers);
+      mockState.handlers.push(handlers);
       return {
         close: async (reason: string) => {
-          await mocks.subscriptionClose(reason);
+          await mockState.subscriptionClose(reason);
           handlers.onclose?.(relays.map((url) => ({ url, reason })));
         },
       };
     }
 
-    ensureRelay = async () => ({ publish: async (_event: unknown) => "ok" });
-    close = mocks.close;
-  },
-  finalizeEvent: mocks.finalizeEvent,
-  getPublicKey: vi.fn(() => BOT_PUBKEY),
-  verifyEvent: mocks.verifyEvent,
-}));
+    async ensureRelay() {
+      return { publish: mockState.publish };
+    }
+
+    close(relays: string[]) {
+      mockState.close(relays);
+    }
+  }
+
+  return {
+    SimplePool: MockSimplePool,
+    finalizeEvent: mockState.finalizeEvent,
+    getPublicKey: vi.fn(() => BOT_PUBKEY),
+    verifyEvent: mockState.verifyEvent,
+  };
+});
+
 vi.mock("nostr-tools/nip04", () => ({
-  decrypt: mocks.decrypt,
+  decrypt: mockState.decrypt,
   encrypt: vi.fn(() => "ciphertext"),
 }));
-// mock-isolation: Ingress fixtures control cursor reads and write failures without persisted bus state.
+
 vi.mock("./nostr-state-store.js", () => ({
-  readNostrBusState: mocks.readNostrBusState,
-  writeNostrBusState: mocks.writeNostrBusState,
-  computeSinceTimestamp: mocks.computeSinceTimestamp,
+  readNostrBusState: mockState.readNostrBusState,
+  writeNostrBusState: mockState.writeNostrBusState,
+  computeSinceTimestamp: mockState.computeSinceTimestamp,
   readNostrProfileState: vi.fn(async () => null),
   writeNostrProfileState: vi.fn(async () => {}),
 }));
@@ -103,7 +116,13 @@ async function emitEvent(overrides: Record<string, unknown>) {
   }
 }
 
-const dispatchEvent = (event: Record<string, unknown>) => void mocks.handlers[0]!.onevent(event);
+function dispatchEvent(event: Record<string, unknown>) {
+  const handlers = mockState.handlers[0];
+  if (!handlers) {
+    throw new Error("missing subscription handlers");
+  }
+  void handlers.onevent(event);
+}
 
 let stateDir = "";
 let ingressQueue: ReturnType<typeof createChannelIngressQueueForTests<Record<string, unknown>>>;
@@ -115,11 +134,14 @@ function useQueue(openChannelIngressQueue = () => ingressQueue) {
 }
 
 function expectDispatchCounts(verify: number, decrypt: number, delivered: number) {
-  const calls = [mocks.verifyEvent, mocks.decrypt, onDelivered].map((fn) => fn.mock.calls.length);
-  expect(calls).toEqual([verify, decrypt, delivered]);
+  expect([
+    mockState.verifyEvent.mock.calls.length,
+    mockState.decrypt.mock.calls.length,
+    defaultOnMessage.mock.calls.length,
+  ]).toEqual([verify, decrypt, delivered]);
 }
 
-async function startBus(
+async function startTestNostrBus(
   options: Partial<Parameters<typeof startNostrBus>[0]> = {},
   overrides?: Parameters<typeof createGuardPolicy>[0],
 ) {
@@ -128,7 +150,7 @@ async function startBus(
   try {
     activeBus = await startNostrBus({
       privateKey: TEST_HEX_PRIVATE_KEY,
-      onMessage: onDelivered,
+      onMessage: defaultOnMessage,
       onRejected,
       ...options,
       trackIngressTask: (task) => ingressTasks.push(task),
@@ -149,7 +171,7 @@ describe("startNostrBus inbound guards", () => {
       stateDir,
     });
     useQueue();
-    mocks.handlers = [];
+    mockState.handlers = [];
     ingressTasks = [];
     vi.resetAllMocks();
   });
@@ -159,51 +181,100 @@ describe("startNostrBus inbound guards", () => {
       await activeBus?.close();
     } finally {
       activeBus = undefined;
-      mocks.handlers = [];
+      mockState.handlers = [];
       vi.useRealTimers();
       closeOpenClawStateDatabaseForTest();
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
 
-  it.for(["confirmed", "timeout", "remote close"])(
-    "settles relay backfill after %s",
-    async (cause, { signal }) => {
+  it("relay backfill confirms only after every relay reports real EOSE", async ({ signal }) => {
+    const relays = ["wss://one.example", "wss://two.example"];
+    const complete = createDeferred<void>();
+    const onEose = vi.fn(() => complete.resolve());
+    await startTestNostrBus({ relays, onEose });
+    expect(mockState.subscribeMany.mock.calls.map(([urls]) => urls)).toEqual([
+      [relays[0]],
+      [relays[1]],
+    ]);
+    mockState.handlers[0]?.oneose?.();
+    mockState.handlers[1]?.oneose?.();
+    await withinTest(complete.promise, signal);
+    expect(onEose).toHaveBeenCalledOnce();
+    expect(onEose).toHaveBeenCalledWith("wss://one.example, wss://two.example");
+  });
+
+  it.each(["timeout", "same-turn close"])(
+    "relay backfill rejects synthetic EOSE after %s",
+    async (cause) => {
       if (cause === "timeout") {
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       }
-      const complete = createDeferred<void>();
-      const onEose = vi.fn(() => complete.resolve()),
-        onDisconnect = vi.fn(),
-        onError = vi.fn();
-      const bus = await startBus({
-        relays: BACKFILL_RELAYS,
+      const onEose = vi.fn();
+      const bus = await startTestNostrBus({
+        relays: ["wss://one.example", "wss://two.example"],
         onEose,
-        onDisconnect,
-        onError,
       });
-      expect(mocks.handlers).toHaveLength(2);
+      expect(mockState.handlers).toHaveLength(2);
       if (cause === "timeout") {
         await vi.advanceTimersByTimeAsync(10_000);
       }
-      mocks.handlers[0]?.oneose?.();
-      if (cause === "remote close") {
-        mocks.handlers[0]?.onclose?.([{ url: BACKFILL_RELAYS[0]!, reason: "relay unavailable" }]);
-        expect(onDisconnect).toHaveBeenCalledExactlyOnceWith(BACKFILL_RELAYS[0]);
-        expect(onError).toHaveBeenCalledOnce();
+      mockState.handlers[0]?.oneose?.();
+      if (cause === "same-turn close") {
+        mockState.handlers[0]?.onclose?.([{ url: "wss://one.example", reason: "relay closed" }]);
       }
-      mocks.handlers[1]?.oneose?.();
-      if (cause === "confirmed") {
-        await withinTest(complete.promise, signal);
-        expect(onEose).toHaveBeenCalledExactlyOnceWith(BACKFILL_RELAYS.join(", "));
-      }
+      mockState.handlers[1]?.oneose?.();
       await Promise.resolve();
       await bus.close();
-      if (cause !== "confirmed") {
-        expect(onEose).not.toHaveBeenCalled();
+      expect(onEose).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([true, false])(
+    "relay backfill reports closure only for remote initiators (local=%s)",
+    async (local) => {
+      const onDisconnect = vi.fn();
+      const onError = vi.fn();
+      const bus = await startTestNostrBus({
+        relays: ["wss://one.example", "wss://two.example"],
+        onDisconnect,
+        onError,
+      });
+      expect(mockState.handlers).toHaveLength(2);
+      if (local) {
+        await bus.close();
+      } else {
+        mockState.handlers[0]?.onclose?.([
+          { url: "wss://one.example", reason: "relay unavailable" },
+        ]);
+      }
+      if (local) {
+        expect(onDisconnect).not.toHaveBeenCalled();
+        expect(onError).not.toHaveBeenCalled();
+      } else {
+        expect(onDisconnect).toHaveBeenCalledOnce();
+        expect(onDisconnect).toHaveBeenCalledWith("wss://one.example");
+        expect(onError).toHaveBeenCalledOnce();
+        expect(onError).toHaveBeenCalledWith(
+          expect.objectContaining({ message: "Subscription closed: relay unavailable" }),
+          "subscription",
+        );
       }
     },
   );
+
+  it("classifies a durable queue open failure as unavailable ingress", async () => {
+    const queueError = new Error("sqlite unavailable");
+    useQueue(() => {
+      throw queueError;
+    });
+    await expect(startTestNostrBus(buildResolvedNostrAccount())).rejects.toMatchObject({
+      name: "ChannelIngressUnavailableError",
+      code: "CHANNEL_INGRESS_UNAVAILABLE",
+      cause: queueError,
+    });
+    expect(mockState.subscribeMany).not.toHaveBeenCalled();
+  });
 
   it("delivers recovered old claims while fencing old live relay events", async () => {
     const recoveredId = "recovered-old";
@@ -215,47 +286,57 @@ describe("startNostrBus inbound guards", () => {
       { laneKey: `direct:${recoveredPubkey}` },
     );
     const enqueue = vi.spyOn(ingressQueue, "enqueue");
-    mocks.computeSinceTimestamp.mockReturnValue(2_000);
-    await startBus(ACCOUNT);
-    await vi.waitFor(() => expect(onDelivered).toHaveBeenCalledTimes(1));
+    mockState.computeSinceTimestamp.mockReturnValue(2_000);
+    await startTestNostrBus(buildResolvedNostrAccount());
+    await vi.waitFor(() => expect(defaultOnMessage).toHaveBeenCalledTimes(1));
     await emitEvent({ id: "live-old", created_at: 1_001 });
-    expect(onDelivered).toHaveBeenCalledTimes(1);
+    expect(defaultOnMessage).toHaveBeenCalledTimes(1);
     expect(enqueue).not.toHaveBeenCalled();
     expect(countRejection("stale")).toBe(1);
   });
 
   it("closes the relay pool after the active subscription closes", async () => {
-    const onDisconnect = vi.fn(),
-      onError = vi.fn();
-    const relays = ["wss://one.example", "wss://two.example"];
     const subscriptionClosed = createDeferred<void>();
-    mocks.subscriptionClose.mockImplementationOnce(() => subscriptionClosed.promise);
-    const bus = await startBus({ relays, onDisconnect, onError });
+    mockState.subscriptionClose.mockImplementationOnce(async () => {
+      await subscriptionClosed.promise;
+    });
+    const bus = await startTestNostrBus({ relays: ["wss://relay.example"] });
     const closing = bus.close();
-    expect(mocks.subscriptionClose).toHaveBeenCalledWith("closed by caller");
-    expect(mocks.close).not.toHaveBeenCalled();
+    expect(mockState.subscriptionClose).toHaveBeenCalledWith("closed by caller");
+    expect(mockState.close).not.toHaveBeenCalled();
 
     subscriptionClosed.resolve();
     await closing;
-    expect(mocks.close).toHaveBeenCalledWith(relays);
-    expect(onDisconnect).not.toHaveBeenCalled();
-    expect(onError).not.toHaveBeenCalled();
+    expect(mockState.close).toHaveBeenCalledWith(["wss://relay.example"]);
   });
 
   it("terminates the relay subscription when durable admission fails", async () => {
     const appendError = new Error("sqlite unavailable");
     useQueue(() => ({ ...ingressQueue, enqueue: vi.fn().mockRejectedValue(appendError) }));
     const onError = vi.fn();
-    await startBus({
-      ...ACCOUNT,
+    await startTestNostrBus({
+      ...buildResolvedNostrAccount(),
       relays: ["wss://relay.example"],
       onError,
     });
     await emitEvent({ id: "admission-failure" });
-    expect(mocks.subscriptionClose).toHaveBeenCalledWith("durable admission failed");
-    expect(mocks.close).toHaveBeenCalledWith(["wss://relay.example"]);
-    expect(onError).toHaveBeenCalled();
-    expect(onDelivered).not.toHaveBeenCalled();
+    expect(mockState.subscriptionClose).toHaveBeenCalledWith("durable admission failed");
+    expect(mockState.close).toHaveBeenCalledWith(["wss://relay.example"]);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("durable admission failed") }),
+      "durable admission for event admission-failure",
+    );
+    expect(defaultOnMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps relays open after rejecting one oversized raw event", async () => {
+    await startTestNostrBus(buildResolvedNostrAccount());
+    await emitEvent({ id: "raw-oversized", content: "x".repeat(40_000) });
+    expect(mockState.subscriptionClose).not.toHaveBeenCalled();
+    expect(defaultOnMessage).not.toHaveBeenCalled();
+    await emitEvent({ id: "after-raw-oversized", content: "ok" });
+    expect(mockState.subscriptionClose).not.toHaveBeenCalled();
+    expect(defaultOnMessage).toHaveBeenCalledTimes(1);
   });
 
   it("awaits ingress drain shutdown when startup state persistence fails", async () => {
@@ -263,24 +344,33 @@ describe("startNostrBus inbound guards", () => {
     const claimNext = vi.spyOn(ingressQueue, "claimNext");
     const pruneStarted = createDeferred<void>();
     const pruneGate = createDeferred<void>();
+    let pruneActive = false;
     const prune = vi.fn(async (...args: Parameters<typeof ingressQueue.prune>) => {
+      pruneActive = true;
       pruneStarted.resolve();
-      await pruneGate.promise;
-      return ingressQueue.prune(...args);
+      try {
+        await pruneGate.promise;
+        return await ingressQueue.prune(...args);
+      } finally {
+        pruneActive = false;
+      }
     });
     useQueue(() => ({ ...ingressQueue, prune }));
-    mocks.writeNostrBusState.mockRejectedValueOnce(startupError);
-    const startup = startBus(ACCOUNT);
+    mockState.writeNostrBusState.mockRejectedValueOnce(startupError);
+    const startup = startTestNostrBus(buildResolvedNostrAccount());
     const settled = vi.fn();
     void startup.then(settled, settled);
     await pruneStarted.promise;
     await Promise.resolve();
     try {
+      expect(pruneActive).toBe(true);
       expect(settled).not.toHaveBeenCalled();
     } finally {
       pruneGate.resolve();
     }
     await expect(startup).rejects.toThrow("state unavailable");
+    expect(pruneActive).toBe(false);
+    expect(prune).toHaveBeenCalledOnce();
     expect(claimNext).not.toHaveBeenCalled();
   });
 
@@ -291,44 +381,78 @@ describe("startNostrBus inbound guards", () => {
       await reply("pairing reply");
       return "pairing" as const;
     });
-    await startBus({
+    await startTestNostrBus({
       relays: ["wss://relay.example"],
       authorizeSender,
     });
     await emitEvent({ id: inboundEventId, pubkey: senderPubkey });
-    expect(mocks.finalizeEvent.mock.calls[0]?.[0]).toMatchObject({
-      tags: [
-        ["p", senderPubkey],
-        ["e", inboundEventId],
-      ],
-    });
-  });
-
-  it("rejects self messages before crypto", async () => {
-    await startBus();
-    await emitEvent({ pubkey: BOT_PUBKEY });
-    expect(countRejection("self_message")).toBe(1);
-    expectDispatchCounts(0, 0, 0);
+    expect(mockState.finalizeEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tags: [
+          ["p", senderPubkey],
+          ["e", inboundEventId],
+        ],
+      }),
+      expect.any(Uint8Array),
+    );
   });
 
   it.each([
-    ["invalid signatures", false, 2, 0],
-    ["per-sender flood", true, 21, 20],
-  ] as const)("rate limits %s", async (_name, valid, count, delivered) => {
-    mocks.verifyEvent.mockReturnValue(valid);
+    ["invalid-signature", false, "a".repeat(64), "allow", 1, 0],
+    ["self-message", true, BOT_PUBKEY, "allow", 0, 0],
+    ["blocked", true, `blocked${"a".repeat(57)}`, "block", 1, 1],
+  ] as const)(
+    "dedupes replayed %s events before guards rerun",
+    async (reason, valid, pubkey, decision, verified, authorized) => {
+      mockState.verifyEvent.mockReturnValue(valid);
+      const authorizeSender = vi.fn(async () => decision);
+      await startTestNostrBus({ authorizeSender });
+      const event = createEvent({ id: `${reason}-replay`, pubkey });
+      await emitEvent(event);
+      await emitEvent(event);
+      expectDispatchCounts(verified, 0, 0);
+      expect(authorizeSender).toHaveBeenCalledTimes(authorized);
+      if (!valid) {
+        expect(countRejection("invalid_signature")).toBe(1);
+      }
+    },
+  );
+
+  it("rate limits repeated invalid signatures before authorization work fans out", async () => {
+    mockState.verifyEvent.mockReturnValue(false);
     const authorizeSender = vi.fn(async () => "allow" as const);
-    const policy = valid ? undefined : { rateLimit: rateLimit(1, 10) };
-    await startBus({ authorizeSender }, policy);
-    for (let i = 0; i < count; i++) {
+    await startTestNostrBus({ authorizeSender }, { rateLimit: rateLimit(1, 10) });
+    await emitEvent({ id: "invalid-1" });
+    await emitEvent({ id: "invalid-2" });
+    expect(mockState.verifyEvent).toHaveBeenCalledTimes(1);
+    expect(authorizeSender).not.toHaveBeenCalled();
+    expect(countRejection("invalid_signature")).toBe(1);
+    expect(countRejection("rate_limited")).toBe(1);
+  });
+
+  it("rate limits repeated events before decrypt", async () => {
+    await startTestNostrBus();
+    for (let i = 0; i < 21; i += 1) {
       await emitEvent({ id: `event-${i}` });
     }
-    if (valid) {
-      await emitEvent({ id: "event-0" });
-    }
-    expectDispatchCounts(valid ? count : 1, delivered, delivered);
-    expect(authorizeSender).toHaveBeenCalledTimes(delivered);
-    expect(countRejection("invalid_signature")).toBe(valid ? 0 : 1);
     expect(countRejection("rate_limited")).toBe(1);
+    expect(mockState.decrypt).toHaveBeenCalledTimes(20);
+    expect(defaultOnMessage).toHaveBeenCalledTimes(20);
+  });
+
+  it("retries a replayed event after the message handler fails", async () => {
+    const onMessage = vi
+      .fn<(sender: string, plaintext: string) => Promise<void>>()
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce(undefined);
+    await startTestNostrBus({ onMessage });
+    const event = createEvent({ id: "retry-after-handler-failure" });
+    await emitEvent(event);
+    await emitEvent(event);
+    await vi.waitFor(() => expect(onMessage).toHaveBeenCalledTimes(2), { timeout: 3_000 });
+    expect(mockState.verifyEvent).toHaveBeenCalledTimes(2);
+    expect(mockState.decrypt).toHaveBeenCalledTimes(2);
+    expect(onMessage).toHaveBeenCalledTimes(2);
   });
 
   it("does not rate limit an allowed sender while another authorization is still pending", async ({
@@ -345,7 +469,10 @@ describe("startNostrBus inbound guards", () => {
         return await blocked.promise;
       })
       .mockResolvedValueOnce("allow");
-    const bus = await startBus({ onMessage, authorizeSender }, { rateLimit: rateLimit(2, 1) });
+    const bus = await startTestNostrBus(
+      { onMessage, authorizeSender },
+      { rateLimit: rateLimit(2, 1) },
+    );
     try {
       dispatchEvent(createEvent({ id: "blocked-pending", pubkey: `blocked${"a".repeat(57)}` }));
       await withinTest(authorizing.promise, signal);
@@ -357,7 +484,7 @@ describe("startNostrBus inbound guards", () => {
       await Promise.all(ingressTasks.splice(0));
 
       expect(authorizeSender).toHaveBeenCalledTimes(2);
-      expect(mocks.decrypt).toHaveBeenCalledTimes(1);
+      expect(mockState.decrypt).toHaveBeenCalledTimes(1);
       expect(onMessage).toHaveBeenCalledTimes(1);
       expect(countRejection("rate_limited")).toBe(0);
     } finally {
@@ -367,18 +494,18 @@ describe("startNostrBus inbound guards", () => {
   });
 
   it("charges oversized ciphertext globally while retaining rejected events in replay overlap", async () => {
-    mocks.readNostrBusState.mockResolvedValueOnce({
+    mockState.readNostrBusState.mockResolvedValueOnce({
       version: 2,
       lastProcessedAt: 1_000,
       gatewayStartedAt: 900,
       recentEventIds: [],
     });
-    mocks.computeSinceTimestamp.mockReturnValue(1_000);
-    const bus = await startBus(
-      { ...ACCOUNT, relays: ["wss://relay.example"] },
+    mockState.computeSinceTimestamp.mockReturnValue(1_000);
+    const bus = await startTestNostrBus(
+      { ...buildResolvedNostrAccount(), relays: ["wss://relay.example"] },
       { maxCiphertextBytes: 4, rateLimit: rateLimit(1, 10) },
     );
-    expect(mocks.writeNostrBusState).toHaveBeenCalledWith(
+    expect(mockState.writeNostrBusState).toHaveBeenCalledWith(
       expect.objectContaining({ lastProcessedAt: 1_000, gatewayStartedAt: 900 }),
     );
     await emitEvent({
@@ -387,41 +514,37 @@ describe("startNostrBus inbound guards", () => {
       content: "ciphertext-too-large",
       created_at: 2_000,
     });
-    mocks.handlers[0]?.oneose?.();
+    mockState.handlers[0]?.oneose?.();
     await emitEvent({
       id: "oversized-rejected",
       pubkey: `sender2${"b".repeat(57)}`,
       content: "ciphertext-too-large",
       created_at: 900,
     });
-    await emitEvent({ id: "later-rejection", created_at: 950 });
     expect(countRejection("oversized_ciphertext")).toBe(1);
-    expect(countRejection("rate_limited")).toBe(2);
+    expect(countRejection("rate_limited")).toBe(1);
     expectDispatchCounts(0, 0, 0);
     await bus.close();
-    expect(mocks.writeNostrBusState.mock.calls.at(-1)?.[0]?.lastProcessedAt).toBe(1_020);
+    expect(mockState.writeNostrBusState.mock.calls.at(-1)?.[0]?.lastProcessedAt).toBe(1_020);
   });
 
-  it("rejects oversized raw events and ciphertext without closing relays or spending sender budget", async () => {
-    await startBus({}, { maxCiphertextBytes: 4, rateLimit: rateLimit(10, 1) });
-    await emitEvent({ id: "raw-oversized", content: "x".repeat(40_000) });
+  it("does not spend per-sender buckets on oversized ciphertext before verification", async () => {
+    await startTestNostrBus({}, { maxCiphertextBytes: 4, rateLimit: rateLimit(10, 1) });
     await emitEvent({ id: "oversized-sender-1", content: "ciphertext-too-large" });
     await emitEvent({ id: "oversized-sender-2", content: "ciphertext-too-large" });
-    expect(onDelivered).not.toHaveBeenCalled();
     await emitEvent({ id: "allowed-after-oversized", content: "ok" });
-    expect(mocks.subscriptionClose).not.toHaveBeenCalled();
     expect(countRejection("oversized_ciphertext")).toBe(2);
     expect(countRejection("rate_limited")).toBe(0);
     expectDispatchCounts(1, 1, 1);
   });
 
   it("rejects far-future events before crypto", async () => {
-    const bus = await startBus();
+    const bus = await startTestNostrBus();
     await emitEvent({ created_at: Math.floor(Date.now() / 1000) + 600 });
     expect(countRejection("future")).toBe(1);
     expectDispatchCounts(0, 0, 0);
     await bus.close();
-    const persisted = mocks.writeNostrBusState.mock.calls.at(-1)?.[0];
+    const persisted = mockState.writeNostrBusState.mock.calls.at(-1)?.[0];
     expect(persisted?.lastProcessedAt).toBeLessThanOrEqual(Math.floor(Date.now() / 1000));
   });
 });

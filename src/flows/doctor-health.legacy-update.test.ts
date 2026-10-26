@@ -107,8 +107,7 @@ function managedService(state: OpenClawTestState, events: string[] = []) {
     }),
     readLoadState: async () => ({ status: running ? "loaded" : "not-loaded" }),
     isLoaded: async () => running,
-    // Stopping the process leaves the native autostart policy unchanged.
-    isEnabled: async () => true,
+    isEnabled: async () => running,
     stop,
     restart,
   };

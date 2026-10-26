@@ -47,7 +47,14 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", state);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(state, "openclaw.json"));
 });
-afterEach(async () => fixtures.cleanup());
+afterEach(async () => {
+  try {
+    await fixtures.lifetime.cleanup();
+  } finally {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  }
+});
 
 it.skipIf(process.platform === "win32")(
   "accepts present and temporarily missing npm roots through a canonical directory alias",

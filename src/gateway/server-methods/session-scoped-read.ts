@@ -1,5 +1,4 @@
 import type { SessionEntryReadScope } from "../../config/sessions/session-accessor.types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import {
@@ -27,10 +26,6 @@ export async function retainSessionScopedRead(
     retain?: boolean;
     projection?: SessionEntryReadScope["projection"];
     entryMatches?: NonNullable<Parameters<typeof retainGatewaySessionEntryReadOnly>[2]>;
-    prepared?: {
-      cfg: OpenClawConfig;
-      pending: ReturnType<typeof retainGatewaySessionEntryReadOnly>;
-    };
   } = {},
 ) {
   const authority = readGatewayRequestMutationAuthority(options);
@@ -51,19 +46,16 @@ export async function retainSessionScopedRead(
   const assertRoutingCurrent = captureSessionMutationRouting(cfg, undefined, [
     { sessionKey, agentId },
   ]);
-  const borrowed = readOptions.prepared?.cfg === cfg ? readOptions.prepared.pending : undefined;
-  const read = await (borrowed ??
-    retainGatewaySessionEntryReadOnly(
-      sessionKey,
-      agentId,
-      readOptions.entryMatches ??
-        (readOptions.allowMetadataChanges
-          ? (previous, current) => !hasSessionReadAccessChanged(previous, current)
-          : undefined),
-      cfg,
-      { projection: readOptions.projection },
-    ));
-  const release = borrowed ? () => {} : read.release;
+  const read = await retainGatewaySessionEntryReadOnly(
+    sessionKey,
+    agentId,
+    readOptions.entryMatches ??
+      (readOptions.allowMetadataChanges
+        ? (previous, current) => !hasSessionReadAccessChanged(previous, current)
+        : undefined),
+    cfg,
+    { projection: readOptions.projection },
+  );
   const assertCurrent = () => {
     authority.assertCurrent();
     const currentCfg = getConfig();
@@ -90,9 +82,9 @@ export async function retainSessionScopedRead(
   };
   try {
     assertCurrent();
-    return { assertCurrent, release, prepared: read };
+    return { assertCurrent, release: read.release, prepared: read };
   } catch (error) {
-    release();
+    read.release();
     throw error;
   }
 }

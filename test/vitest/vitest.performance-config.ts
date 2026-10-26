@@ -1,6 +1,4 @@
 // Vitest performance config helper normalizes performance test environment settings.
-import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { Plugin } from "vitest/config";
 import type { CacheKeyIdGenerator } from "vitest/node";
@@ -8,30 +6,10 @@ type EnvMap = Record<string, string | undefined>;
 
 const optimizerCacheKey: CacheKeyIdGenerator = ({ environment }) => environment.config.cacheDir;
 
-export function createVitestProjectCachePlugin(declaringConfigFile?: string): Plugin {
+export function createVitestProjectCachePlugin(): Plugin {
   return {
     name: "openclaw:vitest-project-cache",
-    configureVitest({ vitest, project, defineCacheKeyGenerator }) {
-      if (!project.config.fsModuleCache) {
-        return;
-      }
-      // Inline extends:false projects have no config dependencies of their own.
-      // Imported factories also supply their canonical file under either loader.
-      const files = [
-        ...new Set(
-          [
-            vitest.vite.config.configFile,
-            ...vitest.vite.config.configFileDependencies,
-            declaringConfigFile,
-          ].filter((file): file is string => typeof file === "string"),
-        ),
-      ].toSorted();
-      const hash = createHash("sha256");
-      for (const file of files) {
-        hash.update(file).update("\0").update(readFileSync(file)).update("\0");
-      }
-      const fingerprint = hash.digest("hex");
-      defineCacheKeyGenerator(() => fingerprint);
+    configureVitest({ defineCacheKeyGenerator }) {
       // Cached imports embed project-specific optimized dependency paths.
       defineCacheKeyGenerator(optimizerCacheKey);
     },

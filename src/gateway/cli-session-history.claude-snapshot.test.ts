@@ -25,7 +25,6 @@ const messageShape = (externalId: string, content: unknown) => ({
 
 it("imports and seeds history only from the selected Claude config root", () =>
   withClaudeProjectsDir(async ({ homeDir, sessionId, filePath, readMessages }) => {
-    const selected = { role: "assistant", content: "Selected account answer" };
     const configDir = path.join(homeDir, "selected-claude");
     const projectDir = path.join(configDir, "projects", "configured-workspace");
     const selectedFile = path.join(projectDir, path.basename(filePath));
@@ -33,10 +32,10 @@ it("imports and seeds history only from the selected Claude config root", () =>
     await writeHistory(selectedFile, "selected-account", "Selected account answer", "assistant");
     await withEnvAsync({ CLAUDE_CONFIG_DIR: configDir }, async () => {
       expect(await readClaudeCliSessionMessagesAsync({ cliSessionId: sessionId })).toMatchObject([
-        selected,
+        { role: "assistant", content: "Selected account answer" },
       ]);
       expect(await readClaudeCliFallbackSeed({ cliSessionId: sessionId })).toMatchObject({
-        recentTurns: [selected],
+        recentTurns: [{ role: "assistant", content: "Selected account answer" }],
       });
       // Explicit offline homes remain isolated from the running Gateway's account.
       expect(await readMessages()).toHaveLength(3);
@@ -76,11 +75,15 @@ it("preserves project precedence when a later matching transcript is found first
     const projectsDir = path.dirname(path.dirname(filePath));
     const otherProjectDir = path.join(projectsDir, "other-workspace");
     await fs.mkdir(otherProjectDir);
-    await writeHistory(path.join(otherProjectDir, path.basename(filePath)), "other", "other");
+    await writeHistory(
+      path.join(otherProjectDir, path.basename(filePath)),
+      "other-project-user",
+      "other project",
+    );
     const [firstPath, secondPath] = (await fs.readdir(projectsDir)).map((project) =>
       path.join(projectsDir, project, path.basename(filePath)),
     );
-    await writeHistory(filePath, "original", "original");
+    await writeHistory(filePath, "original-project-user", "original project");
     const releaseFirst = createDeferred();
     const foundSecond = createDeferred();
     const access = fs.access;
@@ -98,7 +101,7 @@ it("preserves project precedence when a later matching transcript is found first
       await Promise.race([foundSecond.promise, pending]);
       releaseFirst.resolve();
       expect(await pending).toMatchObject([
-        { content: firstPath === filePath ? "original" : "other" },
+        { content: firstPath === filePath ? "original project" : "other project" },
       ]);
     } finally {
       releaseFirst.resolve();
@@ -117,6 +120,7 @@ it("bounds oversized Claude messages and continues after malformed records", () 
       [
         record("oversized-user-0", oversized),
         "!".repeat(2 * 1024 * 1024),
+        record("oversized-user-1", oversized),
         record("oversized-tool-result", [
           { type: "tool_result", tool_use_id: "tool-1", content: oversized },
         ]),
@@ -124,10 +128,12 @@ it("bounds oversized Claude messages and continues after malformed records", () 
       ].join("\n"),
       "utf8",
     );
+    const messages = await readMessages();
+
     const omitted = expect.stringContaining("exceeded 1 MiB");
     // A tool result must keep its shape, or the placeholder renders as a user turn.
-    expect(await readMessages()).toMatchObject([
-      messageShape("oversized-user-0", omitted),
+    expect(messages).toMatchObject([
+      ...[0, 1].map((index) => messageShape(`oversized-user-${index}`, omitted)),
       messageShape("oversized-tool-result", [
         { type: "tool_result", tool_use_id: "tool-1", content: omitted },
       ]),

@@ -33,19 +33,23 @@ describe("worker inventory read-admission recovery", () => {
     );
     const mutation = service.destroy(environment.environmentId);
     await entered.promise;
-    const reconciled = vi.fn();
+    let reconciled = false;
     const reconciliation = service
       .reconcileEnvironment(environment.environmentId)
       .catch(() => undefined)
-      .then(reconciled);
+      .then(() => {
+        reconciled = true;
+      });
     service.beginClose();
-    const stopped = vi.fn();
-    const stopping = service.stop().then(stopped);
+    let stopped = false;
+    const stopping = service.stop().then(() => {
+      stopped = true;
+    });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       await vi.advanceTimersByTimeAsync(1_000);
-      expect(reconciled).toHaveBeenCalledOnce();
-      expect(stopped).not.toHaveBeenCalled();
+      expect(reconciled).toBe(true);
+      expect(stopped).toBe(false);
       const inventoryRead = vi.spyOn(support.testState.store, "get").mockImplementation(() => {
         throw new WorkerEnvironmentInventoryClosedError();
       });
@@ -102,7 +106,9 @@ describe("worker inventory read-admission recovery", () => {
 
     support.testState.stateDb = openOpenClawStateDatabase({ path: stateDb.path });
     sharedHost = true;
+    inspect.mockClear();
     await service.reconcileEnvironment(record.environmentId);
+    expect(inspect).toHaveBeenCalledOnce();
     expect(store.get(record.environmentId)?.sharedHost).toBe(true);
     expect(store.inventoryVersion()).toBeGreaterThan(originalVersion);
     expect(originalAdmission.assertCurrent).toThrow(/read admission changed/);

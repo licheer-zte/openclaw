@@ -2,13 +2,16 @@ import { afterEach, beforeEach, vi } from "vitest";
 import type { UsersPrefsSetParams } from "../../../packages/gateway-protocol/src/schema/users.ts";
 import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { RuntimeConfigExternalMutationOptions } from "../lib/config/config-gateway-operations.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { applyServerUiPrefs, refreshProfileAppearancePrefs } from "./server-prefs-reconcile.ts";
 import { pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
 import { patchSettings } from "./settings.ts";
 
-type Request = (method: string, params?: unknown) => Promise<unknown>;
-export type RequestMock = ReturnType<typeof vi.fn<Request>>;
+export type RequestMock = ReturnType<
+  typeof vi.fn<(method: string, params?: unknown) => Promise<unknown>>
+>;
+
 export function installServerPrefsStorage(scope: string, restoreMocks = false) {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
@@ -37,10 +40,13 @@ export function createServerPrefsWriter(
   canPatch = true,
 ): Parameters<typeof pushServerUiPrefs>[0] {
   const client = { request, gatewayUrl, connected } as unknown as GatewayBrowserClient;
-  const writer: Parameters<typeof pushServerUiPrefs>[0] = {
+  const writer = {
     canPatch,
     state: { client, connected },
-    runExternalMutation: async (task, options) => {
+    runExternalMutation: async <T>(
+      task: (client: GatewayBrowserClient) => Promise<T>,
+      options?: RuntimeConfigExternalMutationOptions<T>,
+    ) => {
       if (!writer.state.connected) {
         return {
           ok: false as const,
@@ -78,32 +84,35 @@ export function createServerPrefsWriter(
   };
   return writer;
 }
+
 export function createProfilePrefsServer(
   initial: Record<string, Record<string, unknown>> = {},
   scope = "ws://navigation",
-  config: unknown = configWithPrefs({
-    sidebarEntries: ["route:usage", "plugin:workboard/workboard"],
-  }),
+  config: unknown = {
+    ui: { prefs: { sidebarEntries: ["route:usage", "plugin:workboard/workboard"] } },
+  },
 ) {
   const profiles = structuredClone(initial);
   const connect = (profileId: string) => {
-    const request = vi.fn<Request>(async (method, params) => {
-      const entries = (profiles[profileId] ??= {});
-      if (method === "users.prefs.get") {
-        return { status: "ok", entries: structuredClone(entries) };
-      }
-      if (method !== "users.prefs.set") {
-        throw new Error("unexpected global mutation: " + method);
-      }
-      const update = params as UsersPrefsSetParams;
-      for (const [key, expected] of Object.entries(update.expectedEntries ?? {})) {
-        if (JSON.stringify(entries[key] ?? null) !== JSON.stringify(expected)) {
-          return { status: "conflict" };
+    const request = vi.fn<(method: string, params?: unknown) => Promise<unknown>>(
+      async (method, params) => {
+        const entries = (profiles[profileId] ??= {});
+        if (method === "users.prefs.get") {
+          return { status: "ok", entries: structuredClone(entries) };
         }
-      }
-      Object.assign(entries, structuredClone(update.entries));
-      return { status: "ok" };
-    });
+        if (method !== "users.prefs.set") {
+          throw new Error("unexpected global mutation: " + method);
+        }
+        const update = params as UsersPrefsSetParams;
+        for (const [key, expected] of Object.entries(update.expectedEntries ?? {})) {
+          if (JSON.stringify(entries[key] ?? null) !== JSON.stringify(expected)) {
+            return { status: "conflict" };
+          }
+        }
+        Object.assign(entries, structuredClone(update.entries));
+        return { status: "ok" };
+      },
+    );
     const writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
     const refresh = () =>
       refreshProfileAppearancePrefs({
@@ -117,6 +126,7 @@ export function createProfilePrefsServer(
   };
   return { profiles, connect };
 }
+
 export function refreshServerPrefsProfile(
   writer: ReturnType<typeof createServerPrefsWriter>,
   profileId: string,
@@ -131,6 +141,7 @@ export function refreshServerPrefsProfile(
     onApplied: vi.fn(),
   });
 }
+
 export async function initializeServerPrefsProfile(
   scope: string,
   profileId: string,

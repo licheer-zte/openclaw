@@ -78,6 +78,7 @@ describe("worker placement restart continuity", () => {
         active.environmentId,
         active.activeOwnerEpoch,
       );
+      expect(restarted.environments.destroy).not.toHaveBeenCalled();
       const identity = {
         state: "active",
         environmentId: active.environmentId,

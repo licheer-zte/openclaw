@@ -38,11 +38,14 @@ it("discovers committed owners and stores without executing host SQL", async () 
     expect(await existing()).toEqual([]);
     await write("ops", { env: state.env, storePath });
     const observed = observeHostDataSql();
-    using _ = { [Symbol.dispose]: observed.restore };
-    expect(await existing()).toEqual([{ agentId: "ops", storePath }]);
-    expect(await knownOwners(cfg, state)).toEqual(["main", "ops"]);
-    expect(await allTargets(cfg, state)).toContainEqual({ agentId: "main", storePath });
-    expect(observed.queries).toEqual([]);
+    try {
+      expect(await existing()).toEqual([{ agentId: "ops", storePath }]);
+      expect(await knownOwners(cfg, state)).toEqual(["main", "ops"]);
+      expect(await allTargets(cfg, state)).toContainEqual({ agentId: "main", storePath });
+      expect(observed.queries).toEqual([]);
+    } finally {
+      observed.restore();
+    }
   });
 });
 it.for(["canonical", "refused unsuffixed", "refused suffixed"] as const)(

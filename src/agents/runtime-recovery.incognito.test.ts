@@ -112,7 +112,6 @@ function recoveryRuntime(
     throw new Error("Recovery must settle without redispatch");
   });
   return {
-    prepareFailedWorkerPlacement: async () => undefined,
     prepareRestartRecovery,
     dispatchAgent: unexpected,
     dispatchSessionMethod: unexpected,

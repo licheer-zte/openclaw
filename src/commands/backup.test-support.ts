@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { vi } from "vitest";
-import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import { deleteTestEnvValue } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import * as backupShared from "./backup-shared.js";
@@ -45,9 +44,11 @@ export async function resetBackupTempHome(tempHome: { home: string }) {
 }
 
 export async function mockStateOnlyBackupPlan(stateDir: string) {
-  await writeFixtureJson(path.join(stateDir, "openclaw.json"), {
-    agents: { ownership: "explicit", entries: { main: {} } },
-  });
+  await fs.writeFile(
+    path.join(stateDir, "openclaw.json"),
+    JSON.stringify({ agents: { ownership: "explicit", entries: { main: {} } } }),
+    "utf8",
+  );
   const plan = await backupShared.resolveBackupPlanFromDisk({
     includeWorkspace: false,
     nowMs: 123,

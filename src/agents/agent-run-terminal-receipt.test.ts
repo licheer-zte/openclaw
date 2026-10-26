@@ -41,8 +41,12 @@ it.each([
     const effective = { provider, model: selected, responseModel };
     const rerouted = isProviderModelRerouted(requested, effective);
     expect(rerouted).toBe(false);
-    const receipt = { ...visibleRerouteReceipt, requested, effective, rerouted };
-    expect(formatAgentRunRouteChange(receipt, "run-1")).toBeUndefined();
+    expect(
+      formatAgentRunRouteChange(
+        { ...visibleRerouteReceipt, requested, effective, rerouted },
+        "run-1",
+      ),
+    ).toBeUndefined();
   },
 );
 
@@ -51,8 +55,10 @@ const config = declaredConfig();
 const brokerEffective = { ...brokerRequested, responseModel: "upstream-model-2026-10-01" };
 const catalogConfig = declaredConfig("broker", "team/chat", { metadataSource: "models-add" });
 it.each([
+  ["declared endpoint", {}, config, false],
   ["undeclared endpoint", {}, undefined, true],
   ["model fallback", { model: "team/utility" }, config, true],
+  ["provider fallback", { provider: "other-broker" }, config, true],
   ["catalog-authored row", {}, catalogConfig, true],
 ] satisfies Array<[string, Partial<typeof brokerRequested>, OpenClawConfig | undefined, boolean]>)(
   "classifies %s",
@@ -66,6 +72,7 @@ it.each([
 it("keeps bundled provider policy authoritative", () => {
   const openaiRequested = { provider: "openai", model: "gpt-5.6" };
   const effective = { ...openaiRequested, responseModel: "gpt-5.6-luna" };
+  expect(isProviderModelRerouted(openaiRequested, effective)).toBe(true);
   expect(
     isProviderModelRerouted(openaiRequested, effective, declaredConfig("openai", "gpt-5.6")),
   ).toBe(true);
@@ -94,6 +101,12 @@ it("respects global catalog alias ownership for partner-chat", () => {
     ).toBe(false);
   });
 });
+it("uses the producer response model", () => {
+  expect(formatAgentRunRouteChange(visibleRerouteReceipt, "run-1")).toBe(
+    "Model route changed: provider/requested → provider/actual.",
+  );
+});
+
 it("redacts and bounds route text", () => {
   const secret = `sk-${"s".repeat(96)}`;
   const routeChange = formatAgentRunRouteChange(

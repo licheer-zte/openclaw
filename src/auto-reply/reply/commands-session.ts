@@ -354,16 +354,12 @@ export const handleSessionCommand: CommandHandler = defineAuthorizedTextCommand(
         );
       }
       if (action === SESSION_ACTION_UNBIND) {
-        const removed = await sessionBindingService.unbind({
+        await sessionBindingService.unbind({
           bindingId: activeBinding.bindingId,
           scope: activeBinding.conversation,
           reason: "manual",
         });
-        return sessionCommandReply(
-          removed.length > 0
-            ? "✅ Conversation unbound."
-            : "⚠️ No binding was removed; this conversation may still be bound.",
-        );
+        return sessionCommandReply("✅ Conversation unbound.");
       }
     }
 

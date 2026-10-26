@@ -1,7 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
@@ -43,7 +43,6 @@ async function readSnapshot(
     source,
     lists: [],
     readJobs: new WeakMap<CronJob, CronJob>(),
-    searchText: new WeakMap<CronJob, string>(),
     status: Object.freeze({
       enabled: state.deps.cronEnabled,
       triggersEnabled: state.deps.cronConfig?.triggers?.enabled !== false,
@@ -243,19 +242,15 @@ export async function listPage(
             return false;
           }
           if (query) {
-            let haystack = read.searchText.get(job);
-            if (haystack === undefined) {
-              haystack = normalizeLowercaseStringOrEmpty(
-                [
-                  job.id,
-                  job.name,
-                  job.description ?? "",
-                  job.agentId ?? "",
-                  ...(job.displayName ? [job.displayName] : []),
-                ].join(" "),
-              );
-              read.searchText.set(job, haystack);
-            }
+            const haystack = normalizeLowercaseStringOrEmpty(
+              [
+                job.id,
+                job.name,
+                job.description ?? "",
+                job.agentId ?? "",
+                ...(job.displayName ? [job.displayName] : []),
+              ].join(" "),
+            );
             if (!haystack.includes(query)) {
               return false;
             }
@@ -296,8 +291,7 @@ export async function listPage(
         const jobs = sortedJobs.slice(offset, offset + limit).map((job) => {
           let frozenJob = read.readJobs.get(job);
           if (!frozenJob) {
-            // The cron store decodes JSON and validates jobs before service publication.
-            frozenJob = freezeTrustedJsonSnapshot(structuredClone(job));
+            frozenJob = freezeJsonSnapshot(structuredClone(job));
             read.readJobs.set(job, frozenJob);
           }
           return frozenJob;

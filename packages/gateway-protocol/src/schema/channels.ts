@@ -176,12 +176,6 @@ export const TalkClientToolCallResultSchema = closedObject({
   agentSessionKey: NonEmptyString,
 });
 
-export const TalkClientSayParamsSchema = closedObject({
-  sessionKey: NonEmptyString,
-  voiceSessionId: VoiceIdString,
-  text: Type.String({ minLength: 1, maxLength: 1024 }),
-});
-
 export const TalkClientSteerParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   text: NonEmptyString,
@@ -650,7 +644,6 @@ export type TalkConfigParams = Static<typeof TalkConfigParamsSchema>;
 export type TalkConfigResult = Static<typeof TalkConfigResultSchema>;
 export type TalkClientCreateParams = Static<typeof TalkClientCreateParamsSchema>;
 export type TalkClientCreateResult = Static<typeof TalkClientCreateResultSchema>;
-export type TalkClientSayParams = Static<typeof TalkClientSayParamsSchema>;
 export type TalkClientSteerParams = Static<typeof TalkClientSteerParamsSchema>;
 export type TalkAgentControlResult = Static<typeof TalkAgentControlResultSchema>;
 export type TalkClientToolCallParams = Static<typeof TalkClientToolCallParamsSchema>;

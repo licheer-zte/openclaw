@@ -7,11 +7,6 @@ import {
   type JSONRPCMessage,
 } from "@modelcontextprotocol/client";
 import { ResultSchema } from "@modelcontextprotocol/core";
-import {
-  appendCapturedOutput,
-  createCapturedOutputBuffers,
-  finalizeCapturedOutput,
-} from "../process/exec-output.js";
 import type { ProcessCleanupResult } from "../process/supervisor/types.js";
 import { McpStdioFrameDecoder, McpStdioFrameError } from "./mcp-stdio-frame-decoder.js";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
@@ -60,7 +55,7 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
   let shutdown: Promise<void> | undefined;
   let cleanupError: unknown;
   let inFlight = 0;
-  const stderr = createCapturedOutputBuffers();
+  let stderr = Buffer.alloc(0);
 
   class StdioProtocol extends Protocol<BaseContext> {
     protected buildContext(ctx: BaseContext): BaseContext {
@@ -113,7 +108,7 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
       );
     override onexit: OpenClawStdioClientTransport["onexit"] = ({ code, signal }) => {
       if (!stopped && !failure) {
-        const tail = finalizeCapturedOutput(stderr, "tail", true).toString("utf8").trim();
+        const tail = stderr.toString("utf8").trim();
         fail(
           errors.unavailable(
             `proxy exited (${signal ?? code ?? "unknown"})${tail ? `: ${tail}` : ""}`,
@@ -146,7 +141,7 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
   // This strict proxy speaks legacy MCP; the low-level Protocol defaults to that era.
   const protocol = new StdioProtocol({ supportedProtocolVersions: [params.protocolVersion] });
   const onStderr = (chunk: Buffer) => {
-    appendCapturedOutput(stderr, chunk, MAX_STDERR_BYTES, "tail");
+    stderr = Buffer.concat([stderr, chunk]).subarray(-MAX_STDERR_BYTES);
   };
   transport.stderr.on("data", onStderr);
   const startupDeadline = Date.now() + startupTimeoutMs;

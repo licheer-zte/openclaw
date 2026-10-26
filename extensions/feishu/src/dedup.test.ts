@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,11 +13,13 @@ import {
 } from "./dedup.js";
 
 let tempDir: string | undefined;
+let previousStateDir: string | undefined;
 const message = (messageId: string) => ({ messageId, namespace: "account-a" });
 
 beforeEach(() => {
+  previousStateDir = process.env.OPENCLAW_STATE_DIR;
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-feishu-dedup-"));
-  vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
+  process.env.OPENCLAW_STATE_DIR = tempDir;
   feishuDedupeState.reset();
 });
 
@@ -26,7 +27,11 @@ afterEach(async () => {
   vi.useRealTimers();
   await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
-  vi.unstubAllEnvs();
+  if (previousStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = previousStateDir;
+  }
   if (tempDir) {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -54,7 +59,10 @@ describe("Feishu claimable dedupe", () => {
   it("commits a held claim without reclaiming it", async () => {
     const params = message("msg-5");
     const claim = await claimMessage(params);
-    assert(claim.kind === "claimed");
+    expect(claim.kind).toBe("claimed");
+    if (claim.kind !== "claimed") {
+      throw new Error(`expected claimed result, received ${claim.kind}`);
+    }
     await expect(finalizeMessage({ ...params, processingClaim: claim.handle })).resolves.toBe(true);
     await expect(finalizeMessage(params)).resolves.toBe(false);
   });

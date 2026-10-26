@@ -29,24 +29,10 @@ const REMOTE_PROJECT = {
   identity: "openclaw/openclaw",
   cloneUrl: "https://github.com/openclaw/openclaw.git",
 };
-const placementAccess = {
-  methods: ["sessions.create", "sessions.dispatch"],
-  scopes: ["operator.admin", "operator.read", "operator.write"],
-};
-const noteAttachment = {
-  id: "note",
-  dataUrl: "data:text/plain;base64,SGk=",
-  mimeType: "text/plain",
-  fileName: "note.txt",
-};
 
 function createDraftFixture(...options: Parameters<typeof makeDraftFixture>) {
   const fixture = makeDraftFixture(...options);
   return { ...fixture, create: vi.mocked(fixture.context.sessions.createResult) };
-}
-
-function composerState(flow: ReturnType<typeof createDraftFixture>["flow"]) {
-  return [flow.message, flow.mentions, flow.attachmentDraft.attachments];
 }
 
 describe("DraftSubmissionFlow", () => {
@@ -139,7 +125,10 @@ describe("DraftSubmissionFlow", () => {
   it.each(["available", "unavailable before create", "unavailable after create"] as const)(
     "preserves the runtime through Auto placement when recovery storage is %s",
     async (storage) => {
-      const { context, create, flow, place } = createDraftFixture(placementAccess);
+      const { context, create, flow, place } = createDraftFixture({
+        methods: ["sessions.create", "sessions.dispatch"],
+        scopes: ["operator.admin", "operator.read", "operator.write"],
+      });
       place.applyPendingPlacement({ agentId: "main", profileId: "", autoDevice: true });
       place.modelControl.selected = "openai/gpt-5.6-sol";
       place.modelControl.agentRuntime = "codex";
@@ -173,16 +162,21 @@ describe("DraftSubmissionFlow", () => {
           model: "openai/gpt-5.6-sol",
           agentRuntime: "codex",
         });
+        if (storage === "available") {
+          expect(context.placementStartup.start).toHaveBeenCalledOnce();
+        } else {
+          expect(context.placementStartup.start).not.toHaveBeenCalled();
+          expect(flow).toMatchObject({
+            error:
+              "The session was created, but startup needs attention: placement recovery storage is unavailable",
+            message: "Keep my model and runtime",
+          });
+        }
       } else {
         expect(create).not.toHaveBeenCalled();
-      }
-      expect(context.placementStartup.start).toHaveBeenCalledTimes(Number(storage === "available"));
-      if (storage !== "available") {
+        expect(context.placementStartup.start).not.toHaveBeenCalled();
         expect(flow).toMatchObject({
-          error:
-            storage === "unavailable before create"
-              ? "Couldn't prepare session recovery. Your draft has been kept."
-              : "The session was created, but startup needs attention: placement recovery storage is unavailable",
+          error: "Couldn't prepare session recovery. Your draft has been kept.",
           message: "Keep my model and runtime",
         });
       }
@@ -226,7 +220,9 @@ describe("DraftSubmissionFlow", () => {
 
       expect(create).not.toHaveBeenCalled();
       expect(context.navigateAndWait).not.toHaveBeenCalled();
-      expect(composerState(flow)).toEqual([message, mentions, attachments]);
+      expect(flow.message).toBe(message);
+      expect(flow.mentions).toEqual(mentions);
+      expect(flow.attachmentDraft.attachments).toEqual(attachments);
       expect(flow.submitting).toBe(false);
       expect(takePreparedTitle).not.toHaveBeenCalled();
       if (oversized) {
@@ -300,7 +296,11 @@ describe("DraftSubmissionFlow", () => {
 
       const submission = flow.submit();
       await vi.waitFor(() => expect(cleanup).toHaveBeenCalledOnce());
-      const consumed = composerState(flow);
+      const consumed = {
+        message: flow.message,
+        mentions: flow.mentions,
+        attachments: flow.attachmentDraft.attachments,
+      };
       expect(context.navigateAndWait).not.toHaveBeenCalled();
       if (next === "reconnect") {
         flow.invalidate("gateway-changed");
@@ -308,8 +308,10 @@ describe("DraftSubmissionFlow", () => {
       finishCleanup();
       await submission;
 
-      expect(consumed).toEqual(["", [], []]);
-      expect(composerState(flow)).toEqual(["", [], []]);
+      expect(consumed).toEqual({ message: "", mentions: [], attachments: [] });
+      expect(flow.message).toBe("");
+      expect(flow.mentions).toEqual([]);
+      expect(flow.attachmentDraft.attachments).toEqual([]);
       expect(create).toHaveBeenCalledOnce();
       expect(context.navigateAndWait).toHaveBeenCalledTimes(next === "navigation" ? 1 : 0);
       const retained = context.chatSubmissions.readInitial(
@@ -357,7 +359,8 @@ describe("DraftSubmissionFlow", () => {
     const takePreparedTitle = vi.fn(() => "Original prepared title");
     const { context, create, flow, place } = createDraftFixture({
       takePreparedTitle,
-      ...placementAccess,
+      methods: ["sessions.create", "sessions.dispatch"],
+      scopes: ["operator.admin", "operator.read", "operator.write"],
     });
     const original = createDeferred<SessionCreateOutcome>();
     const result = { key: "agent:main:direct-resumed", initialRun: { status: "idle" as const } };
@@ -468,23 +471,20 @@ describe("DraftSubmissionFlow", () => {
     flow.attachmentDraft.replace([current]);
     noteUserMutation.mockClear();
     revokeObjectURL.mockClear();
-    const message = "@Alex recovered cloud prompt";
-    const mentions = [{ profileId: "profile-alex", start: 0, end: 5 }];
-    const attachments = [
-      {
-        type: "file" as const,
-        mimeType: "text/plain",
-        fileName: "recovered.txt",
-        content: "cmVjb3ZlcmVk",
-      },
-    ];
     expect(
       writeSessionPlacementRecovery({
         sessionKey: "agent:main:dashboard:recovery",
         messageId: "message-recovery",
-        message,
-        mentions,
-        attachments,
+        message: "@Alex recovered cloud prompt",
+        mentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
+        attachments: [
+          {
+            type: "file",
+            mimeType: "text/plain",
+            fileName: "recovered.txt",
+            content: "cmVjb3ZlcmVk",
+          },
+        ],
         target: { kind: "profile", profileId: "aws" },
         agentId: "main",
         gatewayUrl: "ws://gateway.example",
@@ -504,9 +504,16 @@ describe("DraftSubmissionFlow", () => {
     expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:current-draft");
     expect(getChatAttachmentDataUrl(current)).toBeNull();
     expect(noteUserMutation).not.toHaveBeenCalled();
-    expect(flow.message).toBe(message);
-    expect(flow.mentions).toEqual(mentions);
-    expect(buildChatApiAttachments(flow.attachmentDraft.attachments)).toEqual(attachments);
+    expect(flow.message).toBe("@Alex recovered cloud prompt");
+    expect(flow.mentions).toEqual([{ profileId: "profile-alex", start: 0, end: 5 }]);
+    expect(buildChatApiAttachments(flow.attachmentDraft.attachments)).toEqual([
+      {
+        type: "file",
+        mimeType: "text/plain",
+        fileName: "recovered.txt",
+        content: "cmVjb3ZlcmVk",
+      },
+    ]);
     flow.attachmentDraft.reset();
   });
 
@@ -540,7 +547,14 @@ describe("DraftSubmissionFlow", () => {
       place.selectRemoteProject(REMOTE_PROJECT);
       place.selectWorktree(worktree);
       flow.setMessage(message);
-      flow.attachmentDraft.replace([{ ...noteAttachment, id: "attachment-1" }]);
+      flow.attachmentDraft.replace([
+        {
+          id: "attachment-1",
+          dataUrl: "data:text/plain;base64,SGk=",
+          mimeType: "text/plain",
+          fileName: "note.txt",
+        },
+      ]);
       const submitted = flow.submit();
       const duplicate = flow.submit();
       await vi.waitFor(() => expect(create).toHaveBeenCalledOnce());
@@ -576,7 +590,8 @@ describe("DraftSubmissionFlow", () => {
       let waits = 0;
       const { context, create, flow, place, request } = createDraftFixture({
         agents: [{ id: "cloud", workspace: "/workspace", workspaceGit: true }],
-        ...placementAccess,
+        scopes: ["operator.admin", "operator.read", "operator.write"],
+        methods: ["sessions.create", "sessions.dispatch"],
         request: async (method) => {
           if (method === "worktrees.branches") {
             return { repositoryStatus: "git", branches: [] };
@@ -608,7 +623,14 @@ describe("DraftSubmissionFlow", () => {
       const mentions = [{ profileId: "profile-alex", start: 0, end: 5 }];
       const attachments = [{ fileName: "note.txt", content: "SGk=" }];
       flow.setMessage(message, mentions);
-      flow.attachmentDraft.replace([{ ...noteAttachment }]);
+      flow.attachmentDraft.replace([
+        {
+          id: "note",
+          dataUrl: "data:text/plain;base64,SGk=",
+          mimeType: "text/plain",
+          fileName: "note.txt",
+        },
+      ]);
       flow.pendingPlacement.stageCreate({
         agentId: "cloud",
         target: { kind: "profile", profileId: "aws" },
@@ -639,8 +661,8 @@ describe("DraftSubmissionFlow", () => {
       expect(flow.pendingPlacement.capture()).toBeNull();
       expect(flow.completedSubmission?.key).toBe(recovery.sessionKey);
       expect(flow.pendingMessage?.content).toContainEqual({ type: "text", text: message });
-      expect(composerState(flow)).toEqual(["", [], []]);
-      expect(flow).toMatchObject({ submitting: false, error });
+      expect(flow).toMatchObject({ message: "", mentions: [], submitting: false, error });
+      expect(flow.attachmentDraft.attachments).toEqual([]);
       if (background) {
         expect(navigate).not.toHaveBeenCalled();
         expect(context.gateway.setSessionKey).not.toHaveBeenCalled();

@@ -32,7 +32,6 @@ export { announceSpy };
 
 export function createSubagentPersistenceRuntime(call: typeof callGateway): GatewayRecoveryRuntime {
   return {
-    prepareFailedWorkerPlacement: async () => undefined,
     prepareRestartRecovery: () => undefined,
     dispatchSessionMethod: (method, params, options) =>
       call({

@@ -1,12 +1,11 @@
 import { createMemo, createSignal, onCleanup } from "solid-js";
-import { isKnownCoreToolId } from "../../../../src/agents/tool-catalog.ts";
 import type { ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
-import { fetchPluginActivityIconBlobUrl, fetchPluginIconBlobUrl } from "../plugins/icon-loader.ts";
+import { fetchPluginActivityIconBlobUrl } from "../plugins/icon-loader.ts";
 import { PluginIconOwner } from "../plugins/plugin-icon-owner.ts";
 
-type PluginToolIcon = { url: string; branding?: boolean; onError: () => void };
+type PluginToolIcon = { url: string; onError: () => void };
 export type PluginToolIcons = Pick<ReadonlyMap<string, PluginToolIcon>, "get">;
 
 type ToolIconSource = {
@@ -42,9 +41,9 @@ export function createChatToolIcons(readSource: () => ToolIconSource): PluginToo
       loading?: boolean;
     } = { ...current, controller: new AbortController() };
     let disposed = false;
-    const [toolKeys, setToolKeys] = createSignal(new Map<string, string[]>());
+    const [toolKeys, setToolKeys] = createSignal(new Map<string, string | undefined>());
     const [urls, setUrls] = createSignal<Record<string, string>>({});
-    const artwork = new Map<string, { pluginId: string; tool?: string; branding: boolean }>();
+    const activityIcons = new Map<string, { pluginId: string; tool?: string }>();
     // Request admission must see same-turn misses before Solid publishes icon data.
     const known = new Set<string>();
     const requested = new Set<string>();
@@ -67,15 +66,11 @@ export function createChatToolIcons(readSource: () => ToolIconSource): PluginToo
       },
       isConnected: isCurrent,
       fetchIcon: (key, context, signal) => {
-        const icon = artwork.get(key);
+        const icon = activityIcons.get(key);
         return icon
-          ? icon.branding
-            ? fetchPluginIconBlobUrl({ ...context, pluginId: icon.pluginId, signal })
-            : fetchPluginActivityIconBlobUrl({ ...context, ...icon, signal })
+          ? fetchPluginActivityIconBlobUrl({ ...context, ...icon, signal })
           : Promise.resolve(null);
       },
-      // Failed reads reveal the next candidate even when no URL was published.
-      onUnavailable: () => setUrls((previous) => ({ ...previous })),
       onUrlsChange: (next) => {
         if (!disposed) {
           setUrls(next);
@@ -118,44 +113,33 @@ export function createChatToolIcons(readSource: () => ToolIconSource): PluginToo
           const availableIcons = new Map(
             plugins.plugins.map((plugin) => [
               plugin.id,
-              {
-                branding: plugin.hasToolBrandIcon,
-                default: plugin.hasActivityIcon,
-                tools: new Set(plugin.activityIconTools),
-              },
+              { default: plugin.hasActivityIcon, tools: new Set(plugin.activityIconTools) },
             ]),
           );
-          const keys = new Map<string, string[]>();
-          artwork.clear();
+          const keys = new Map<string, string | undefined>();
+          activityIcons.clear();
           // Effective inventory retains plugin ownership for built-ins such as Browser and Canvas.
           for (const group of tools.groups) {
             for (const tool of group.tools) {
               const pluginId = tool.pluginId;
               const available = pluginId ? availableIcons.get(pluginId) : undefined;
               const override = available?.tools.has(tool.id) ? tool.id : undefined;
-              const candidates: string[] = [];
-              // Shared capabilities keep their semantic glyph, independent of provider artwork.
-              if (pluginId && tool.source !== "core") {
-                if (available?.branding && !isKnownCoreToolId(tool.id)) {
-                  const key = JSON.stringify([pluginId, "brand"]);
-                  artwork.set(key, { pluginId, branding: true });
-                  candidates.push(key);
-                }
-                if (override || available?.default) {
-                  const key = JSON.stringify([pluginId, "activity", override ?? null]);
-                  artwork.set(key, { pluginId, tool: override, branding: false });
-                  candidates.push(key);
-                }
+              const key =
+                pluginId && (override || available?.default)
+                  ? JSON.stringify([pluginId, override ?? null])
+                  : undefined;
+              if (key && pluginId) {
+                activityIcons.set(key, { pluginId, tool: override });
               }
-              keys.set(tool.id, candidates);
+              keys.set(tool.id, key);
               known.add(tool.id);
               pending.delete(tool.id);
             }
           }
           setToolKeys((previous) => new Map([...previous, ...keys]));
-          loader.reconcileKeys(new Set(artwork.keys()));
+          loader.reconcileKeys(new Set(activityIcons.keys()));
           for (const name of requested) {
-            const key = keys.get(name)?.[0];
+            const key = keys.get(name);
             if (key) {
               loader.load(key);
             }
@@ -188,17 +172,13 @@ export function createChatToolIcons(readSource: () => ToolIconSource): PluginToo
             queueMicrotask(refresh);
           }
         }
-        for (const key of keys.get(name) ?? []) {
-          if (loader.isUnavailable(key)) {
-            continue;
-          }
-          loader.load(key);
-          const url = images[key];
-          return url
-            ? { url, branding: artwork.get(key)?.branding, onError: () => loader.handleError(key) }
-            : undefined;
+        const key = keys.get(name);
+        if (!key) {
+          return undefined;
         }
-        return undefined;
+        loader.load(key);
+        const url = images[key];
+        return url ? { url, onError: () => loader.handleError(key) } : undefined;
       },
     };
   });

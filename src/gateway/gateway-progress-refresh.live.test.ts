@@ -26,7 +26,6 @@ import {
   connectTestGatewayClient,
   ensurePairedTestGatewayClientIdentity,
 } from "./gateway-cli-backend.live-helpers.js";
-import { liveOpenAiApiKeyModels } from "./live-openai-models.test-support.js";
 
 const describeLive =
   isLiveTestEnabled() && process.env.OPENAI_API_KEY?.trim() ? describe : describe.skip;
@@ -185,7 +184,17 @@ describeLive("progress refresh through the live embedded runtime", () => {
               exec: { host: "gateway", security: "full", ask: "off", notifyOnExit: false },
             },
             secrets: { providers: { default: { source: "env" } } },
-            models: liveOpenAiApiKeyModels(),
+            models: {
+              mode: "merge",
+              providers: {
+                openai: {
+                  api: "openai-responses",
+                  apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+                  baseUrl: "https://api.openai.com/v1",
+                  models: [],
+                },
+              },
+            },
           };
           await instance.state.writeConfig(config);
           await fs.writeFile(

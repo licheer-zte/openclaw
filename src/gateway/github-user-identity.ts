@@ -214,16 +214,18 @@ export async function resolveGitHubUserIdentityByLogin(
   let payload: unknown;
   try {
     const request = async (requestToken: string | undefined) => {
-      const { value } = await gitHubPublicApi.fetchGitHubJsonPage(
+      const response = await gitHubPublicApi.fetchGitHubApi(
         `${gitHubPublicApi.GITHUB_API_ORIGIN}/users/${encodeURIComponent(requestedLogin)}`,
         fetch,
         requestToken,
-        {
-          signal: options?.signal,
-          apiBaseUrl: gitHubPublicApi.GITHUB_API_ORIGIN,
-        },
+        undefined,
+        undefined,
+        undefined,
+        options?.signal,
+        undefined,
+        gitHubPublicApi.GITHUB_API_ORIGIN,
       );
-      return value;
+      return await gitHubPublicApi.readGitHubJsonResponse(response);
     };
     payload =
       options?.allowAnonymousRetry === false

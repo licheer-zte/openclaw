@@ -107,7 +107,6 @@ export function buildGeminiEmbeddingRequest(params: {
   model: string;
   role: "query" | "document";
   queryInstructionApplied?: boolean;
-  documentFormatApplied?: boolean;
   taskType: GeminiTaskType;
   outputDimensionality?: number;
   modelPath?: string;
@@ -124,7 +123,7 @@ export function buildGeminiEmbeddingRequest(params: {
   const request: GeminiEmbeddingRequest = { content: { parts } };
   if (
     isStableEmbedding2 &&
-    !(params.role === "query" ? params.queryInstructionApplied : params.documentFormatApplied) &&
+    !(params.role === "query" && params.queryInstructionApplied) &&
     parts.every((part) => "text" in part)
   ) {
     const first = parts[0];
@@ -358,7 +357,7 @@ export async function createGeminiEmbeddingProvider(
 
   const embedDocuments = async (
     inputs: EmbeddingInput[],
-    callOptions?: EmbeddingProviderCallOptions,
+    callOptions?: { signal?: AbortSignal },
   ): Promise<number[][]> => {
     if (inputs.length === 0) {
       return [];
@@ -372,7 +371,6 @@ export async function createGeminiEmbeddingProvider(
             input,
             model: client.model,
             role: "document",
-            documentFormatApplied: callOptions?.documentFormatApplied,
             modelPath: client.modelPath,
             taskType: options.taskType ?? "RETRIEVAL_DOCUMENT",
             outputDimensionality,

@@ -12,12 +12,6 @@ import { UpdateCandidateStateSnapshotSchema } from "./update-candidate-state.js"
 import { inventoryUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-const credential = {
-  socket_key: "current",
-  socket_path: "/synthetic/native.sock",
-  socket_token: "synthetic-socket-token",
-  updated_at_ms: 456,
-};
 
 async function runWorker(input: Record<string, unknown>): Promise<unknown> {
   const result = await runCommandBuffered(
@@ -63,7 +57,10 @@ it.each(["legacy", "daemon-aware", "local-aware", "legacy-alias", "local-aware-a
       db.exec(CLIENT_CREDENTIAL_SCHEMA_SQL);
       db.exec("PRAGMA user_version = 1");
       db.prepare("INSERT INTO native_exec_socket_credentials VALUES (?, ?, ?, ?)").run(
-        ...Object.values(credential),
+        "current",
+        "/synthetic/native.sock",
+        "synthetic-socket-token",
+        456,
       );
     }
     const intent = {
@@ -72,21 +69,31 @@ it.each(["legacy", "daemon-aware", "local-aware", "legacy-alias", "local-aware-a
       updated_at_ms: 123,
     };
     withDaemonRuntimePinStore(env, true, (db) => {
-      db.prepare("INSERT INTO daemon_runtime_pins VALUES (?, ?, ?)").run(...Object.values(intent));
+      db.prepare("INSERT INTO daemon_runtime_pins VALUES (?, ?, ?)").run(
+        intent.state_key,
+        intent.value_json,
+        intent.updated_at_ms,
+      );
     });
-    const localAware = caller.startsWith("local-aware");
-    const daemonAware = !caller.startsWith("legacy");
     const input = {
       stateDir,
       targetStateDir,
       candidateRoot: root,
       config: {},
       env,
-      ...(daemonAware ? { includeLocalStoreVersions: true } : {}),
-      ...(localAware ? { includeClientCredentialStoreVersion: true } : {}),
+      ...(caller !== "legacy" && caller !== "legacy-alias"
+        ? { includeLocalStoreVersions: true }
+        : {}),
+      ...(caller.startsWith("local-aware") ? { includeClientCredentialStoreVersion: true } : {}),
     };
+    // Both entrypoints use the same publisher; exercise capture on three callers
+    // without repeating a full snapshot for every version-only response.
     const capture = caller !== "local-aware" && caller !== "legacy-alias";
     const admitted = capture ? await inventoryUpdateCandidateStateWorker(input) : undefined;
+    if (admitted) {
+      expect(admitted.databaseInventory).toContain(local);
+      expect(admitted.databaseInventory).toContain(client);
+    }
     const response = await runWorker({
       ...input,
       ...admitted,
@@ -97,23 +104,31 @@ it.each(["legacy", "daemon-aware", "local-aware", "legacy-alias", "local-aware-a
       : UpdateCandidateStateSnapshotSchema.shape.versions.parse(response);
     const expected = [
       { path: agent, userVersion: 3 },
-      ...(localAware ? [{ path: client, userVersion: 1 }] : []),
-      ...(daemonAware ? [{ path: local, userVersion: 1 }] : []),
+      ...(caller.startsWith("local-aware") ? [{ path: client, userVersion: 1 }] : []),
+      ...(caller !== "legacy" && caller !== "legacy-alias"
+        ? [{ path: local, userVersion: 1 }]
+        : []),
       { path: shared, userVersion: 7, contentVersion: 7 },
     ];
     expect(versions).toEqual(expected);
     if (!capture) {
       return;
     }
-    const openCopy = (file: string) =>
-      openNodeSqliteDatabase(path.join(targetStateDir, path.relative(stateDir, file)), {
-        readOnly: true,
-      });
-    using copied = openCopy(local);
+    using copied = openNodeSqliteDatabase(path.join(targetStateDir, "control", "services.sqlite"), {
+      readOnly: true,
+    });
     expect(copied.prepare("SELECT * FROM daemon_runtime_pins").all()).toEqual([intent]);
-    using copiedClient = openCopy(client);
+    using copiedClient = openNodeSqliteDatabase(
+      path.join(targetStateDir, "client", "credentials.sqlite"),
+      { readOnly: true },
+    );
     expect(copiedClient.prepare("SELECT * FROM native_exec_socket_credentials").all()).toEqual([
-      credential,
+      {
+        socket_key: "current",
+        socket_path: "/synthetic/native.sock",
+        socket_token: "synthetic-socket-token",
+        updated_at_ms: 456,
+      },
     ]);
   },
 );

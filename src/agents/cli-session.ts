@@ -182,6 +182,24 @@ export function resolveCliSessionClearReason(error: unknown): string {
   return isFailoverError(error) ? error.reason : (readErrorName(error) ?? "error");
 }
 
+type CliSessionInvalidatedReason =
+  | "auth-profile"
+  | "auth-epoch"
+  | "message-policy"
+  | "cwd"
+  | "mcp"
+  | "prompt-tools";
+
+export type CliSessionReuseResult =
+  | { mode: "none" }
+  | { mode: "reuse"; sessionId: string }
+  | {
+      mode: "reuse-with-drift";
+      sessionId: string;
+      drift: { reasons: "system-prompt"[] };
+    }
+  | { mode: "invalidate"; invalidatedReason: CliSessionInvalidatedReason };
+
 const DEFAULT_MESSAGE_TOOL_POLICY_HASH = hashCliSessionText(
   JSON.stringify({ sourceReplyDeliveryMode: "automatic", requireExplicitMessageTarget: false }),
 );
@@ -209,14 +227,14 @@ export function resolveCliSessionReuse(params: {
   cwdHash?: string;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
-}) {
+}): CliSessionReuseResult {
   const binding = params.binding;
   const sessionId = normalizeOptionalString(binding?.sessionId);
   if (!sessionId) {
-    return { mode: "none" as const };
+    return { mode: "none" };
   }
   if (binding?.forceReuse === true) {
-    return { mode: "reuse" as const, sessionId };
+    return { mode: "reuse", sessionId };
   }
   const currentAuthProfileId = normalizeOptionalString(params.authProfileId);
   const currentAuthEpoch = normalizeOptionalString(params.authEpoch);
@@ -236,50 +254,46 @@ export function resolveCliSessionReuse(params: {
     currentAuthEpoch !== undefined &&
     storedAuthEpoch === currentAuthEpoch;
   if (storedAuthProfileId !== currentAuthProfileId && !hasMatchingVersionedAuthEpoch) {
-    return { mode: "invalidate" as const, invalidatedReason: "auth-profile" as const };
+    return { mode: "invalidate", invalidatedReason: "auth-profile" };
   }
   if (
     binding?.authEpochVersion === params.authEpochVersion &&
     storedAuthEpoch !== currentAuthEpoch
   ) {
-    return { mode: "invalidate" as const, invalidatedReason: "auth-epoch" as const };
+    return { mode: "invalidate", invalidatedReason: "auth-epoch" };
   }
   const storedMessageToolPolicyHash = normalizeCliMessageToolPolicyHash(
     binding?.messageToolPolicyHash,
   );
   if (storedMessageToolPolicyHash !== currentMessageToolPolicyHash) {
-    return { mode: "invalidate" as const, invalidatedReason: "message-policy" as const };
+    return { mode: "invalidate", invalidatedReason: "message-policy" };
   }
   const storedCwdHash = normalizeOptionalString(binding?.cwdHash);
   if (storedCwdHash !== undefined && storedCwdHash !== currentCwdHash) {
-    return { mode: "invalidate" as const, invalidatedReason: "cwd" as const };
+    return { mode: "invalidate", invalidatedReason: "cwd" };
   }
   const storedMcpResumeHash = normalizeOptionalString(binding?.mcpResumeHash);
   if (storedMcpResumeHash && currentMcpResumeHash) {
     // Resume hashes are stricter than raw MCP config hashes: a match proves the
     // exact resumed CLI tool topology still belongs to this session.
     if (storedMcpResumeHash !== currentMcpResumeHash) {
-      return { mode: "invalidate" as const, invalidatedReason: "mcp" as const };
+      return { mode: "invalidate", invalidatedReason: "mcp" };
     }
   } else {
     const storedMcpConfigHash = normalizeOptionalString(binding?.mcpConfigHash);
     if (storedMcpConfigHash !== currentMcpConfigHash) {
-      return { mode: "invalidate" as const, invalidatedReason: "mcp" as const };
+      return { mode: "invalidate", invalidatedReason: "mcp" };
     }
   }
 
   const storedPromptToolNamesHash = normalizeOptionalString(binding?.promptToolNamesHash);
   if (storedPromptToolNamesHash !== currentPromptToolNamesHash) {
     // The loopback bridge cannot notify a resumed CLI to refresh its cached tool catalog.
-    return { mode: "invalidate" as const, invalidatedReason: "prompt-tools" as const };
+    return { mode: "invalidate", invalidatedReason: "prompt-tools" };
   }
   const storedExtraSystemPromptHash = normalizeOptionalString(binding?.extraSystemPromptHash);
   if (storedExtraSystemPromptHash !== currentExtraSystemPromptHash) {
-    return {
-      mode: "reuse-with-drift" as const,
-      sessionId,
-      drift: { reasons: ["system-prompt" as const] },
-    };
+    return { mode: "reuse-with-drift", sessionId, drift: { reasons: ["system-prompt"] } };
   }
-  return { mode: "reuse" as const, sessionId };
+  return { mode: "reuse", sessionId };
 }

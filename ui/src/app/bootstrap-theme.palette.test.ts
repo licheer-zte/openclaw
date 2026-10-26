@@ -41,7 +41,11 @@ beforeEach(({ onTestFinished }) => {
   });
 });
 
-const pendingPalette = () => document.getElementById("openclaw-theme-palette-tide")!;
+function pendingPalette() {
+  const link = document.getElementById("openclaw-theme-palette-tide");
+  expect(link).toBeInstanceOf(HTMLLinkElement);
+  return link!;
+}
 
 function observe(read: () => string | undefined) {
   const values: string[] = [];

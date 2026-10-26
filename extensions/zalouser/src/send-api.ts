@@ -20,8 +20,64 @@ function extractSendMessageId(result: Awaited<ReturnType<API["sendMessage"]>>): 
   return messageId == null ? undefined : String(messageId);
 }
 
+function resolveMediaFileName(params: {
+  mediaUrl: string;
+  fileName?: string;
+  contentType?: string;
+  kind?: string;
+}): string {
+  const explicit = params.fileName?.trim();
+  if (explicit) {
+    return explicit;
+  }
+
+  try {
+    const parsed = new URL(params.mediaUrl);
+    const fromPath = path.basename(parsed.pathname).trim();
+    if (fromPath) {
+      return fromPath;
+    }
+  } catch {
+    // ignore URL parse failures
+  }
+
+  const ext =
+    extensionForMime(params.contentType)?.replace(/^\./u, "") ??
+    (params.kind === "video"
+      ? "mp4"
+      : params.kind === "audio"
+        ? "mp3"
+        : params.kind === "image"
+          ? "jpg"
+          : "bin");
+
+  return `upload.${ext}`;
+}
+
 function hasAttachmentExtension(fileName: string): fileName is `${string}.${string}` {
   return fileName.includes(".");
+}
+
+function resolveUploadedVoiceUrl(
+  uploaded: Array<{
+    fileType?: string;
+    fileUrl?: string;
+  }>,
+): string | undefined {
+  for (const item of uploaded) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const fileType = normalizeOptionalLowercaseString(item.fileType);
+    const fileUrl = item.fileUrl?.trim();
+    if (!fileUrl) {
+      continue;
+    }
+    if (fileType === "others" || fileType === "video") {
+      return fileUrl;
+    }
+  }
+  return undefined;
 }
 
 export async function sendZaloTextWithApi(
@@ -46,23 +102,12 @@ export async function sendZaloTextWithApi(
       : undefined;
     const attachments: Parameters<API["uploadAttachment"]>[0] = [];
     if (media && mediaUrl) {
-      const nameUrl = options.mediaUrl ?? mediaUrl;
-      const { fileName: rawFileName, contentType, kind } = media;
-      let fileName = rawFileName?.trim();
-      if (!fileName) {
-        try {
-          const parsed = new URL(nameUrl);
-          fileName = path.basename(parsed.pathname).trim();
-        } catch {
-          // ignore URL parse failures
-        }
-      }
-      if (!fileName) {
-        const ext =
-          extensionForMime(contentType)?.replace(/^\./u, "") ??
-          (kind === "video" ? "mp4" : kind === "audio" ? "mp3" : kind === "image" ? "jpg" : "bin");
-        fileName = `upload.${ext}`;
-      }
+      const fileName = resolveMediaFileName({
+        mediaUrl: options.mediaUrl ?? mediaUrl,
+        fileName: media.fileName,
+        contentType: media.contentType,
+        kind: media.kind,
+      });
       attachments.push({
         data: media.buffer,
         filename: hasAttachmentExtension(fileName) ? fileName : `${fileName}.bin`,
@@ -91,21 +136,7 @@ export async function sendZaloTextWithApi(
       }
 
       const uploaded = await api.uploadAttachment(attachments, trimmedThreadId, type);
-      let voiceUrl: string | undefined;
-      for (const item of uploaded) {
-        if (!item || typeof item !== "object") {
-          continue;
-        }
-        const fileType = normalizeOptionalLowercaseString(item.fileType);
-        const fileUrl = item.fileUrl?.trim();
-        if (!fileUrl) {
-          continue;
-        }
-        if (fileType === "others" || fileType === "video") {
-          voiceUrl = fileUrl;
-          break;
-        }
-      }
+      const voiceUrl = resolveUploadedVoiceUrl(uploaded);
       if (!voiceUrl) {
         throw new Error("Failed to resolve uploaded audio URL for voice message");
       }

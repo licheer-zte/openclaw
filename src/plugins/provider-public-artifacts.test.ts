@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
-import { captureEnv } from "../test-utils/env.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { getPluginValueInstance } from "./plugin-instance-scope.js";
@@ -35,7 +34,7 @@ import { createPluginRecord } from "./status.test-helpers.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function writeExternalPolicyFixture(): string {
-  const pluginRoot = tempDirs.make("openclaw-provider-policy-external-");
+  const pluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-provider-policy-external-"));
   // Shipped policy artifacts are ESM in a "type": "module" package; an ambiguous
   // .js file would depend on the host loader's syntax detection instead.
   fs.writeFileSync(path.join(pluginRoot, "package.json"), '{ "type": "module" }\n', "utf8");
@@ -84,40 +83,22 @@ async function loadPolicyResolver(scope: string, loader: (params: { dirName: str
   ).resolveBundledProviderPolicySurface;
 }
 
-async function loadOwnedPolicyResolver(
-  scope: string,
-  owner: string,
-  surface: Record<string, unknown>,
-) {
-  const scan = forbidManifestRegistryScan();
-  const loadArtifact = vi.fn(({ dirName }: { dirName: string }) =>
-    dirName === owner ? surface : null,
-  );
-  const resolve = await loadPolicyResolver(scope, loadArtifact);
-  return { resolve, loadArtifact, scan };
-}
-
-function externalPolicyOwner(rootDir: string, provider = "fixture-provider") {
-  return createPluginManifestRecordFixture({
-    id: "fixture-provider",
-    origin: "global",
-    trustedOfficialInstall: true,
-    rootDir,
-    providers: [provider],
-    contracts: { embeddingProviders: ["fixture-embedding"] },
-  });
-}
-
-function isolateBundledPlugins() {
-  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = tempDirs.make("openclaw-empty-bundled-plugins-");
-  process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
-}
-
 describe("provider public artifacts", () => {
-  const bundledPluginEnv = captureEnv([
-    "OPENCLAW_BUNDLED_PLUGINS_DIR",
-    "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR",
-  ]);
+  const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  const originalTrustBundledPluginsDir = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+
+  function restoreBundledPluginEnv() {
+    if (originalBundledPluginsDir === undefined) {
+      delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    } else {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
+    }
+    if (originalTrustBundledPluginsDir === undefined) {
+      delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+    } else {
+      process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = originalTrustBundledPluginsDir;
+    }
+  }
 
   beforeEach(() => {
     vi.resetModules();
@@ -125,7 +106,7 @@ describe("provider public artifacts", () => {
   });
 
   afterEach(() => {
-    bundledPluginEnv.restore();
+    restoreBundledPluginEnv();
     vi.doUnmock("./bundled-dir.js");
     vi.doUnmock("./manifest-registry.js");
     vi.doUnmock("./public-surface-loader.js");
@@ -174,13 +155,33 @@ describe("provider public artifacts", () => {
   it("loads a lightweight bundled provider policy artifact smoke", () => {
     const surface = resolveBundledProviderPolicySurface("openai");
     expect(surface?.projectRealtimeVoicePublicProjection).toBeTypeOf("function");
-    expect(surface?.resolveModelRoutes).toBeTypeOf("function");
 
     expect(
       surface
         ?.resolveThinkingProfile?.({ provider: "openai", modelId: "gpt-5.5" })
         ?.levels.map((level) => level.id),
     ).toContain("xhigh");
+    expect(surface?.resolveModelRoutes?.({ provider: "openai", modelId: "gpt-5.5" })).toEqual({
+      kind: "routes",
+      defaultRuntimeId: "codex",
+      preferredAuthRequirement: "subscription",
+      routes: [
+        {
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          authRequirement: "api-key",
+          requestTransportOverrides: "none",
+          runtimePolicy: { compatibleIds: ["openclaw", "codex", "agentsapi"] },
+        },
+        {
+          api: "openai-chatgpt-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authRequirement: "subscription",
+          requestTransportOverrides: "none",
+          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+        },
+      ],
+    });
   });
 
   it("loads Kimi Code K3 thinking policy before runtime registration", () => {
@@ -192,9 +193,16 @@ describe("provider public artifacts", () => {
         modelId: "k3",
       }),
     ).toEqual({
-      levels: ["off", "minimal", "low", "medium", "high", "adaptive", "xhigh", "max"].map((id) => ({
-        id,
-      })),
+      levels: [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        { id: "adaptive" },
+        { id: "xhigh" },
+        { id: "max" },
+      ],
       defaultLevel: "high",
       preserveWhenCatalogReasoningFalse: true,
     });
@@ -278,38 +286,57 @@ describe("provider public artifacts", () => {
   });
 
   it("loads trusted official external provider policy before runtime registration", () => {
-    isolateBundledPlugins();
+    const bundledPluginsDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-empty-bundled-plugins-"),
+    );
     const pluginRoot = writeExternalPolicyFixture();
-    const fixturePlugin = externalPolicyOwner(pluginRoot);
-    const surface = resolveProviderPolicySurface("fixture-provider", {
-      manifestRegistry: { plugins: [fixturePlugin] },
-    });
 
-    expect(
-      surface
-        ?.resolveThinkingProfile?.({ provider: "fixture-provider", modelId: "full" })
-        ?.levels.map((level) => level.id),
-    ).toEqual(["off", "high", "max"]);
-    expect(
-      surface
-        ?.resolveThinkingProfile?.({ provider: "fixture-provider", modelId: "legacy" })
-        ?.levels.map((level) => level.label),
-    ).toEqual([undefined, "on"]);
-    expect(surface).not.toHaveProperty("projectRealtimeVoicePublicProjection");
-    expect(
-      resolveProviderPolicySurface("fixture-embedding", {
-        manifestRegistry: { plugins: [fixturePlugin] },
-      })?.inspectEmbeddingProviderSetup?.({
-        config: {},
-        env: {},
-        agentId: "main",
+    try {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+      process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+      const fixturePlugin = {
+        id: "fixture-provider",
+        origin: "external",
+        trustedOfficialInstall: true,
+        rootDir: pluginRoot,
+        providers: ["fixture-provider"],
+        cliBackends: [],
+        contracts: { embeddingProviders: ["fixture-embedding"] },
+      } as const;
+      const surface = resolveProviderPolicySurface("fixture-provider", {
+        manifestRegistry: { plugins: [fixturePlugin as never] },
+      });
+
+      expect(
+        surface
+          ?.resolveThinkingProfile?.({ provider: "fixture-provider", modelId: "full" })
+          ?.levels.map((level) => level.id),
+      ).toEqual(["off", "high", "max"]);
+      expect(
+        surface
+          ?.resolveThinkingProfile?.({ provider: "fixture-provider", modelId: "legacy" })
+          ?.levels.map((level) => level.label),
+      ).toEqual([undefined, "on"]);
+      expect(surface).not.toHaveProperty("projectRealtimeVoicePublicProjection");
+      expect(
+        resolveProviderPolicySurface("fixture-embedding", {
+          manifestRegistry: { plugins: [fixturePlugin as never] },
+        })?.inspectEmbeddingProviderSetup?.({
+          config: {},
+          env: {},
+          agentId: "main",
+          provider: "fixture-embedding",
+        }),
+      ).toEqual({
         provider: "fixture-embedding",
-      }),
-    ).toEqual({
-      provider: "fixture-embedding",
-      reason: "setup missing",
-      requirement: "fixture-setup",
-    });
+        reason: "setup missing",
+        requirement: "fixture-setup",
+      });
+    } finally {
+      restoreBundledPluginEnv();
+      fs.rmSync(pluginRoot, { recursive: true, force: true });
+      fs.rmSync(bundledPluginsDir, { recursive: true, force: true });
+    }
   });
 
   it.each(["bundled", "untrusted", "cold", "loaded", "catalog", "evaluation-error"] as const)(
@@ -472,15 +499,19 @@ describe("provider public artifacts", () => {
         cliBackends: [],
         contracts: { embeddingProviders: ["fixture-embedding"] },
       }) as never;
-    const manifestRegistry = {
-      plugins: [owner("a-missing-policy", missingPolicyRoot), owner("b-policy", policyRoot)],
-    };
+    try {
+      const manifestRegistry = {
+        plugins: [owner("a-missing-policy", missingPolicyRoot), owner("b-policy", policyRoot)],
+      };
 
-    const owners = listTrustedExternalProviderPolicyOwners("fixture-embedding", manifestRegistry);
-    const artifacts = loadProviderPolicyArtifacts(owners);
+      const owners = listTrustedExternalProviderPolicyOwners("fixture-embedding", manifestRegistry);
+      const artifacts = loadProviderPolicyArtifacts(owners);
 
-    expect(artifacts?.owner.id).toBe("b-policy");
-    expect(artifacts?.surface?.inspectEmbeddingProviderSetup).toBeTypeOf("function");
+      expect(artifacts?.owner.id).toBe("b-policy");
+      expect(artifacts?.surface?.inspectEmbeddingProviderSetup).toBeTypeOf("function");
+    } finally {
+      fs.rmSync(policyRoot, { recursive: true, force: true });
+    }
   });
 
   it.runIf(process.platform !== "win32")(
@@ -524,89 +555,159 @@ describe("provider public artifacts", () => {
   );
 
   it("resolves namespaced provider policies from their trusted external plugin root", () => {
-    isolateBundledPlugins();
+    const bundledPluginsDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-empty-bundled-plugins-"),
+    );
     const pluginRoot = writeExternalPolicyFixture();
-    const fixturePlugin = externalPolicyOwner(pluginRoot, "fixture:nvidia");
 
-    const surface = resolveProviderPolicySurface("fixture:nvidia", {
-      manifestRegistry: { plugins: [fixturePlugin] },
-    });
+    try {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+      process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+      const fixturePlugin = {
+        id: "fixture-provider",
+        origin: "external",
+        trustedOfficialInstall: true,
+        rootDir: pluginRoot,
+        providers: ["fixture:nvidia"],
+        cliBackends: [],
+      } as const;
 
-    expect(
-      surface
-        ?.resolveThinkingProfile?.({ provider: "fixture:nvidia", modelId: "full" })
-        ?.levels.map((level) => level.id),
-    ).toEqual(["off", "high", "max"]);
+      const surface = resolveProviderPolicySurface("fixture:nvidia", {
+        manifestRegistry: { plugins: [fixturePlugin as never] },
+      });
+
+      expect(
+        surface
+          ?.resolveThinkingProfile?.({ provider: "fixture:nvidia", modelId: "full" })
+          ?.levels.map((level) => level.id),
+      ).toEqual(["off", "high", "max"]);
+    } finally {
+      restoreBundledPluginEnv();
+      fs.rmSync(pluginRoot, { recursive: true, force: true });
+      fs.rmSync(bundledPluginsDir, { recursive: true, force: true });
+    }
   });
 
   it.each([false, true])(
     "does not load public policy code from untrusted external plugins (configured=%s)",
     (configured) => {
       const pluginRoot = writeExternalPolicyFixture();
-      expect(
-        resolveProviderPolicySurface("fixture-provider", {
-          config: configured ? { plugins: { allow: ["fixture-provider"] } } : undefined,
-          manifestRegistry: {
-            plugins: [
-              {
-                id: "fixture-provider",
-                origin: "external",
-                rootDir: pluginRoot,
-                providers: ["fixture-provider"],
-                cliBackends: [],
-              } as never,
-            ],
-          },
-        }),
-      ).toBeNull();
+      try {
+        expect(
+          resolveProviderPolicySurface("fixture-provider", {
+            config: configured ? { plugins: { allow: ["fixture-provider"] } } : undefined,
+            manifestRegistry: {
+              plugins: [
+                {
+                  id: "fixture-provider",
+                  origin: "external",
+                  rootDir: pluginRoot,
+                  providers: ["fixture-provider"],
+                  cliBackends: [],
+                } as never,
+              ],
+            },
+          }),
+        ).toBeNull();
+      } finally {
+        fs.rmSync(pluginRoot, { recursive: true, force: true });
+      }
     },
   );
 
-  it.each([
-    {
-      owner: { id: "xai", providers: ["xai"], providerAuthAliases: { "x-ai": "xai" } },
-      provider: "x-ai",
-      modelId: "grok-4.5",
-      resolveThinkingProfile: ({ provider, modelId }: { provider: string; modelId: string }) =>
-        provider === "x-ai" && modelId === "grok-4.5"
-          ? { levels: [{ id: "low" }, { id: "medium" }, { id: "high" }], defaultLevel: "high" }
-          : { levels: [{ id: "off" }], defaultLevel: "off" },
-      expected: { levels: [{ id: "low" }, { id: "medium" }, { id: "high" }], defaultLevel: "high" },
-    },
-    {
-      owner: { id: "anthropic", providers: ["anthropic"], cliBackends: ["claude-cli"] },
-      provider: "claude-cli",
-      modelId: "claude-opus-4-8",
-      resolveThinkingProfile: ({ provider }: { provider: string }) => ({
-        levels: [{ id: provider }],
-      }),
-      expected: { levels: [{ id: "claude-cli" }] },
-    },
-    {
-      owner: { id: "owner", providers: ["alias"] },
-      provider: "alias",
-      modelId: "demo",
-      resolveThinkingProfile: () => ({ levels: [{ id: "owner" }] }),
-      expected: { levels: [{ id: "owner" }] },
-    },
-  ])("resolves manifest-owned policy for $provider without scanning", async (test) => {
-    const { owner, provider, modelId, resolveThinkingProfile, expected } = test;
-    const { resolve, loadArtifact, scan } = await loadOwnedPolicyResolver(provider, owner.id, {
-      resolveThinkingProfile,
+  it("resolves bundled policy artifacts through provider auth aliases", async () => {
+    const loadPluginManifestRegistry = forbidManifestRegistryScan();
+    const loadArtifact = vi.fn(({ dirName }: { dirName: string }) => {
+      if (dirName !== "xai") {
+        return null;
+      }
+      return {
+        resolveThinkingProfile: ({ provider, modelId }: { provider: string; modelId: string }) =>
+          provider === "x-ai" && modelId === "grok-4.5"
+            ? {
+                levels: [{ id: "low" }, { id: "medium" }, { id: "high" }],
+                defaultLevel: "high",
+              }
+            : { levels: [{ id: "off" }], defaultLevel: "off" },
+      };
     });
-    const surface = resolve(provider, {
-      manifestRegistry: { plugins: [createPluginManifestRecordFixture(owner)] },
+
+    const resolvePolicySurface = await loadPolicyResolver("provider-auth-alias", loadArtifact);
+
+    const surface = resolvePolicySurface("x-ai", {
+      manifestRegistry: {
+        plugins: [
+          createPluginManifestRecordFixture({
+            id: "xai",
+            manifestPath: "/tmp/xai/openclaw.plugin.json",
+            providers: ["xai"],
+            providerAuthAliases: { "x-ai": "xai" },
+            rootDir: "/tmp/xai",
+            source: "/tmp/xai/index.js",
+          }),
+        ],
+      },
     });
-    expect(surface?.resolveThinkingProfile?.({ provider, modelId })).toEqual(expected);
+
+    expect(surface?.resolveThinkingProfile?.({ provider: "x-ai", modelId: "grok-4.5" })).toEqual({
+      levels: [{ id: "low" }, { id: "medium" }, { id: "high" }],
+      defaultLevel: "high",
+    });
     expect(loadArtifact).toHaveBeenCalledWith({
-      dirName: owner.id,
+      dirName: "xai",
       artifactCandidates: ["provider-policy-api.js"],
     });
-    expect(scan).not.toHaveBeenCalled();
+    expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
+  });
+
+  it("resolves bundled policy artifacts for a plugin-owned CLI backend", async () => {
+    const loadPluginManifestRegistry = forbidManifestRegistryScan();
+    const loadArtifact = vi.fn(({ dirName }: { dirName: string }) => {
+      if (dirName !== "anthropic") {
+        return null;
+      }
+      return {
+        resolveThinkingProfile: ({ provider }: { provider: string }) => ({
+          levels: [{ id: provider }],
+        }),
+      };
+    });
+
+    const resolvePolicySurface = await loadPolicyResolver("provider-cli-backend", loadArtifact);
+
+    // CLI backend ids use the same provider-policy owner boundary as provider ids.
+    // Without it, claude-cli subagents fall back to the base thinking profile.
+    const surface = resolvePolicySurface("claude-cli", {
+      manifestRegistry: {
+        plugins: [
+          createPluginManifestRecordFixture({
+            id: "anthropic",
+            cliBackends: ["claude-cli"],
+            manifestPath: "/tmp/anthropic/openclaw.plugin.json",
+            providers: ["anthropic"],
+            rootDir: "/tmp/anthropic",
+            source: "/tmp/anthropic/index.js",
+          }),
+        ],
+      },
+    });
+
+    expect(
+      surface?.resolveThinkingProfile?.({ provider: "claude-cli", modelId: "claude-opus-4-8" }),
+    ).toEqual({
+      levels: [{ id: "claude-cli" }],
+    });
+    expect(loadArtifact).toHaveBeenCalledWith({
+      dirName: "anthropic",
+      artifactCandidates: ["provider-policy-api.js"],
+    });
+    expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
   });
 
   it("keeps manifest-owned provider policy aliases stable until a new operation", async () => {
-    const bundledPluginsDir = tempDirs.make("openclaw-provider-policy-refresh-");
+    const bundledPluginsDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-provider-policy-refresh-"),
+    );
     const writePlugin = (pluginId: string, providers: string[], version: number) => {
       const pluginDir = path.join(bundledPluginsDir, pluginId);
       fs.mkdirSync(pluginDir, { recursive: true });
@@ -626,31 +727,79 @@ describe("provider public artifacts", () => {
       );
     };
 
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
-    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
-    writePlugin("first", ["fixture-provider"], 1);
-    writePlugin("second", [], 1);
-    const resolvePolicySurface = await loadPolicyResolver(
-      "provider-alias-refresh",
-      ({ dirName }) =>
-        dirName === "first" || dirName === "second"
-          ? { resolveThinkingProfile: () => ({ levels: [{ id: dirName }] }) }
-          : null,
+    const loadBundledPluginPublicArtifactModuleFromCandidatesSync = vi.fn(
+      ({ dirName }: { dirName: string }) => {
+        if (dirName !== "first" && dirName !== "second") {
+          return null;
+        }
+        return {
+          resolveThinkingProfile: () => ({ levels: [{ id: dirName }] }),
+        };
+      },
     );
 
-    const owner = createPluginCache();
-    const levels = () =>
-      resolvePolicySurface("fixture-provider")
-        ?.resolveThinkingProfile?.({ provider: "fixture-provider", modelId: "demo" })
-        ?.levels.map((level) => level.id);
-    expect(withPluginCache(owner, levels)).toEqual(["first"]);
+    vi.doMock("./public-surface-loader.js", () => ({
+      loadBundledPluginPublicArtifactModuleFromCandidatesSync,
+    }));
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
 
-    writePlugin("first", [], 2);
-    writePlugin("second", ["fixture-provider"], 2);
-    clearPluginMetadataLifecycleCaches();
+    try {
+      writePlugin("first", ["fixture-provider"], 1);
+      writePlugin("second", [], 1);
+      const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
+        typeof import("./provider-public-artifacts.js")
+      >(import.meta.url, "./provider-public-artifacts.js?scope=provider-alias-refresh");
 
-    expect(withPluginCache(owner, levels)).toEqual(["first"]);
-    expect(withPluginCache(createPluginCache(), levels)).toEqual(["second"]);
+      const owner = createPluginCache();
+      const levels = () =>
+        resolvePolicySurface("fixture-provider")
+          ?.resolveThinkingProfile?.({ provider: "fixture-provider", modelId: "demo" })
+          ?.levels.map((level) => level.id);
+      expect(withPluginCache(owner, levels)).toEqual(["first"]);
+
+      writePlugin("first", [], 2);
+      writePlugin("second", ["fixture-provider"], 2);
+      clearPluginMetadataLifecycleCaches();
+
+      expect(withPluginCache(owner, levels)).toEqual(["first"]);
+      expect(withPluginCache(createPluginCache(), levels)).toEqual(["second"]);
+    } finally {
+      fs.rmSync(bundledPluginsDir, { force: true, recursive: true });
+    }
+  });
+
+  it("uses caller-provided manifest metadata for provider policy aliases", async () => {
+    const loadPluginManifestRegistry = forbidManifestRegistryScan();
+    const loadArtifact = vi.fn(({ dirName }: { dirName: string }) => {
+      if (dirName !== "owner") {
+        return null;
+      }
+      return {
+        resolveThinkingProfile: () => ({ levels: [{ id: dirName }] }),
+      };
+    });
+
+    const resolvePolicySurface = await loadPolicyResolver("provider-alias-manifest", loadArtifact);
+
+    const surface = resolvePolicySurface("alias", {
+      manifestRegistry: {
+        plugins: [
+          createPluginManifestRecordFixture({
+            id: "owner",
+            manifestPath: "/tmp/owner/openclaw.plugin.json",
+            providers: ["alias"],
+            rootDir: "/tmp/owner",
+            source: "/tmp/owner/index.js",
+          }),
+        ],
+      },
+    });
+
+    expect(surface?.resolveThinkingProfile?.({ provider: "alias", modelId: "demo" })).toEqual({
+      levels: [{ id: "owner" }],
+    });
+    expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
   });
 
   it("keeps canonical provider policy lookup on the direct artifact path", async () => {
@@ -674,7 +823,15 @@ describe("provider public artifacts", () => {
 
   it("recognizes resolveModelRoutes as a standalone provider policy surface", async () => {
     const resolveModelRoutes = vi.fn(() => ({
-      kind: "indeterminate" as const,
+      kind: "routes" as const,
+      routes: [
+        {
+          api: "openai-responses",
+          baseUrl: "https://fixture.example.test/v1",
+          authRequirement: "api-key" as const,
+          requestTransportOverrides: "none" as const,
+        },
+      ] as const,
     }));
     const loadArtifact = vi.fn(() => ({
       resolveModelRoutes,
@@ -683,7 +840,15 @@ describe("provider public artifacts", () => {
 
     const surface = resolvePolicySurface("openai");
     expect(surface?.resolveModelRoutes?.({ provider: "openai" })).toEqual({
-      kind: "indeterminate",
+      kind: "routes",
+      routes: [
+        {
+          api: "openai-responses",
+          baseUrl: "https://fixture.example.test/v1",
+          authRequirement: "api-key",
+          requestTransportOverrides: "none",
+        },
+      ],
     });
   });
 });

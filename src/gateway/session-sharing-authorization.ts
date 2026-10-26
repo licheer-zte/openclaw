@@ -136,10 +136,6 @@ export function prepareSessionMutationAuthorizationRequest(
   // Progress remains bound to its captured conversation even for administrators.
   const bindsProgressLifecycle =
     params.method === "progressCard.put" || params.method === "progressCard.refresh";
-  // Administrator access still needs the exact Talk target for transport ownership.
-  const bindsTalkTarget =
-    resolveTalkSessionTargetInput(params.method, params.requestParams, params.client?.connId) !==
-    undefined;
   const adminBypass = isGatewayAdmin(params.client) && !authorizesAgentRun;
   if (
     !adminBypass &&
@@ -158,7 +154,6 @@ export function prepareSessionMutationAuthorizationRequest(
       !adminBypass ||
       requiresCommunicationAuthority ||
       bindsProgressLifecycle ||
-      bindsTalkTarget ||
       params.expectedTarget !== undefined,
     targetOwnership: {
       requireOwner:

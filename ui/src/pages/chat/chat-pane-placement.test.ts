@@ -6,7 +6,7 @@ import type {
   WorkerEnvironmentProfileSummary,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { nativeRuntime, createSessionsListResult } from "../../test-helpers/chat-model.ts";
+import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
   answerConfirmDialog,
@@ -133,7 +133,14 @@ function repositoryRecoveryFixture(placementState: "local" | undefined) {
           },
         }
       : {}),
-    agentRuntime: { ...nativeRuntime(), devicePlacementSupported: true },
+    agentRuntime: {
+      id: "openclaw",
+      cloudPlacementSupported: true,
+      cloudPlacementExecutionMode: "worker-turn",
+      devicePlacementSupported: true,
+      devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+      source: "model",
+    },
   };
   state.sessionKey = session.key;
   state.currentSessionId = session.sessionId;

@@ -169,9 +169,6 @@ describe("chat composer queue reordering", () => {
     vi.stubGlobal("requestAnimationFrame", requestFrame);
     vi.stubGlobal("cancelAnimationFrame", cancelFrame);
     const container = renderQueue({ queue: items("abcd"), onQueueMove: vi.fn() });
-    // Settle text measurement before observing the drag's animation frames.
-    frames.splice(0).forEach((frame) => frame(0));
-    requestFrame.mockClear();
     const scroll = find(container, "scroll")!;
     vi.spyOn(scroll, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 100, 100));
     scroll.scrollTop = 10;

@@ -74,7 +74,6 @@ export async function seedClawPackageBootstrap(
     ...(options.nowMs !== undefined ? { nowMs: options.nowMs } : {}),
     stateOptions: { ...options, readOnly: options.stateMode === "worker" },
     beforePersistentApply: assertForwardCurrent,
-    beforePersistentEffect: options.prepareEffect,
     mergeSetupState: (workspaceDir, next, nowMs) => {
       if (!next.bootstrapSeededAt) {
         throw new ClawBootstrapWriteError("Missing bootstrap timestamp.");

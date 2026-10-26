@@ -1,9 +1,9 @@
 import { expect, it, vi } from "vitest";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -38,15 +38,19 @@ it("publishes a selected requester wake before an overlapping row mutation plans
     if (!selected) {
       throw new Error("Selected requester wake is unavailable");
     }
-    const wakeGate = createEnteredGate();
-    const ackGate = createEnteredGate();
+    const wakeReached = createDeferredCore();
+    const releaseWake = createDeferredCore();
+    const ackReached = createDeferredCore();
+    const releaseAck = createDeferredCore();
     const held = probe.command(stateWorker, async (command, executeOptions, scope) => {
       if (command.type === "sessionDelivery.mutateSubagentCompletion") {
-        await wakeGate.wait();
+        wakeReached.resolve();
+        await releaseWake.promise;
       }
       const receipt = await scope.execute(command, executeOptions);
       if (command.type === "subagents.persistChanges") {
-        await ackGate.wait();
+        ackReached.resolve();
+        await releaseAck.promise;
       }
       return receipt;
     });
@@ -61,10 +65,14 @@ it("publishes a selected requester wake before an overlapping row mutation plans
       onCommitted: () => {},
       onPublished: () => {},
     });
+    const wakeResult = wake.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
     let successor: Promise<void> | undefined;
     const successorPlanned = vi.fn();
     try {
-      await Promise.race([wakeGate.entered, wake]);
+      await Promise.race([wakeReached.promise, wake]);
       successor = mutateSubagentRuns(
         [entry.runId],
         (rows) => {
@@ -77,12 +85,12 @@ it("publishes a selected requester wake before an overlapping row mutation plans
         { context },
       );
       expect(successorPlanned).not.toHaveBeenCalled();
-      wakeGate.release();
-      await expect(wake).resolves.toEqual({ applied: true, publication: "published" });
-      await Promise.race([ackGate.entered, successor]);
+      releaseWake.resolve();
+      expect(await wakeResult).toEqual({ value: { applied: true, publication: "published" } });
+      await Promise.race([ackReached.promise, successor]);
       expect(subagentRuns.get(entry.runId)?.requesterSettleWake?.status).toBe("dispatching");
       expect(selected.requesterSettleWake?.status).toBe("pending");
-      ackGate.release();
+      releaseAck.resolve();
       await successor;
       expect(successorPlanned).toHaveBeenCalledOnce();
       expect(subagentRuns.get(entry.runId)?.cleanupHandled).toBe(true);
@@ -90,8 +98,8 @@ it("publishes a selected requester wake before an overlapping row mutation plans
         "dispatching",
       );
     } finally {
-      wakeGate.release();
-      ackGate.release();
+      releaseWake.resolve();
+      releaseAck.resolve();
       await Promise.allSettled([wake, successor]);
       held.mockRestore();
       subagentRuns.delete(entry.runId);

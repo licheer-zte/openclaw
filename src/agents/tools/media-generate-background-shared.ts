@@ -110,8 +110,6 @@ type CreateMediaGenerationTaskRunParams = {
 type RecordMediaGenerationTaskProgressParams = {
   handle: MediaGenerationTaskHandle | null;
   progressSummary: string;
-  provider?: string;
-  model?: string;
 };
 
 type CompleteMediaGenerationTaskRunParams = {
@@ -326,8 +324,6 @@ function recordMediaGenerationTaskProgress(params: RecordMediaGenerationTaskProg
   touchMediaGenerationTaskRunContext(params.handle);
   updateMediaGenerationOperation(params.handle.runId, {
     progressSummary: params.progressSummary,
-    ...(params.provider ? { provider: params.provider } : {}),
-    ...(params.model ? { model: params.model } : {}),
   });
 }
 

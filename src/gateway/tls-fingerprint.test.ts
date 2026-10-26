@@ -6,7 +6,7 @@ import { TEST_TLS_CERT_PEM } from "../../test/helpers/tls-fixture.js";
 import type { GatewayTlsConfig } from "../config/types.gateway.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { CONFIG_DIR, pinConfigDir } from "../utils.js";
-import { resolveGatewayClientBootstrap } from "./client-bootstrap.js";
+import { resolveGatewayConnectionTlsFingerprint } from "./tls-fingerprint.js";
 
 const tempDirs = createTrackedTempDirs();
 const originalConfigDir = CONFIG_DIR;
@@ -21,11 +21,11 @@ afterEach(async () => {
 });
 
 function resolveLocalPin(tls: GatewayTlsConfig) {
-  return resolveGatewayClientBootstrap({
-    config: { gateway: { mode: "local", port: 32123, tls } },
-    ignoreEnvUrlOverride: true,
-    skipImplicitAuth: true,
-  }).then(({ tlsFingerprint }) => tlsFingerprint);
+  return resolveGatewayConnectionTlsFingerprint({
+    config: { gateway: { mode: "local", tls } },
+    url: "wss://127.0.0.1:32123",
+    urlSource: "local loopback",
+  });
 }
 
 describe("Gateway client certificate inspection", () => {

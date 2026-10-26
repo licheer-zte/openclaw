@@ -103,6 +103,7 @@ it.each([
     ...baseContext,
     basePath: "",
     settingsAgentSelection: selection,
+    channels: { state: {}, subscribe: () => () => undefined },
     runtimeConfig: {
       state: { configForm: {}, configSnapshot: {} },
       subscribe: () => () => undefined,

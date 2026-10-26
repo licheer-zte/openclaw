@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -604,9 +603,6 @@ export async function handleInvoke(
             : { complete: false, patterns: [] },
         });
       } catch (err) {
-        logWarn(
-          `node host system.run.prepare failed: ${err instanceof Error ? formatErrorStackWithMessage(err) : String(err)}`,
-        );
         await response.invalid(err);
       }
       return;

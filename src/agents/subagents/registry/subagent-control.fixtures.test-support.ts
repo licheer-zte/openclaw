@@ -136,8 +136,10 @@ export function holdControlSessionPublication<Consumer>(options: {
   signal: AbortSignal;
   consumerScope: AsyncLocalStorage<Consumer>;
   onJoined?: (consumer: Consumer) => void;
+  beforeHeld?: () => Promise<void>;
   afterReleased?: () => void;
   reserveBeforeReply?: boolean;
+  mutateExecution?: boolean;
 }) {
   const producerScope = new AsyncLocalStorage<boolean>();
   const nativeHeld = createDeferredCore();
@@ -177,6 +179,9 @@ export function holdControlSessionPublication<Consumer>(options: {
     return result;
   });
   const holdReply = async <T>(value: T) => {
+    if (options.beforeHeld) {
+      await options.beforeHeld();
+    }
     nativeHeld.resolve();
     await releaseNative.promise;
     options.afterReleased?.();
@@ -212,6 +217,10 @@ export function holdControlSessionPublication<Consumer>(options: {
           }),
         runOptions,
       );
+    if (options.mutateExecution) {
+      execution.runExisting = runExisting;
+      return execution;
+    }
     return new Proxy(execution, {
       get(target, key, receiver) {
         return key === "runExisting" ? runExisting : Reflect.get(target, key, receiver);

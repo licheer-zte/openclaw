@@ -146,8 +146,6 @@ export type SelectionChange =
       key: string;
       agentId: string;
       row: SelectionRow | undefined;
-      /** Synchronous internal publication scope; deferred refreshes have no causal label. */
-      scope?: string;
     };
 
 export function selectionRow(row: Row): SelectionRow | undefined {
@@ -169,7 +167,6 @@ export type Query = {
   storePath?: string;
   key?: string;
   sessionIdOrKey?: string;
-  candidateSessionIdsOrKeys?: ReadonlySet<string>;
   /** Prepared qualified rows carry identity; raw keys retain alias resolution. */
   parentSessionKey?: string | Pick<Row, "key" | "agentId">;
   sortBy?: Parameters<typeof compareSessionEntryPairs>[2] | null;
@@ -601,15 +598,7 @@ export function readSessionRowParents(
   for (const run of context.subagentRunsByChildSessionKey.get(row.key) ?? []) {
     addParent(run.controllerSessionKey || run.requesterSessionKey);
   }
-  if (parents.size !== row.parents.size) {
-    return parents;
-  }
-  for (const parent of parents) {
-    if (!row.parents.has(parent)) {
-      return parents;
-    }
-  }
-  return row.parents;
+  return parents;
 }
 
 /** Reproject held lineage without acquiring board, transcript, or database facts. */
@@ -626,22 +615,13 @@ export function readSessionRowLineage(
     (key) =>
       selectSessionRowParent(cfg, key, row.agentId, row.storeTarget.storePath, referenced).key,
   );
-  // Accepted source identity covers every field except the two projected lineage keys.
-  // Deferred archives have newer stored metadata but have not accepted its projection yet.
-  const entry =
-    row.entry &&
-    (!row.entryAcquisitionPending && row.storedEntry === storedEntry
-      ? row.entry.parentSessionKey === projected.parentSessionKey &&
-        row.entry.spawnedBy === projected.spawnedBy
-      : isDeepStrictEqual(row.entry, projected))
-      ? row.entry
-      : projected;
+  const entry = row.entry && isDeepStrictEqual(row.entry, projected) ? row.entry : projected;
   const parents = readSessionRowParents(row, storedEntry, cfg, context, referenced);
   const selection =
     entry === row.entry ? row.selection : readSessionListSelectionFacts(row.key, entry);
   return {
     entry,
-    parents,
+    parents: isDeepStrictEqual(row.parents, parents) ? row.parents : parents,
     selection: isDeepStrictEqual(row.selection, selection) ? row.selection : selection,
   };
 }

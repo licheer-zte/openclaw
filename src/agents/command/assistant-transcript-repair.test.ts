@@ -58,33 +58,30 @@ function setup(pendingTranscriptRepair?: SessionEntry["pendingTranscriptRepair"]
   };
 }
 
-const appended = {
-  ok: true as const,
-  target: { agentId: "main", sessionId: "session-1", sessionKey, storePath },
-  messageId: "message-1",
-};
+function successfulAppend(messageId: string) {
+  return {
+    ok: true as const,
+    target: { agentId: "main", sessionId: "session-1", sessionKey, storePath },
+    messageId,
+  };
+}
 
 function repair(text = "missing", id = "repair-1", createdAt = 10) {
   return { id, text, createdAt };
 }
 
-function expectedAppend(item: ReturnType<typeof repair>, provider = "cli", model = "default") {
+function expectedAppend(id: string, message: Record<string, unknown>) {
   return expect.objectContaining({
-    idempotencyKey: `transcript-repair:${item.id}`,
+    idempotencyKey: `transcript-repair:${id}`,
     expectedSessionId: "session-1",
     updateMode: "file-only",
-    message: expect.objectContaining({
-      provider,
-      model,
-      timestamp: item.createdAt,
-      content: [{ type: "text", text: item.text }],
-    }),
+    message: expect.objectContaining(message),
   });
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  append.mockResolvedValue(appended);
+  append.mockResolvedValue(successfulAppend("message-1"));
   persist.mockImplementation(async (params) => {
     if (params.shouldPersist?.(params.sessionStore[params.sessionKey]) !== false) {
       params.sessionStore[params.sessionKey] = params.entry;
@@ -95,7 +92,7 @@ beforeEach(() => {
 });
 
 it("appends a canonical record and fences it to the run-owned session", async () => {
-  const existingRepair = repair("first", "repair-1", 1);
+  const existingRepair = { id: "repair-1", text: "first", createdAt: 1 };
   const fixture = setup([existingRepair]);
   await fixture.record("second", { provider: " openai ", model: " gpt-5.5 " });
 
@@ -124,21 +121,31 @@ it("does not fail the completed turn when repair-record persistence fails", asyn
   expect(warn).toHaveBeenCalledWith(expect.stringContaining("store unavailable"));
 });
 
-it("replays every missing final in order with stable keys after cleanup fails", async () => {
+it("replays every missing final in order before clearing the backlog", async () => {
   const fixture = setup([
     { ...repair("first"), provider: "openai", model: "gpt-5.5" },
     repair("second", "repair-2", 20),
   ]);
-  persist.mockRejectedValueOnce(new Error("cleanup unavailable"));
+  append
+    .mockResolvedValueOnce(successfulAppend("message-1"))
+    .mockResolvedValueOnce(successfulAppend("message-2"));
+
   await fixture.replay();
-  expect(fixture.pending()).toHaveLength(2);
-  const expected = [
-    expectedAppend(repair("first"), "openai", "gpt-5.5"),
-    expectedAppend(repair("second", "repair-2", 20)),
-  ];
-  expect(append.mock.calls.map(([params]) => params)).toEqual(expected);
-  await fixture.replay();
-  expect(append.mock.calls.map(([params]) => params)).toEqual([...expected, ...expected]);
+
+  expect(append.mock.calls.map(([params]) => params)).toEqual([
+    expectedAppend("repair-1", {
+      provider: "openai",
+      model: "gpt-5.5",
+      timestamp: 10,
+      content: [{ type: "text", text: "first" }],
+    }),
+    expectedAppend("repair-2", {
+      provider: "cli",
+      model: "default",
+      timestamp: 20,
+      content: [{ type: "text", text: "second" }],
+    }),
+  ]);
   expect(fixture.pending()).toBeUndefined();
 });
 
@@ -154,15 +161,32 @@ it.each([
     expect(fixture.pending()).toBeUndefined();
   } else {
     await expect(replay).rejects.toThrow("pending transcript recovery");
+    expect(persist).not.toHaveBeenCalled();
     expect(fixture.pending()).toHaveLength(1);
   }
+});
+
+it("retries cleanup with the same append idempotency key", async () => {
+  const fixture = setup([repair()]);
+  persist.mockRejectedValueOnce(new Error("cleanup unavailable"));
+
+  await fixture.replay();
+  expect(fixture.pending()).toHaveLength(1);
+
+  await fixture.replay();
+
+  expect(append.mock.calls.map(([params]) => params.idempotencyKey)).toEqual([
+    "transcript-repair:repair-1",
+    "transcript-repair:repair-1",
+  ]);
+  expect(fixture.pending()).toBeUndefined();
 });
 
 it("does not clear repair state from a replacement session", async () => {
   const fixture = setup([repair()]);
   append.mockImplementationOnce(async () => {
     fixture.sessionStore[sessionKey] = makeEntry({ sessionId: "replacement" });
-    return appended;
+    return successfulAppend("message-1");
   });
 
   await fixture.replay();

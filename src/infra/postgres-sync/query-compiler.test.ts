@@ -18,32 +18,26 @@ const postgres = new Kysely<Tables>({
     },
   }),
 });
-const items = () => postgres.selectFrom("items").selectAll();
-const jsonSet = (position = 1) =>
-  `(SELECT value FROM json_array_elements_text($${position}::json) AS value)`;
-const jsonEntries =
-  "(SELECT ordinality - 1 AS key, value FROM json_array_elements_text($1::json) WITH ORDINALITY AS entries(value, ordinality))";
-function expectQuery(
-  query: { compile(): { sql: string; parameters: readonly unknown[] } },
-  expectedSql: string,
-  parameters: unknown[],
-) {
-  const compiled = query.compile();
-  expect([compiled.sql, compiled.parameters]).toEqual([expectedSql, parameters]);
-}
 
 // Live two-engine semantics and the selective index plan are covered by string-set.conformance.
 describe("PostgreSQL string-set compilation", () => {
   it("lowers positive membership without changing parameter positions or count", () => {
-    const values = ["a\n", "λ🦞", "'); drop table items; --"];
-    expectQuery(
-      items()
-        .where("name", "=", "first")
-        .where("id", "in", sqliteStringSet(values))
-        .where("name", "!=", "last"),
+    const values = ["a", "λ🦞", "'); drop table items; --"];
+    const compiled = postgres
+      .selectFrom("items")
+      .selectAll()
+      .where("name", "=", "first")
+      .where("id", "in", sqliteStringSet(values))
+      .where("name", "!=", "last")
+      .compile();
+    expect(compiled.sql).toBe(
       'select * from "items" where "name" = $1 and "id" = ANY($2::text[]) and "name" != $3',
-      ["first", '{"a\n","λ🦞","\'); drop table items; --"}', "last"],
     );
+    expect(compiled.parameters).toEqual([
+      "first",
+      '{"a","λ🦞","\'); drop table items; --"}',
+      "last",
+    ]);
   });
 
   it.each([
@@ -67,44 +61,72 @@ describe("PostgreSQL string-set compilation", () => {
     (encoded) => {
       // kysely-allow-raw: Exercise the shared primitive's identity with unsupported bindings.
       const set = sql<string>(sqliteStringSetFragments, encoded);
-      expectQuery(
-        items().where("id", "in", set),
-        `select * from "items" where "id" in ${jsonSet()}`,
-        [encoded],
+      const compiled = postgres.selectFrom("items").selectAll().where("id", "in", set).compile();
+      expect(compiled.sql).toBe(
+        'select * from "items" where "id" in (SELECT value FROM json_array_elements_text($1::json) AS value)',
       );
+      expect(compiled.parameters).toEqual([encoded]);
     },
   );
 
   it("keeps NOT IN, relation-valued sets and opaque predicates unchanged", () => {
     const values = ["a", "b"];
-    const parameters = [encodeSqliteStringSet(values)];
-    expectQuery(
-      items().where("id", "not in", sqliteStringSet(values)),
-      `select * from "items" where "id" not in ${jsonSet()}`,
-      parameters,
+    const excluded = postgres
+      .selectFrom("items")
+      .selectAll()
+      .where("id", "not in", sqliteStringSet(values))
+      .compile();
+    expect(excluded.sql).toBe(
+      'select * from "items" where "id" not in (SELECT value FROM json_array_elements_text($1::json) AS value)',
     );
-    expectQuery(
-      postgres.selectFrom(sqliteStringSet(values).as("requested")).selectAll(),
-      `select * from ${jsonSet()} as "requested"`,
-      parameters,
+    const relation = postgres
+      .selectFrom(sqliteStringSet(values).as("requested"))
+      .selectAll()
+      .compile();
+    expect(relation.sql).toBe(
+      'select * from (SELECT value FROM json_array_elements_text($1::json) AS value) as "requested"',
     );
     // kysely-allow-raw: Opaque caller-owned SQL must not be parsed or rewritten.
     const opaque = sql`id IN ${sqliteStringSet(values)}`.compile(postgres);
-    expect([opaque.sql, opaque.parameters]).toEqual([`id IN ${jsonSet()}`, parameters]);
+    expect(opaque.sql).toBe(
+      "id IN (SELECT value FROM json_array_elements_text($1::json) AS value)",
+    );
+    for (const compiled of [excluded, relation, opaque]) {
+      expect(compiled.parameters).toEqual([encodeSqliteStringSet(values)]);
+    }
   });
 
-  it("preserves deferred membership on repeated bindings", () => {
-    const deferred = compileSqliteQueryBindings<string>((parameter) => {
+  it("preserves deferred positive membership and entries bindings on repeated calls", () => {
+    const deferred = compileSqliteQueryBindings<{ encoded: string; name: string }>((parameter) => {
       // kysely-allow-raw: The deferred marker is an opaque bound expression, not a concrete set.
       const set = sql<string>(
         sqliteStringSetFragments,
-        parameter((encoded) => encoded),
+        parameter((params) => params.encoded),
       );
-      return items().where("id", "in", set);
+      return postgres
+        .selectFrom("items")
+        .selectAll()
+        .where(
+          "name",
+          "=",
+          parameter((params) => params.name),
+        )
+        .where("id", "in", set);
     });
-    expect(deferred.compiled.sql).toBe(`select * from "items" where "id" in ${jsonSet()}`);
+    expect(deferred.compiled.sql).toBe(
+      'select * from "items" where "name" = $1 and "id" in (SELECT value FROM json_array_elements_text($2::json) AS value)',
+    );
+    const entries = compileSqliteQueryBindings<{ encoded: string }>((parameter) =>
+      postgres
+        .selectFrom(sqliteStringSetEntries(parameter((params) => params.encoded)).as("entry"))
+        .selectAll(),
+    );
+    expect(entries.compiled.sql).toBe(
+      'select * from (SELECT ordinality - 1 AS key, value FROM json_array_elements_text($1::json) WITH ORDINALITY AS entries(value, ordinality)) as "entry"',
+    );
     for (const encoded of ['["a","b"]', "[]", '["new"]']) {
-      expect(deferred.bind(encoded)).toEqual([encoded]);
+      expect(deferred.bind({ encoded, name: "first" })).toEqual(["first", encoded]);
+      expect(entries.bind({ encoded })).toEqual([encoded]);
     }
   });
 
@@ -114,13 +136,14 @@ describe("PostgreSQL string-set compilation", () => {
       // kysely-allow-raw: Exercise a caller-supplied bound expression.
       sql<string>`${'["a",null]'}`,
     ]) {
-      expectQuery(
-        postgres
-          .selectFrom(sqliteStringSetEntries(input).as("entry"))
-          .select(["entry.key", "entry.value"]),
-        `select "entry"."key", "entry"."value" from ${jsonEntries} as "entry"`,
-        ['["a",null]'],
+      const compiled = postgres
+        .selectFrom(sqliteStringSetEntries(input).as("entry"))
+        .select(["entry.key", "entry.value"])
+        .compile();
+      expect(compiled.sql).toBe(
+        'select "entry"."key", "entry"."value" from (SELECT ordinality - 1 AS key, value FROM json_array_elements_text($1::json) WITH ORDINALITY AS entries(value, ordinality)) as "entry"',
       );
+      expect(compiled.parameters).toEqual(['["a",null]']);
     }
   });
 
@@ -133,15 +156,26 @@ describe("PostgreSQL string-set compilation", () => {
     expect(entries.parameters).toEqual(["[]"]);
   });
 
-  it("preserves native SQLite entries compilation", () => {
+  it("preserves the SQLite helper SQL byte-for-byte", () => {
     const connection = new DatabaseSync(":memory:");
     try {
       const sqlite = getNodeSqliteKysely<Tables>(connection);
-      expectQuery(
-        sqlite.selectFrom(sqliteStringSetEntries('["a",null]').as("entry")).selectAll(),
-        'select * from json_each(?) as "entry"',
-        ['["a",null]'],
+      const set = sqlite
+        .selectFrom("items")
+        .selectAll()
+        .where("name", "=", "first")
+        .where("id", "in", sqliteStringSet(["a", "b"]))
+        .compile();
+      expect(set.sql).toBe(
+        'select * from "items" where "name" = ? and "id" in (SELECT value FROM json_each(?))',
       );
+      expect(set.parameters).toEqual(["first", '["a","b"]']);
+      const entries = sqlite
+        .selectFrom(sqliteStringSetEntries('["a",null]').as("entry"))
+        .selectAll()
+        .compile();
+      expect(entries.sql).toBe('select * from json_each(?) as "entry"');
+      expect(entries.parameters).toEqual(['["a",null]']);
     } finally {
       connection.close();
     }

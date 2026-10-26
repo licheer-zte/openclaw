@@ -6,19 +6,29 @@ import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { localDayKey } from "./logbook-state.ts";
 import type { LogbookTimelinePayload } from "./logbook-types.ts";
 import { Logbook } from "./logbook-view.tsx";
-import { logbookStatus, logbookTimeline } from "./logbook.test-support.ts";
+import { logbookTimeline } from "./logbook.test-support.ts";
 
 const day = localDayKey();
 const neverRetired = new Promise<void>(() => {});
-const status = logbookStatus(day, { todayCards: 0 });
-const empty = logbookTimeline(day);
+const status = {
+  captureEnabled: true,
+  capturePaused: false,
+  captureIntervalSeconds: 30,
+  analysisIntervalMinutes: 15,
+  retentionDays: 30,
+  pendingFrames: 0,
+  analysisRunning: false,
+  visionModelSource: "missing",
+  today: day,
+  todayCards: 0,
+  timeZone: "UTC",
+};
+const empty: LogbookTimelinePayload = {
+  day,
+  cards: [],
+  stats: { trackedMs: 0, distractionMs: 0, categories: [], apps: [] },
+};
 afterEach(cleanupSolid);
-
-function mountLogbook(request: (method: string) => unknown) {
-  return mountSolid(() => (
-    <Logbook initialClient={createTestGatewayClient(request)} getRetired={() => neverRetired} />
-  ));
-}
 
 it("shows both shared keyframes as pending until their one request resolves", async () => {
   const frame = createDeferred<{ format: string; base64: string }>();
@@ -33,7 +43,9 @@ it("shows both shared keyframes as pending until their one request resolves", as
     }
     return method === "logbook.frame" ? frameRequest() : timeline;
   };
-  const view = mountLogbook(request);
+  const view = mountSolid(() => (
+    <Logbook initialClient={createTestGatewayClient(request)} getRetired={() => neverRetired} />
+  ));
   await waitForSolid(() =>
     expect(view.container.querySelectorAll(".logbook-card__header")).toHaveLength(2),
   );
@@ -48,11 +60,6 @@ it("shows both shared keyframes as pending until their one request resolves", as
   await waitForSolid(() =>
     expect(view.container.querySelectorAll("img.logbook-card__keyframe")).toHaveLength(2),
   );
-  expect(
-    Array.from(view.container.querySelectorAll("img.logbook-card__keyframe"), (img) =>
-      img.getAttribute("src"),
-    ),
-  ).toEqual(Array(2).fill("data:image/png;base64,synthetic-preview"));
   expect(view.container.querySelectorAll(".logbook-card__keyframe--loading")).toHaveLength(0);
 });
 
@@ -62,7 +69,9 @@ it("keeps the side editor usable while a delayed timeline fails and retries", as
   const request = vi.fn((method: string) =>
     method === "logbook.status" ? status : retry ? empty : pending.promise,
   );
-  const view = mountLogbook(request);
+  const view = mountSolid(() => (
+    <Logbook initialClient={createTestGatewayClient(request)} getRetired={() => neverRetired} />
+  ));
   await waitForSolid(() =>
     expect(view.container.querySelector(".logbook__timeline")?.textContent).toContain("Loading"),
   );
@@ -82,7 +91,22 @@ it("keeps the side editor usable while a delayed timeline fails and retries", as
 
 it("keeps an expanded card mounted while a foreground refresh is pending", async () => {
   const refresh = createDeferred<LogbookTimelinePayload>();
-  const timeline = logbookTimeline(day, [{ title: "Synthetic work", detail: "Retained detail" }]);
+  const timeline: LogbookTimelinePayload = {
+    ...empty,
+    cards: [
+      {
+        id: 1,
+        day,
+        startMs: 1,
+        endMs: 2,
+        title: "Synthetic work",
+        summary: "Summary",
+        detail: "Retained detail",
+        category: "Coding",
+        distractions: [],
+      },
+    ],
+  };
   let loaded = false;
   const request = vi.fn((method: string) => {
     if (method === "logbook.status") {
@@ -94,20 +118,25 @@ it("keeps an expanded card mounted while a foreground refresh is pending", async
     loaded = true;
     return timeline;
   });
-  const view = mountLogbook(request);
+  const view = mountSolid(() => (
+    <Logbook initialClient={createTestGatewayClient(request)} getRetired={() => neverRetired} />
+  ));
   await waitForSolid(() =>
     expect(view.container.querySelector(".logbook-card__header")).not.toBeNull(),
   );
   const card = view.container.querySelector<HTMLButtonElement>(".logbook-card__header")!;
-  const detail = () => view.container.querySelector(".logbook-card__detail")?.textContent;
   card.click();
   flush();
   view.container.querySelector<HTMLButtonElement>(".logbook__actions button:last-child")!.click();
   flush();
   expect(view.container.querySelector(".logbook-card__header")).toBe(card);
-  expect(detail()).toContain("Retained detail");
+  expect(view.container.querySelector(".logbook-card__detail")?.textContent).toContain(
+    "Retained detail",
+  );
   refresh.resolve({ ...timeline, cards: [{ ...timeline.cards[0]!, title: "Updated work" }] });
   await waitForSolid(() => expect(card.textContent).toContain("Updated work"));
   expect(view.container.querySelector(".logbook-card__header")).toBe(card);
-  expect(detail()).toContain("Retained detail");
+  expect(view.container.querySelector(".logbook-card__detail")?.textContent).toContain(
+    "Retained detail",
+  );
 });

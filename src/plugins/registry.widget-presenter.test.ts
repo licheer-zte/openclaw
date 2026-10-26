@@ -45,7 +45,10 @@ describe("plugin widget presenter registry", () => {
         availability: async () => ({ ok: true, value: { available: true } }),
         present: async () => ({ ok: false, error: { code: "no_eligible_node", message: "none" } }),
       };
-      const ids = ["discord", "slack"];
+      const ids =
+        target === "node_panel"
+          ? ["first-presenter", "second-presenter"]
+          : ["discord-presenter", "slack-presenter"];
       for (const id of ids) {
         const presenter =
           target === "node_panel"
@@ -53,28 +56,36 @@ describe("plugin widget presenter registry", () => {
             : {
                 ...currentPresenter(`Present through ${id}`),
                 match: (context: Parameters<WidgetPresenter["availability"]>[0]) =>
-                  context.messageChannel === id,
+                  context.messageChannel === id.split("-")[0],
               };
         register({ id }, (api) => api.registerWidgetPresenter(presenter));
       }
-      expect(registry.widgetPresenters.map(({ pluginId }) => pluginId)).toEqual(
-        target === "current_channel" ? ids : [ids[0]],
-      );
-      if (target === "node_panel") {
-        const selected = registry.widgetPresenters[0]!.presenter;
-        const availability = await selected.availability({});
-        expect(availability).toEqual({ ok: true, value: { available: true } });
-        const document = { kind: "html" as const, html: "<p>Panel</p>" };
-        await expect(selected.present({ context: {}, document, title: "Panel" })).resolves.toEqual({
-          ok: false,
-          error: { code: "no_eligible_node", message: "none" },
-        });
-        expectDiagnostic(registry, {
-          pluginId: "slack",
-          message: "widget presenter already registered for node_panel (discord)",
-        });
-      } else {
+      if (target === "current_channel") {
+        expect(registry.widgetPresenters.map(({ pluginId }) => pluginId)).toEqual(ids);
         expect(registry.diagnostics).toEqual([]);
+      } else {
+        expect(registry.widgetPresenters).toMatchObject([
+          {
+            pluginId: "first-presenter",
+            presenter: { target, description: "Show on a connected device panel" },
+          },
+        ]);
+        const selected = registry.widgetPresenters[0]!.presenter;
+        await expect(selected.availability({})).resolves.toEqual({
+          ok: true,
+          value: { available: true },
+        });
+        await expect(
+          selected.present({
+            context: {},
+            document: { kind: "html", html: "<p>Panel</p>" },
+            title: "Panel",
+          }),
+        ).resolves.toEqual({ ok: false, error: { code: "no_eligible_node", message: "none" } });
+        expectDiagnostic(registry, {
+          pluginId: "second-presenter",
+          message: "widget presenter already registered for node_panel (first-presenter)",
+        });
       }
     },
   );

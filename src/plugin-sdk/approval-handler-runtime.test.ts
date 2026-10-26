@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { createSystemAgentChangeRequest } from "../infra/approval-handler.test-helpers.js";
 import type { SystemAgentApprovalRequest } from "../infra/system-agent-approvals.js";
 import {
   buildChannelApprovalResolvedText,
@@ -69,7 +68,14 @@ describe("approval terminal presentation", () => {
     const request: SystemAgentApprovalRequest = {
       approvalKind: "system-agent",
       id: "system-agent:change",
-      request: createSystemAgentChangeRequest("test-session"),
+      request: {
+        title: "OpenClaw change",
+        description: "restart the Gateway",
+        command: "restart the Gateway",
+        proposalHash: "a".repeat(64),
+        allowedDecisions: ["allow-once", "deny"],
+        sessionId: "test-session",
+      },
       createdAtMs: 0,
       expiresAtMs: 60_000,
     };

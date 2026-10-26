@@ -12,7 +12,6 @@ export type ModelRefRepair =
       modelRef: string;
       reason: "retirement";
       retirementScope: ModelRetirementScope;
-      cyberAccessProgram?: NonNullable<SessionEntry["cyberAccessProgram"]>;
     }
   | { kind: "clear"; provider: string; modelRef: string; retirementScope: ModelRetirementScope };
 export type ModelRefRepairResolver = (params: {

@@ -27,8 +27,7 @@ export function sanitizeAgentRunTerminalReply(rawText: string): AgentRunTerminal
   if (!text) {
     return { disposition: "empty" };
   }
-  // Retained previews must not pin the full reply through a sliced/concatenated string.
-  return { disposition: "visible", text: Buffer.from(text, "utf16le").toString("utf16le") };
+  return { disposition: "visible", text };
 }
 
 export type PreparedAgentRunTerminalReply = {

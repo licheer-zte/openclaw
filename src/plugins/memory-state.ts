@@ -322,8 +322,7 @@ function snapshotMemoryPromptContext(
   params: MemoryPromptSectionParams,
 ): PreparedMemoryPromptSection["context"] {
   return Object.freeze({
-    // oxlint-disable-next-line unicorn/no-array-sort -- The spread already owns this array.
-    availableTools: Object.freeze([...params.availableTools].sort()),
+    availableTools: Object.freeze([...params.availableTools].toSorted()),
     citationsMode: params.citationsMode,
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
@@ -357,8 +356,9 @@ export async function prepareMemoryPromptSection(
   const synchronous = buildSynchronousMemoryPromptSection(
     cloneMemoryPromptSectionParams(runParams),
   );
+  const preparationRegistrations = [...requireActivePluginRegistry().memoryPromptPreparations];
   const preparedSupplements = await Promise.all(
-    requireActivePluginRegistry().memoryPromptPreparations.map(async (registration) => ({
+    preparationRegistrations.map(async (registration) => ({
       pluginId: registration.pluginId,
       lines: filterStringEntries(
         await registration.prepare(cloneMemoryPromptSectionParams(runParams)),
@@ -368,8 +368,7 @@ export async function prepareMemoryPromptSection(
   const lines = Object.freeze([
     ...synchronous.primary,
     ...[...synchronous.supplements, ...preparedSupplements]
-      // oxlint-disable-next-line unicorn/no-array-sort -- Sort the fresh merged array without copying it again.
-      .sort((left, right) => left.pluginId.localeCompare(right.pluginId))
+      .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId))
       .flatMap((registration) => registration.lines),
   ]);
   const prepared = Object.freeze({

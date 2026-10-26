@@ -7,7 +7,10 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createDiscordNativeCommandRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { replyDirectiveParams } from "./get-reply-directives.target-session.test-helpers.js";
 import { markCompleteReplyConfig } from "./get-reply-fast-path.test-support.js";
@@ -17,7 +20,18 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-  setActivePluginRegistry(createDiscordNativeCommandRegistry());
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "discord",
+        plugin: createChannelTestPluginBase({
+          id: "discord",
+          capabilities: { nativeCommands: true, chatTypes: ["direct"] },
+        }),
+        source: "test",
+      },
+    ]),
+  );
 });
 
 afterEach(() => resetPluginRuntimeStateForTest());

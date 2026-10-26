@@ -36,18 +36,17 @@ it.each([true, false])(
   "retains queued chat input across other grants (verified identity: %s)",
   async (verified) => {
     const fixture = await createFixture();
-    const { scope, context, params } = fixture;
-    const { sessionKey: key } = scope;
+    const { sessionKey: key } = fixture.scope;
     const identity = "retained@example.test";
     const profile = ensureProfileForEmail(identity);
     let current: OpenClawConfig = {
-      ...context.getRuntimeConfig(),
+      ...fixture.context.getRuntimeConfig(),
       gateway: { auth: { identityScopes: { [identity]: ["operator.read", "operator.write"] } } },
     };
     setRuntimeConfigSnapshot(current);
-    context.getRuntimeConfig = () => current;
-    context.getCommittedRuntimeConfig = () => current;
-    context.resolveGatewayContext = () => context;
+    fixture.context.getRuntimeConfig = () => current;
+    fixture.context.getCommittedRuntimeConfig = () => current;
+    fixture.context.resolveGatewayContext = () => fixture.context;
     const close = vi.fn();
     const client = {
       ...createOperatorWsClient({ socket: { close } }),
@@ -60,19 +59,19 @@ it.each([true, false])(
       authenticatedUserProfile: dispatchProfile(profile.id, { updatedAt: profile.updatedAt }),
     };
     const harness = createDispatchTestHarness({
-      buildRequestContext: () => context,
+      buildRequestContext: () => fixture.context,
       extraHandlers: { "chat.send": handleChatSend },
     });
     const publish = (next: typeof current) => {
       current = next;
       setRuntimeConfigSnapshot(current);
-      publishOperatorRoleConfigChange(context);
+      publishOperatorRoleConfigChange(fixture.context);
       disconnectDisallowedGatewayPolicyClients([client], current);
     };
     let completion: Promise<void> | undefined;
     try {
       await harness.dispatcher.dispatch(
-        { type: "req", id: "queued-input", method: "chat.send", params },
+        { type: "req", id: "queued-input", method: "chat.send", params: fixture.params },
         client,
       );
       expect(harness.send).toHaveBeenCalledWith(
@@ -84,30 +83,32 @@ it.each([true, false])(
       >[0];
       const authority = dispatch.replyOptions?.operatorAuthority;
       assert(authority);
-      const active = rpcSourceTesting.get(params.idempotencyKey);
+      const active = rpcSourceTesting.get(fixture.params.idempotencyKey);
       assert(active);
-      const run = createQueueTestRun({ prompt: params.message });
+      const run = createQueueTestRun({ prompt: fixture.params.message });
       run.abortSignal = active.input.abortSignal;
       run.turnAdoptionLifecycle = dispatch.replyOptions?.turnAdoptionLifecycle;
       run.operatorAuthority = authority;
       bindSessionControllerSource(active.input, run);
       const settings = createQueueSettings({ mode: "followup" });
-      enqueueFollowupRun(key, run, settings, "none", async () => {}, false);
+      const queued = enqueueFollowupRun(key, run, settings, "none", async () => {}, false);
+      expect(queued).toBe(true);
       const detached = createDeferred();
-      context.removeChatRun = () => {
+      fixture.context.removeChatRun = () => {
         detached.resolve();
         return undefined;
       };
       completion = fixture.finishDispatch();
       await detached.promise;
-      const pending = await listSessionPendingInputs(scope);
+      expect(isRpcSourceQueued(active)).toBe(true);
+      const pending = await listSessionPendingInputs(fixture.scope);
       expect(pending.total).toBe(1);
       const expectRetained = async () => {
         expect(authority.assertCurrent).not.toThrow();
         expect(authority.signal?.aborted).toBe(false);
         expect(isRpcSourceQueued(active)).toBe(true);
         expect(getExistingFollowupQueue(key)?.items).toHaveLength(1);
-        expect(await listSessionPendingInputs(scope)).toEqual(pending);
+        expect(await listSessionPendingInputs(fixture.scope)).toEqual(pending);
       };
       for (const grant of [["operator.read"], ["operator.admin"], undefined] as const) {
         const next = structuredClone(current);
@@ -133,6 +134,8 @@ it.each([true, false])(
         expect(active.input.abortSignal.aborted).toBe(true);
         expect(getExistingFollowupQueue(key)?.items ?? []).toHaveLength(0);
       } else {
+        expect(authority.assertCurrent).not.toThrow();
+        expect(authority.signal?.aborted).toBe(false);
         publish({ ...current, gateway: { ...current.gateway, allowRealIpFallback: true } });
         expect(client.invalidated).toBe(true);
         expect(close).toHaveBeenCalledWith(4001, "gateway policy changed");

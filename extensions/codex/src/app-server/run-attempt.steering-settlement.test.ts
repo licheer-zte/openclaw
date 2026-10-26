@@ -368,9 +368,7 @@ it("persists a controller-adapted human steer before native dispatch", async () 
     const finalItem = f.item(final);
     await f.complete([prefix, userItem, final]);
     await finalItem;
-    const result = await f.run;
-    expect(readAttemptTerminal(result)).toMatchObject(successfulTerminal);
-    expect(result.sourceReplyDeliveryState).toBe("missing");
+    expect(readAttemptTerminal(await f.run)).toMatchObject(successfulTerminal);
     expect(f.recorder.persistApproved).toHaveBeenCalledOnce();
     expect(
       (await f.readMessages()).filter((message) => messageText(message) === steerText),

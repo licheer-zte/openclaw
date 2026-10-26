@@ -21,7 +21,7 @@ function readJsonLines<T>(file: string): T[] {
     .map((line) => JSON.parse(line));
 }
 
-function fixture(termination?: { config: string; signal: NodeJS.Signals }) {
+function fixture() {
   const root = fs.realpathSync(lifetime.createTempDir("tsgo-ci-continuation-"));
   const { file, write, json } = fixtureFiles(root);
   json("package.json", { type: "module" });
@@ -36,7 +36,6 @@ function fixture(termination?: { config: string; signal: NodeJS.Signals }) {
 import fs from "node:fs";
 const config = process.argv[process.argv.indexOf("-p") + 1];
 fs.appendFileSync(${JSON.stringify(events)}, JSON.stringify(config) + "\\n");
-${termination ? `if (config === ${JSON.stringify(termination.config)}) process.kill(process.pid, ${JSON.stringify(termination.signal)});` : ""}
 console.log("src/fixture.ts(1,1): error TS2322: Type 'string' is not assignable to type 'number'.");
 process.exitCode = 2;
 `,
@@ -47,7 +46,6 @@ process.exitCode = 2;
   }
   overrideNativeFixtureExecutable(root, compiler);
   return {
-    file,
     override(source: string, replacement: string) {
       const target = write("override.mjs", replacement);
       return preparedScriptWrapperEnv([], ciEnv(), [
@@ -92,42 +90,15 @@ it.for([
   expect(result.stdout).not.toContain("[ci-static:tsgo:completion]");
 });
 
-it.runIf(process.platform !== "win32").for([
-  { signal: "SIGTERM" as const, code: 143 },
-  { signal: "SIGKILL" as const, code: 137 },
-])("preserves $signal after an earlier diagnostic failure", async (termination, { signal }) => {
-  const f = fixture({ config: TSGO_ROOT_TEST_SHARDS[1].config, signal: termination.signal });
-  const result = await f.run(["--ci-graphs-json", '["test-root"]'], signal, ciEnv());
-  expect(result, result.stderr).toMatchObject({ error: undefined, status: termination.code });
-  expect(f.events()).toEqual(TSGO_ROOT_TEST_SHARDS.slice(0, 2).map((shard) => shard.config));
-  expect(result.stdout).not.toContain("[ci-static:tsgo:completion]");
-  expect(fs.readdirSync(f.file(".artifacts/dist-artifacts.lock"))).toEqual([]);
-});
-
-const boundaryFailure = {
-  module: "scripts/check-tsgo-core-boundary.mts",
-  source: `export class CoreTsgoBoundaryInterruptedError extends Error {}
-export async function checkCoreTsgoGraphBoundary() { throw new Error("fixture boundary failure"); }
-`,
-  args: ["--changed-paths-json", '["src/fixture.test.ts"]', "--stripe", "1/5"],
-  error: "fixture boundary failure",
-};
-
 it.for([
   {
     name: "runs changed-path types after boundary validation fails",
-    ...boundaryFailure,
-    status: 1,
-    termination: undefined,
-  },
-  {
-    name: "preserves compiler termination after boundary validation fails",
-    ...boundaryFailure,
-    status: 143,
-    termination: {
-      config: "test/tsconfig/tsconfig.core.test.agents-root.json",
-      signal: "SIGTERM" as const,
-    },
+    module: "scripts/check-tsgo-core-boundary.mts",
+    source: `export class CoreTsgoBoundaryInterruptedError extends Error {}
+export async function checkCoreTsgoGraphBoundary() { throw new Error("fixture boundary failure"); }
+`,
+    args: ["--changed-paths-json", '["src/fixture.test.ts"]', "--stripe", "1/5"],
+    error: "fixture boundary failure",
   },
   {
     name: "keeps the watchdog stop when CI drains ordinary failures",
@@ -141,21 +112,14 @@ export async function runManagedCommand(command) {
 `,
     args: ["--ci-graphs-json", '["test-root"]'],
     error: "killed the tsgo process tree",
-    status: 124,
-    termination: undefined,
   },
-])("$name", async ({ module, source, args, error, status, termination }, { signal }) => {
-  const f = fixture(termination);
+])("$name", async ({ module, source, args, error }, { signal }) => {
+  const f = fixture();
   const result = await f.run(args, signal, f.override(module, source));
-  expect(result).toMatchObject({ status, stderr: expect.stringContaining(error) });
+  expect(result).toMatchObject({ status: 1, stderr: expect.stringContaining(error) });
   if (module.endsWith("check-tsgo-core-boundary.mts")) {
-    if (termination) {
-      expect(f.events()).toEqual([termination.config]);
-      expect(result.stdout).not.toContain("[ci-static:tsgo:completion]");
-    } else {
-      expect(result.stdout).toContain("error TS2322");
-      expect(f.events().length).toBeGreaterThan(1);
-    }
+    expect(result.stdout).toContain("error TS2322");
+    expect(f.events().length).toBeGreaterThan(1);
   } else {
     const commands = f.commands("managed-calls.json");
     expect(commands).toHaveLength(1);

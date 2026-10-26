@@ -217,8 +217,7 @@ function inspectJsonSchema(
       }
     }
   }
-  for (const key of Object.keys(schema)) {
-    const value = schema[key];
+  for (const [key, value] of Object.entries(schema)) {
     if (typeof value === "number" && !Number.isFinite(value)) {
       return false;
     }
@@ -229,10 +228,9 @@ function inspectJsonSchema(
     // Literal subtrees contain instance data, but still need JSON number checks.
     const inspectChildKeywords = inspectKeywords && !SCHEMA_LITERAL_KEYS.has(key);
     if (inspectChildKeywords && SCHEMA_MAP_KEYS.has(key) && isJsonObject(value)) {
-      for (const schemaName of Object.keys(value)) {
+      for (const [schemaName, childSchema] of Object.entries(value)) {
         path.push(".", schemaName);
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- Own keys of parsed JSON always have values.
-        const valid = inspectJsonSchema(value[schemaName]!, path, violations);
+        const valid = inspectJsonSchema(childSchema, path, violations);
         path.length -= 2;
         if (!valid) {
           return false;

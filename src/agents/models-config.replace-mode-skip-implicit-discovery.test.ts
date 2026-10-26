@@ -4,7 +4,6 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { planModelsJsonForTest } from "./models-config.plan.test-support.js";
 import * as providers from "./models-config.providers.implicit.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
-import { makeConfiguredModel } from "./test-helpers/provider-model-fixture.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -14,13 +13,15 @@ function createExplicitProvider(): ProviderConfig {
     api: "openai-completions",
     apiKey: "EXPLICIT_API_KEY",
     models: [
-      makeConfiguredModel({
+      {
         id: "test/explicit-model",
         name: "Explicit Model",
         reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 8192,
         maxTokens: 4096,
-      }),
+      },
     ],
   };
 }

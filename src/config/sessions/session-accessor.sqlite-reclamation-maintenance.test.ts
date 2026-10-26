@@ -66,12 +66,12 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 it.each([
-  { phase: "before-request", cleanup: "rollback" },
-  { phase: "before-request", cleanup: "close" },
-  { phase: "before-request", cleanup: "unsettled" },
-  { phase: "after-commit", cleanup: "rollback" },
-  { phase: "after-commit", cleanup: "close" },
-  { phase: "after-commit", cleanup: "unsettled" },
+  { phase: "pre", cleanup: "rollback" },
+  { phase: "pre", cleanup: "close" },
+  { phase: "pre", cleanup: "unsettled" },
+  { phase: "post", cleanup: "rollback" },
+  { phase: "post", cleanup: "close" },
+  { phase: "post", cleanup: "unsettled" },
 ] as const)("$phase maintenance with $cleanup cleanup", async ({ phase, cleanup }) => {
   const unsafe = cleanup === "unsettled";
   const root = dirs.make("reclamation-maintenance-");
@@ -128,33 +128,16 @@ it.each([
       };
       const tick = () => {
         if (triggered) return;
-        const admissions = globalThis[Symbol.for('openclaw.sqliteWalWriteAdmissions')];
-        const admission = admissions?.get(lastDatabase);
-        if (!admission?.admit) throw new Error('Expected the retained deferred maintenance owner');
-        const admit = admission.admit;
-        const queued = Promise.withResolvers();
-        // Observe the real sidecar scan entering its existing deferred admission.
-        admission.admit = (operation) => {
-          const pending = admit(operation);
-          admission.admit = admit;
-          queued.resolve();
-          parentPort.postMessage({ type: 'fixture:maintenance-queued' });
-          return pending;
-        };
         const periodic = scheduled.periodic;
         scheduled.restore();
         triggered = true;
-        void periodic();
-        return queued.promise;
+        periodic();
       };
       const on = parentPort.on;
       parentPort.on = function(event, listener) {
         return Reflect.apply(on, this, [event, event !== 'message' ? listener : function(...args) {
           const request = args[0];
-          if (phase === 'before-request' && !triggered && fs.existsSync(${JSON.stringify(arm)}) && request?.type === 'reclaim') {
-            void tick().then(() => Reflect.apply(listener, this, args));
-            return;
-          }
+          if (phase === 'pre' && fs.existsSync(${JSON.stringify(arm)}) && request?.type === 'reclaim') tick();
           return Reflect.apply(listener, this, args);
         }]);
       };
@@ -175,7 +158,7 @@ it.each([
           if (failRollback) throw new Error('synthetic reclamation maintenance ROLLBACK failure');
         }
         const value = exec.call(this, sql);
-        if (phase === 'after-commit' && !triggered && sql === 'COMMIT' && selected(this) && fs.existsSync(${JSON.stringify(arm)})) tick();
+        if (phase === 'post' && !triggered && sql === 'COMMIT' && selected(this) && fs.existsSync(${JSON.stringify(arm)})) tick();
         return value;
       };
       const close = DatabaseSync.prototype.close;
@@ -216,13 +199,9 @@ it.each([
   const retainedLeases = leases();
   expect(retainedLeases).toHaveLength(foregroundLeases.length + 1);
   const exiting = createDeferred();
-  const maintenanceQueued = createDeferred();
   worker.on("message", (message: unknown) => {
     if (isRecord(message) && message.type === "fixture:native-exit-pending") {
       exiting.resolve();
-    }
-    if (isRecord(message) && message.type === "fixture:maintenance-queued") {
-      maintenanceQueued.resolve();
     }
   });
   let exited = false;
@@ -238,16 +217,7 @@ it.each([
     settled = true;
     return result;
   };
-  const run = async () => {
-    if (phase === "after-commit") {
-      // The sidecar scan started by COMMIT finishes after that request's post-flush.
-      // Its next admitted request must own maintenance and any native cleanup failure.
-      await reclaim();
-      await maintenanceQueued.promise;
-    }
-    return reclaim();
-  };
-  const outcome = run().then(
+  const outcome = reclaim().then(
     () => settle("fulfilled"),
     () => settle("rejected"),
   );
@@ -291,7 +261,7 @@ it.each([
       await exit;
       expect(leases()).toEqual(foregroundLeases);
     } else {
-      expect(await outcome).toBe(cleanup === "close" ? "rejected" : "fulfilled");
+      expect(await outcome).toBe(phase === "pre" && cleanup === "close" ? "rejected" : "fulfilled");
     }
     probe.exec("BEGIN IMMEDIATE");
     probe.exec("ROLLBACK");

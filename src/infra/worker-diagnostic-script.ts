@@ -3,34 +3,19 @@ import { fileURLToPath } from "node:url";
 import {
   createRuntimeProcessEntrypoints,
   pluginRuntimeProcessManifest,
-  runtimeProcessSealedManifest,
 } from "./runtime-process-manifest.js";
 
 export const MAX_DIAGNOSTIC_WORKER_SLOTS = 64;
 
-const scriptBasename = (filename: string) => basename(filename).replace(/\.[cm]?[jt]s$/u, ".js");
-const entries = createRuntimeProcessEntrypoints(import.meta.url);
-const workerScripts = new Map<string, string>();
-for (const entry of Object.values(entries)) {
-  const script = scriptBasename(entry.distWorkerPath);
-  workerScripts.set(script, script);
-  workerScripts.set(scriptBasename(entry.sourceModulePath), script);
-}
-for (const entry of Object.values(pluginRuntimeProcessManifest)) {
-  const script = scriptBasename(entry.distWorkerPath);
-  workerScripts.set(script, script);
-  workerScripts.set(scriptBasename(entry.package.distWorkerPath), script);
-  workerScripts.set(scriptBasename(`${entry.sourceWorkerName}.js`), script);
-}
-for (const group of Object.values(runtimeProcessSealedManifest)) {
-  for (const [owner, name] of group.entries) {
-    const script = scriptBasename(`${name}.mjs`);
-    if (!workerScripts.has(script)) {
-      workerScripts.set(script, scriptBasename(entries[owner].distWorkerPath));
-    }
-  }
-}
-const workerScriptNames = new Set(workerScripts.values());
+const workerScriptNames = new Set([
+  ...Object.values(createRuntimeProcessEntrypoints(import.meta.url)).map((entry) =>
+    basename(entry.distWorkerPath),
+  ),
+  ...Object.values(pluginRuntimeProcessManifest).flatMap((entry) => [
+    basename(entry.distWorkerPath),
+    basename(entry.package.distWorkerPath),
+  ]),
+]);
 
 /** Imported diagnostics may contain arbitrary paths or names. Preserve only known scripts. */
 export function normalizeDiagnosticWorkerScript(value: unknown): string {
@@ -42,9 +27,9 @@ export function workerScriptName(filename: string | URL, evalSource = false): st
   if (evalSource || (filename instanceof URL && filename.protocol !== "file:")) {
     return "other";
   }
-  return (
-    workerScripts.get(
-      scriptBasename(filename instanceof URL ? fileURLToPath(filename) : filename),
-    ) ?? "other"
+  const name = basename(filename instanceof URL ? fileURLToPath(filename) : filename).replace(
+    /\.[cm]?[jt]s$/u,
+    ".js",
   );
+  return normalizeDiagnosticWorkerScript(name);
 }

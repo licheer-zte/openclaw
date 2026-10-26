@@ -1,5 +1,5 @@
 import { ServerResponse, type IncomingMessage } from "node:http";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { sendControlUiHtmlBody } from "./control-ui-static.js";
@@ -22,13 +22,14 @@ function remoteRequest(path: string, options: { current?: () => void; remote?: b
 }
 
 it("refuses private route families before hooks and plugin handlers can claim them", async () => {
-  const responder = (body: string) =>
-    vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
-      res.end(body);
-      return true;
-    });
-  const hook = responder("hook");
-  const plugin = responder("plugin");
+  const hook = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+    res.end("hook");
+    return true;
+  });
+  const plugin = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+    res.end("plugin");
+    return true;
+  });
   const handler = createGatewayHttpRequestHandler({
     clients: new Set(),
     controlUiBasePath: "/claw",
@@ -38,28 +39,34 @@ it("refuses private route families before hooks and plugin handlers can claim th
     handleHooksRequest: hook,
     handlePluginRequest: plugin,
   });
-  onTestFinished(() => handler.dispose());
-  for (const path of [
-    "/hooks/wake",
-    "/claw/api/unknown",
-    "/claw/.well-known/openclaw/browser-bootstrap",
-    "/readyz",
-    "/healthz/private",
-    "/claw/sw.js",
-    "/mcp-app",
-    "/__openclaw__/worker/ws",
-  ]) {
-    const req = remoteRequest(path);
+  try {
+    for (const path of [
+      "/hooks/wake",
+      "/tools/invoke",
+      "/v1/models",
+      "/claw/api/unknown",
+      "/claw/.well-known/openclaw/browser-bootstrap",
+      "/readyz",
+      "/healthz/private",
+      "/browser/extension",
+      "/claw/sw.js",
+      "/mcp-app",
+      "/__openclaw__/worker/ws",
+    ]) {
+      const req = remoteRequest(path);
+      const response = createResponse(req);
+      await handler(req, response.res);
+      expect(response.res.statusCode, path).toBe(404);
+    }
+    expect(hook).not.toHaveBeenCalled();
+    expect(plugin).not.toHaveBeenCalled();
+    const req = remoteRequest("/hooks/wake", { remote: false });
     const response = createResponse(req);
     await handler(req, response.res);
-    expect(response.res.statusCode, path).toBe(404);
+    expect(response.getBody()).toBe("hook");
+  } finally {
+    handler.dispose();
   }
-  expect(hook).not.toHaveBeenCalled();
-  expect(plugin).not.toHaveBeenCalled();
-  const req = remoteRequest("/hooks/wake", { remote: false });
-  const response = createResponse(req);
-  await handler(req, response.res);
-  expect(response.getBody()).toBe("hook");
 });
 
 it("allows declared panels without letting plugin routes claim native documents", () => {
@@ -125,12 +132,13 @@ it("refuses stale admission and rechecks authority after asynchronous compressio
     getRuntimeConfig: () => ({}),
     handleHooksRequest: async () => false,
   });
-  onTestFinished(() => {
+  try {
+    await expect(handler(req, res)).resolves.toBeUndefined();
+    expect(res.destroyed).toBe(true);
+  } finally {
     handler.dispose();
     res.destroy();
     req.destroy();
     errors.mockRestore();
-  });
-  await handler(req, res);
-  expect(res.destroyed).toBe(true);
+  }
 });

@@ -3,14 +3,23 @@ import { once } from "node:events";
 import http from "node:http";
 import type { Socket } from "node:net";
 import { promisify } from "node:util";
-import { expect, it, vi } from "vitest";
-import { WebSocketServer } from "ws";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { WebSocketServer, type WebSocket } from "ws";
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { runSignalSseLoop } from "./sse-reconnect.js";
 
-async function createPeer() {
+const ACCOUNT = "+15550001111";
+const BUDGET_MS = 250;
+
+type Peer = Awaited<ReturnType<typeof createPeer>>;
+
+async function createPeer(
+  upgradeAfterMs: (attempt: number) => number | undefined,
+  connected: (socket: WebSocket, attempt: number) => void,
+) {
   const sockets = new Set<Socket>();
+  const timers = new Set<ReturnType<typeof setTimeout>>();
   const server = http.createServer((_request, response) => response.end("ok"));
   const wsServer = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   let attempts = 0;
@@ -26,20 +35,22 @@ async function createPeer() {
     const endPendingUpgrade = () => socket.destroy();
     socket.once("end", endPendingUpgrade);
     socket.resume();
-    if (attempt === 1) {
+    const waitMs = upgradeAfterMs(attempt);
+    if (waitMs === undefined) {
       return;
     }
-    socket.off("end", endPendingUpgrade);
-    wsServer.handleUpgrade(request, socket, head, (ws) => {
-      ws.on("error", () => {});
-      if (attempt === 2) {
-        ws.send("private-inbound-message");
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      if (socket.destroyed) {
+        return;
       }
-      ws.send(JSON.stringify({ envelope: { timestamp: attempt } }));
-      if (attempt === 2) {
-        ws.close();
-      }
-    });
+      socket.off("end", endPendingUpgrade);
+      wsServer.handleUpgrade(request, socket, head, (ws) => {
+        ws.on("error", () => {});
+        connected(ws, attempt);
+      });
+    }, waitMs);
+    timers.add(timer);
   });
   const port = await listenOnLoopback(server);
   return {
@@ -48,6 +59,7 @@ async function createPeer() {
       return attempts;
     },
     async close() {
+      timers.forEach(clearTimeout);
       const socketClosed = [...sockets].map((socket) => once(socket, "close"));
       wsServer.clients.forEach((ws) => ws.terminate());
       sockets.forEach((socket) => socket.destroy());
@@ -61,28 +73,50 @@ async function createPeer() {
   };
 }
 
-it("reconnects after opening timeout and closure and receives subsequent events", async () => {
-  const peer = await createPeer();
-  const abort = new AbortController();
-  const runtime = createRuntimeSpies();
+describe("container adapter opening budgets with real peers", () => {
+  let peer: Peer | undefined;
+  let abort: AbortController | undefined;
   let stream: Promise<void> | undefined;
-  try {
+
+  afterEach(async () => {
+    abort?.abort();
+    try {
+      await stream;
+    } finally {
+      await peer?.close();
+      peer = undefined;
+      abort = undefined;
+      stream = undefined;
+    }
+  });
+
+  it("reconnects after opening timeout and closure and receives subsequent events", async () => {
+    peer = await createPeer(
+      (attempt) => (attempt === 1 ? undefined : 0),
+      (ws, attempt) => {
+        ws.send(JSON.stringify({ envelope: { timestamp: attempt } }));
+        if (attempt === 2) {
+          ws.close();
+        }
+      },
+    );
+    abort = new AbortController();
     const events: number[] = [];
     const statusSink = vi.fn();
     stream = runSignalSseLoop({
       baseUrl: peer.baseUrl,
-      account: "+15550001111",
+      account: ACCOUNT,
       transportKind: "container",
-      timeoutMs: 250,
+      timeoutMs: BUDGET_MS,
       abortSignal: abort.signal,
-      runtime,
+      runtime: createRuntimeSpies(),
       policy: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
       statusSink,
       onEvent: (event) => {
         const message = JSON.parse(event.data ?? "{}") as { envelope: { timestamp: number } };
         events.push(message.envelope.timestamp);
         if (events.length === 2) {
-          abort.abort();
+          abort?.abort();
         }
       },
     });
@@ -91,18 +125,5 @@ it("reconnects after opening timeout and closure and receives subsequent events"
     await stream;
     expect(peer.attempts).toBe(3);
     expect(statusSink).toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "recovering" }));
-    expect(
-      runtime.error.mock.calls.filter(
-        ([line]) => line === "[signal-ws] parse error: invalid JSON frame",
-      ),
-    ).toHaveLength(1);
-    expect(runtime.error.mock.calls.flat().join("\n")).not.toContain("private-inbound-message");
-  } finally {
-    abort.abort();
-    try {
-      await stream;
-    } finally {
-      await peer.close();
-    }
-  }
+  });
 });

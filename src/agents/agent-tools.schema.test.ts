@@ -21,7 +21,6 @@ import {
   getBeforeToolCallHookContext,
   getBeforeToolCallSourceTool,
 } from "./before-tool-call-metadata.js";
-import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 const objectSchema = (properties: Record<string, TSchema>) => ({ type: "object", properties });
@@ -57,15 +56,18 @@ async function runToolCall(
     [{ role: "user", content: "Call the tool", timestamp: Date.now() }],
     { systemPrompt: "test", messages: [], tools: [tool] },
     {
-      model: makeProviderModelFixture({
+      model: {
         id: "faux-1",
         name: "Faux",
         provider: "faux",
         api: "faux",
         baseUrl: "http://localhost:0",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 128000,
         maxTokens: 1024,
-      }),
+      },
       convertToLlm: (agentMessages) => agentMessages as never,
     },
     (event) => {

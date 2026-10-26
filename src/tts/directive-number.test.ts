@@ -1,9 +1,9 @@
 // TTS directive number tests cover parsing numeric speech directives.
 import { describe, expect, it } from "vitest";
 import { parseSpeechDirectiveNumberOverride } from "./directive-number.js";
-import { createSpeechPolicy } from "./speech-provider.test-support.js";
+import { createFullSpeechPolicy } from "./speech-provider.test-support.js";
 
-const policy = createSpeechPolicy(true);
+const policy = createFullSpeechPolicy();
 
 describe("parseSpeechDirectiveNumberOverride", () => {
   it("respects exclusive range bounds", () => {

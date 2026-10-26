@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
-  createDiscordNativeCommandRegistry,
+  createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { shouldBypassAcpDispatchForCommand } from "./dispatch-acp-command-bypass.js";
@@ -50,7 +50,18 @@ describe("shouldBypassAcpDispatchForCommand", () => {
   });
 
   it("returns false for local status commands when text commands are disabled on text-native surfaces", () => {
-    setActivePluginRegistry(createDiscordNativeCommandRegistry());
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          plugin: createChannelTestPluginBase({
+            id: "discord",
+            capabilities: { nativeCommands: true, chatTypes: ["direct"] },
+          }),
+          source: "test",
+        },
+      ]),
+    );
     const ctx = commandContext("/status", { CommandSource: "text" });
     expect(shouldBypassAcpDispatchForCommand(ctx, { commands: { text: false } })).toBe(false);
   });

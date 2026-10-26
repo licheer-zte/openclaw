@@ -74,11 +74,8 @@ it.each(["exact", "family", "alias", "history-reuse", "history-first"] as const)
         : state.statePath(selection === "family" ? "transcript.main.sqlite" : "transcript.sqlite");
       const otherPath = state.statePath("other.sqlite");
       const maintenance = createOpenClawDatabaseMaintenanceScope();
-      if (selection !== "history-first") {
-        await maintenance.run(() => read(storePath));
-      }
-      if (sharesHistory) {
-        await withSessionHistoryWorkerDatabase(
+      const readWithHistory = () =>
+        withSessionHistoryWorkerDatabase(
           { agentId: "main", path: storePath, env: state.env },
           async (owner) => {
             if (selection === "history-first") {
@@ -88,9 +85,16 @@ it.each(["exact", "family", "alias", "history-reuse", "history-first"] as const)
             await expect(owner.prewarm({ env: state.env })).resolves.toBeUndefined();
           },
         );
+      if (selection === "history-first") {
+        await readWithHistory();
       } else {
-        await read(storePath);
-        await maintenance.close();
+        await maintenance.run(() => read(storePath));
+        if (selection === "history-reuse") {
+          await readWithHistory();
+        } else {
+          await read(storePath);
+          await maintenance.close();
+        }
       }
       const first = workers()[0];
       expect(first!.threadId).toBeGreaterThan(0);

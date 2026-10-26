@@ -1,7 +1,6 @@
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
-import { nativeRuntime } from "../../test-helpers/chat-model.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
@@ -12,6 +11,7 @@ import { contextWith, renderControl, waitForModelControl } from "./model-control
 import {
   hostedRuntime as runtime,
   mountPlacement as renderPlace,
+  nativeRuntime,
   placementDevice,
 } from "./placement.test-support.ts";
 const modelRef = "openai/hosted-model";

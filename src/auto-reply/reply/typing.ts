@@ -83,15 +83,14 @@ export function createTypingController(params: {
     if (sealed || typingIntervalMs <= 0) {
       return;
     }
-    typingTtlTimer =
-      typingTtlTimer?.refresh() ??
-      setTimeout(() => {
-        if (!typingLoop.isRunning()) {
-          return;
-        }
-        log?.(`typing TTL reached (${typingTtlLabel}); stopping typing indicator`);
-        cleanup();
-      }, typingTtlMs);
+    clearTimeout(typingTtlTimer);
+    typingTtlTimer = setTimeout(() => {
+      if (!typingLoop.isRunning()) {
+        return;
+      }
+      log?.(`typing TTL reached (${typingTtlLabel}); stopping typing indicator`);
+      cleanup();
+    }, typingTtlMs);
   };
 
   const isActive = () => active && !sealed;

@@ -44,18 +44,12 @@ function generateImage(overrides: Partial<ImageRequest> = {}) {
   });
 }
 
-function respond(body: unknown) {
-  const response = jsonResponse(body);
-  postJsonRequestMock.mockResolvedValue(response);
-  return response.release;
+function jsonResponse(body: unknown, release = vi.fn(async () => {})) {
+  return { response: Response.json(body), release };
 }
 
-function jsonResponse(body: unknown) {
-  return { response: Response.json(body), release: vi.fn(async () => {}) };
-}
-
-function respondWithChat(message: Record<string, unknown>) {
-  return respond({ choices: [{ message }] });
+function chatResponse(message: Record<string, unknown>, release = vi.fn(async () => {})) {
+  return jsonResponse({ choices: [{ message }] }, release);
 }
 
 describe("openrouter image generation provider", () => {
@@ -64,9 +58,13 @@ describe("openrouter image generation provider", () => {
   });
 
   it("preserves chat-completion image requests for configured custom bases", async () => {
-    const release = respondWithChat({
-      images: [{ imageUrl: { url: "data:image/png;base64,cG5nLW9uZQ==" } }],
-    });
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockImplementation(async () =>
+      chatResponse(
+        { images: [{ imageUrl: { url: "data:image/png;base64,cG5nLW9uZQ==" } }] },
+        release,
+      ),
+    );
     const result = await generateImage({
       aspectRatio: "16:9",
       resolution: "2K",
@@ -76,6 +74,13 @@ describe("openrouter image generation provider", () => {
       cfg: customConfig(),
     });
 
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith({
+      provider: "openrouter",
+      cfg: customConfig(),
+      agentDir: undefined,
+      store: undefined,
+    });
+    expect(postJsonRequestMock).toHaveBeenCalledOnce();
     const request = postRequest();
     const headers = requireHeaders(request.headers);
     expect(Object.fromEntries(headers.entries())).toEqual({
@@ -117,9 +122,10 @@ describe("openrouter image generation provider", () => {
       const result = resolveProviderHttpRequestConfigWithOriginTrust(params);
       return { ...result, dispatcherPolicy: result.dispatcherPolicy };
     });
-    const release = respondWithChat({
-      images: [{ image_url: { url: "data:image/png;base64,cG5n" } }],
-    });
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockImplementation(async () =>
+      chatResponse({ images: [{ image_url: { url: "data:image/png;base64,cG5n" } }] }, release),
+    );
 
     const result = await generateImage({ cfg: customConfig(requestPolicy) });
 
@@ -137,7 +143,11 @@ describe("openrouter image generation provider", () => {
   });
 
   it("sends canonical reference images as input_references", async () => {
-    respond({ data: [{ b64_json: "d2VicC1vbmU=", media_type: "image/webp" }] });
+    postJsonRequestMock.mockImplementation(async () =>
+      jsonResponse({
+        data: [{ b64_json: Buffer.from("webp-one").toString("base64"), media_type: "image/webp" }],
+      }),
+    );
 
     const result = await generateImage({
       inputImages: [{ buffer: Buffer.from("source-image"), mimeType: "image/png" }],
@@ -162,24 +172,30 @@ describe("openrouter image generation provider", () => {
     });
   });
 
-  it("fans out canonical batches into bounded single-image requests", async () => {
-    const model = "openai/gpt-5.4-image-2";
-    postJsonRequestMock
-      .mockResolvedValueOnce(jsonResponse({ data: [{ b64_json: "cG5nLW9uZQ==" }] }))
-      .mockResolvedValueOnce(jsonResponse({ data: [{ b64_json: "cG5nLXR3bw==" }] }));
+  it.each(["openai/gpt-5.4-image-2"])(
+    "fans out canonical %s batches into bounded single-image requests",
+    async (model) => {
+      postJsonRequestMock
+        .mockResolvedValueOnce(jsonResponse({ data: [{ b64_json: "cG5nLW9uZQ==" }] }))
+        .mockResolvedValueOnce(jsonResponse({ data: [{ b64_json: "cG5nLXR3bw==" }] }));
 
-    const result = await generateImage({ model, prompt: "draw two stickers", count: 2 });
+      const result = await generateImage({ model, prompt: "draw two stickers", count: 2 });
 
-    expect(postJsonRequestMock.mock.calls).toEqual(
-      Array.from({ length: 2 }, () => [
-        expect.objectContaining({
+      expect(postJsonRequestMock).toHaveBeenCalledTimes(2);
+      expect(
+        postJsonRequestMock.mock.calls.map(([request]) => ({
+          url: Reflect.get(request as object, "url"),
+          body: Reflect.get(request as object, "body"),
+        })),
+      ).toEqual(
+        Array.from({ length: 2 }, () => ({
           url: "https://openrouter.ai/api/v1/images",
           body: { model, prompt: "draw two stickers", n: 1 },
-        }),
-      ]),
-    );
-    expect(result.images.map((image) => image.buffer.toString())).toEqual(["png-one", "png-two"]);
-  });
+        })),
+      );
+      expect(result.images.map((image) => image.buffer.toString())).toEqual(["png-one", "png-two"]);
+    },
+  );
 
   it("fails a canonical batch when any request fails", async () => {
     postJsonRequestMock
@@ -192,7 +208,9 @@ describe("openrouter image generation provider", () => {
   });
 
   it("wraps wrong-shape successful dedicated image responses", async () => {
-    respond({ data: { b64_json: "bad-shape" } });
+    postJsonRequestMock.mockImplementation(async () =>
+      jsonResponse({ data: { b64_json: "bad-shape" } }),
+    );
 
     await expect(generateImage()).rejects.toThrow("OpenRouter image generation response malformed");
   });
@@ -200,27 +218,37 @@ describe("openrouter image generation provider", () => {
   it("extracts image fallbacks from string content and raw b64 parts", async () => {
     const png = Buffer.from("png-inline").toString("base64");
     const raw = Buffer.from("raw-inline").toString("base64");
-    respond({
-      choices: [
-        { message: { content: `done data:image/png;base64,${png}` } },
-        { message: { content: [{ b64_json: raw }] } },
-        { message: { content: [{ inlineData: { data: raw, mimeType: "image/webp" } }] } },
-        { message: { content: [{ inline_data: { data: raw, mime_type: "image/jpeg" } }] } },
-      ],
-    });
+    postJsonRequestMock.mockImplementation(async () =>
+      jsonResponse({
+        choices: [
+          { message: { content: `done data:image/png;base64,${png}` } },
+          { message: { content: [{ b64_json: raw }] } },
+          { message: { content: [{ inlineData: { data: raw, mimeType: "image/webp" } }] } },
+          { message: { content: [{ inline_data: { data: raw, mime_type: "image/jpeg" } }] } },
+        ],
+      }),
+    );
 
     const result = await generateImage({ cfg: customConfig() });
 
-    expect(result.images.map((image) => [image.buffer.toString(), image.mimeType])).toEqual([
-      ["png-inline", "image/png"],
-      ["raw-inline", "image/png"],
-      ["raw-inline", "image/webp"],
-      ["raw-inline", "image/jpeg"],
+    expect(result.images.map((image) => image.buffer.toString())).toEqual([
+      "png-inline",
+      "raw-inline",
+      "raw-inline",
+      "raw-inline",
+    ]);
+    expect(result.images.map((image) => image.mimeType)).toEqual([
+      "image/png",
+      "image/png",
+      "image/webp",
+      "image/jpeg",
     ]);
   });
 
   it("rejects invalid raw image parts in strict extraction mode", async () => {
-    respondWithChat({ content: [{ b64_json: "not-base64!" }] });
+    postJsonRequestMock.mockImplementation(async () =>
+      chatResponse({ content: [{ b64_json: "not-base64!" }] }),
+    );
 
     await expect(generateImage({ cfg: customConfig() })).rejects.toThrow(
       "OpenRouter image generation response malformed",

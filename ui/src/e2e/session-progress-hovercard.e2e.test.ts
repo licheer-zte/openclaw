@@ -7,7 +7,6 @@ import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
 } from "../../../src/gateway/control-ui-contract.js";
 import { reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { sessionRow } from "./chat-flow-fixtures.test-support.ts";
 import {
   captureUiProof,
   chatSessionListResponse,
@@ -124,7 +123,12 @@ suite.define(() => {
           methodResponses: {
             "progressCard.get": { card: null },
             "sessions.list": chatSessionListResponse([
-              sessionRow(selectedSessionKey, "Selected session", 2),
+              {
+                key: selectedSessionKey,
+                kind: "direct",
+                label: "Selected session",
+                updatedAt: 2,
+              },
               {
                 key: sessionKey,
                 kind: "direct",
@@ -237,7 +241,12 @@ suite.define(() => {
               ],
             },
             "sessions.list": chatSessionListResponse([
-              sessionRow(selectedSessionKey, "Selected session", now - 5 * 60_000),
+              {
+                key: selectedSessionKey,
+                kind: "direct",
+                label: "Selected session",
+                updatedAt: now - 5 * 60_000,
+              },
               {
                 createdActor: sessionPerson("profile-ada", "Ada King"),
                 createdAt: now - 89 * 24 * 60 * 60_000,
@@ -691,7 +700,12 @@ suite.define(() => {
               ],
             },
             "sessions.list": chatSessionListResponse([
-              sessionRow(selectedSessionKey, "Selected session", 2),
+              {
+                key: selectedSessionKey,
+                kind: "direct",
+                label: "Selected session",
+                updatedAt: 2,
+              },
               {
                 key: sessionKey,
                 kind: "direct",

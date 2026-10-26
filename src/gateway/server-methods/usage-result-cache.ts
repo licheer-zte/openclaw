@@ -25,7 +25,6 @@ import { readUserProfileVersion } from "../../state/user-profile-events.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { loadUsageResultCached, type UsageCacheEntry } from "./usage-cache.js";
-import type { UsageOverviewUsage } from "./usage-overview-report.js";
 import { mergeUsageCacheStatus, runUsageAgentTasks } from "./usage-session-loading.js";
 import type { UsageSessionSelection, UsageGroupingMode } from "./usage-session-selection.js";
 
@@ -33,13 +32,7 @@ const costUsageCache = new Map<string, UsageCacheEntry<CostUsageSummary>>();
 export type SessionsUsageSnapshot = Pick<
   SessionsUsageResult,
   "updatedAt" | "sessions" | "cacheStatus" | "partial"
-> & {
-  sources: UsageSessionSelection[];
-  /** Overview projections keep folded usage packed; rows reference it by agent and key. */
-  overviewUsage?: UsageOverviewUsage;
-  accessRevision: number;
-  sessionRevision: number;
-};
+> & { sources: UsageSessionSelection[]; accessRevision: number; sessionRevision: number };
 const sessionsUsageCache = new Map<string, UsageCacheEntry<SessionsUsageSnapshot>>();
 
 function usageDayBucketCacheKey(dayBucket: UsageDailyBucket | undefined): string {
@@ -64,8 +57,7 @@ type SessionsUsageCacheKeyParams = {
   specificKey: string | null;
   includeContextWeight: boolean;
   overview: boolean;
-  /** Overview rows fold quarter summaries; detail rows carry per-quarter arrays. */
-  projection: "overview" | "detail";
+  committedOnly: boolean;
   includeAllContext: boolean;
 };
 
@@ -82,7 +74,7 @@ function sessionsUsageCacheKey(params: SessionsUsageCacheKeyParams): string {
     params.includeContextWeight,
     params.creatorKey,
     params.overview,
-    params.projection,
+    params.committedOnly,
     params.includeAllContext,
     ...(params.visibilityIdentity ? [params.visibilityIdentity] : []),
   ]);

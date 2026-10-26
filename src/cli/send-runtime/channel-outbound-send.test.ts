@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
-import { sendChannelOutboundMessage, type RuntimeSendOpts } from "./channel-outbound-send.js";
+import { sendChannelOutboundMessage } from "./channel-outbound-send.js";
 
 const mocks = vi.hoisted(() => ({
   loadChannelOutboundAdapter: vi.fn(),
@@ -16,28 +15,23 @@ describe("sendChannelOutboundMessage", () => {
     vi.clearAllMocks();
   });
 
-  const defaults = { cfg: {}, accountId: "default" };
-  function send(channel: ChannelId, opts: RuntimeSendOpts = {}, text = "hello") {
-    return sendChannelOutboundMessage(channel, "target", text, { ...defaults, ...opts });
-  }
-
   function expectSend(mockFn: ReturnType<typeof vi.fn>, params: Record<string, unknown>) {
-    expect(mockFn).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ ...defaults, to: "target", text: "hello", ...params }),
-    );
+    expect(mockFn).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(params));
   }
 
   function mockSend(channel: string, method = "sendText", extra = {}) {
-    const sender = vi.fn(async () => ({ channel, messageId: "sent" }));
-    mocks.loadChannelOutboundAdapter.mockResolvedValue({ ...extra, [method]: sender });
-    return sender;
+    const send = vi.fn(async () => ({ channel, messageId: "sent" }));
+    mocks.loadChannelOutboundAdapter.mockResolvedValue({ ...extra, [method]: send });
+    return send;
   }
 
   it("classifies unavailable adapters as definitely not dispatched", async () => {
     mocks.loadChannelOutboundAdapter.mockResolvedValue(undefined);
     const message = "discord outbound adapter is unavailable.";
 
-    const error = await send("discord").catch((caught: unknown) => caught);
+    const error = await sendChannelOutboundMessage("discord", "target", "hello", {
+      cfg: {},
+    }).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
     expect(error).toMatchObject({
       name: "PlatformMessageNotDispatchedError",
@@ -50,6 +44,7 @@ describe("sendChannelOutboundMessage", () => {
     const sendMedia = mockSend("whatsapp", "sendMedia", { sendText: vi.fn() });
     const mediaReadFile = vi.fn(async () => Buffer.from("image"));
     const opts = {
+      cfg: {},
       mediaUrl: "file:///tmp/photo.png",
       mediaAccess: {
         localRoots: ["/tmp/workspace"],
@@ -57,33 +52,63 @@ describe("sendChannelOutboundMessage", () => {
       },
       mediaLocalRoots: ["/tmp/fallback-root"],
       mediaReadFile,
+      accountId: "default",
       gifPlayback: true,
     };
-    await send("whatsapp", opts);
-    expectSend(sendMedia, opts);
+    await sendChannelOutboundMessage("whatsapp", "+15551234567", "caption", opts);
+
+    expectSend(sendMedia, {
+      ...opts,
+      to: "+15551234567",
+      text: "caption",
+    });
   });
 
   it("preserves rendered html formatting through lazy text sends", async () => {
     const sendText = mockSend("telegram");
+    const onPlatformSendDispatch = vi.fn();
     const opts = {
+      cfg: {},
+      accountId: "default",
       deliveryQueueId: "queue-1",
       deliveryPartIndex: 3,
       deliveryPartCount: 4,
-      onPlatformSendDispatch: vi.fn(),
+      onPlatformSendDispatch,
     };
-    const text = '<a href="https://example.com">Example</a>';
-    await send("telegram", { ...opts, textMode: "html" }, text);
-    expectSend(sendText, { ...opts, text, formatting: { parseMode: "HTML" } });
+
+    await sendChannelOutboundMessage(
+      "telegram",
+      "12345",
+      '<a href="https://example.com">Example</a>',
+      { ...opts, textMode: "html" },
+    );
+
+    expectSend(sendText, { ...opts, formatting: { parseMode: "HTML" } });
   });
 
   it("routes block sends through payload delivery", async () => {
     const sendText = vi.fn();
     const sendPayload = mockSend("slack", "sendPayload", { sendText });
 
-    const blocks = [{ type: "section", text: { type: "plain_text", text: "OK" } }];
-    await send("slack", { blocks });
+    const blocks = [
+      {
+        type: "actions",
+        elements: [{ type: "button", text: { type: "plain_text", text: "OK" }, value: "ok" }],
+      },
+    ];
+
+    await sendChannelOutboundMessage("slack", "C123", "fallback", {
+      cfg: {},
+      accountId: "default",
+      blocks,
+    });
+
     expectSend(sendPayload, {
-      payload: { channelData: { slack: { blocks } }, text: "hello" },
+      accountId: "default",
+      cfg: {},
+      payload: { channelData: { slack: { blocks } }, text: "fallback" },
+      text: "fallback",
+      to: "C123",
     });
     expect(sendText).not.toHaveBeenCalled();
   });
@@ -91,11 +116,13 @@ describe("sendChannelOutboundMessage", () => {
   it("accepts plugin outbound thread and reply aliases", async () => {
     const sendText = mockSend("matrix");
     const opts = {
+      cfg: {},
       accountId: "sut",
       replyToId: "$parent",
       threadId: "$thread-root",
     };
-    await send("matrix", opts);
-    expectSend(sendText, opts);
+    await sendChannelOutboundMessage("matrix", "room:!ops:example.org", "hello thread", opts);
+
+    expectSend(sendText, { ...opts, to: "room:!ops:example.org" });
   });
 });

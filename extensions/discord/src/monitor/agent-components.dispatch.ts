@@ -41,9 +41,11 @@ const loadReplyRuntime = createLazyRuntimeModule(() => import("openclaw/plugin-s
 
 const loadTypingRuntime = createLazyRuntimeModule(() => import("./typing.js"));
 
-function buildDiscordComponentConversationLabel(
-  params: Parameters<typeof dispatchDiscordComponentEvent>[0],
-) {
+function buildDiscordComponentConversationLabel(params: {
+  interactionCtx: ComponentInteractionContext;
+  interaction: AgentComponentInteraction;
+  channelCtx: DiscordChannelContext;
+}) {
   if (params.interactionCtx.isDirectMessage) {
     return buildDirectLabel(params.interactionCtx.user);
   }

@@ -12,7 +12,7 @@ export type ControlUiSessionFixture = {
   key: string;
   sessionId?: string;
   updatedAt?: number;
-  contextTokens?: number;
+  contextTokens?: number | null;
   kind?: string;
   pinned?: boolean;
   pinnedAt?: number;
@@ -50,7 +50,7 @@ export function createControlUiSessionRow(
     },
     options,
     {
-      contextTokens: options?.contextTokens,
+      contextTokens: options?.contextTokens ?? null,
       kind: options?.kind ?? "direct",
       pinned: pinnedAt !== undefined,
       pinnedAt,

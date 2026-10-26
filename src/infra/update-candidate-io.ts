@@ -41,7 +41,7 @@ export async function withUpdateCandidateIoBudget<T>(
       params.bytes,
     ).timeoutMs,
   );
-  const deadlineAtMs = performance.now() + budget;
+  const deadlineAtMs = Date.now() + budget;
   const deadline = new AbortController();
   const signal = AbortSignal.any([deadline.signal, ...(params.signal ? [params.signal] : [])]);
   const expire = () =>
@@ -50,11 +50,11 @@ export async function withUpdateCandidateIoBudget<T>(
         `Update state ${params.operation ?? "inspection"} exceeded its ${budget / 1000} second allowance (${formatDiskSpaceBytes(params.bytes)} ${params.operation === "snapshot" ? "total estimated snapshot input, including SQLite and plugins" : "of SQLite state"}). Check storage performance before retrying.`,
       ),
     );
-  const cancelDeadline = scheduleAbsoluteDeadline(deadlineAtMs, expire, () => performance.now());
+  const cancelDeadline = scheduleAbsoluteDeadline(deadlineAtMs, expire);
   try {
     // Cancellation asks the owner to stop; its admitted filesystem work still drains.
     const value = await run(signal);
-    if (performance.now() >= deadlineAtMs) {
+    if (Date.now() >= deadlineAtMs) {
       expire();
     }
     signal.throwIfAborted();

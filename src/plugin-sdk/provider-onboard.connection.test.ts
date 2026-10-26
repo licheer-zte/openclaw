@@ -1,5 +1,4 @@
 import { expect, it } from "vitest";
-import { buildCatalogModel } from "./provider-catalog.test-support.js";
 import {
   createDefaultModelsConnectionPresetAppliers as defaultConnectionPreset,
   createDefaultModelsPresetAppliers as defaultPreset,
@@ -10,11 +9,15 @@ import {
 } from "./provider-onboard.js";
 
 function model(id: string): Model {
-  return buildCatalogModel(id, {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"],
     cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 8192,
     maxTokens: 1024,
-  });
+  };
 }
 
 function preset(...ids: string[]) {

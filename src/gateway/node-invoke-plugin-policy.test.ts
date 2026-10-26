@@ -359,7 +359,7 @@ describe("applyPluginNodeInvokePolicy", () => {
     },
   );
 
-  it("routes approvals for a synthetic requester", async (testContext) => {
+  it.for([true])("routes approvals for synthetic=%s", async (synthetic, testContext) => {
     // The carried connection is turn provenance, never this approval's
     // presenter, so it stays eligible as a reviewer for both provenance shapes.
     const visibleConnIds = new Set(["conn-owner-approval", "conn-requester"]);
@@ -373,11 +373,17 @@ describe("applyPluginNodeInvokePolicy", () => {
       }),
     ]);
     setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
-    const fixture = createPolicyApprovalFixture(testContext, {}, { getApprovalClientConnIds });
+    const fixture = createPolicyApprovalFixture(
+      testContext,
+      {},
+      {
+        getApprovalClientConnIds,
+      },
+    );
     const { context, manager } = fixture;
     await fixture.run(async () => {
       const requester = createOperatorClient();
-      requester.internal = { syntheticClient: true };
+      requester.internal = synthetic ? { syntheticClient: true } : undefined;
       const { record, pending: resultPromise } = await fixture.request(requester);
       expect(record.requestedByConnId).toBe("conn-requester");
       expect(record.requestedByDeviceId).toBe("device-owner");
@@ -464,13 +470,12 @@ describe("applyPluginNodeInvokePolicy", () => {
           },
         ),
       );
-      const expectedRoute = {
+      expect(record.request).toMatchObject({
         turnSourceChannel: "tui",
         turnSourceTo: "terminal",
         turnSourceAccountId: "default",
         turnSourceThreadId: 7,
-      };
-      expect(record.request).toMatchObject(expectedRoute);
+      });
       expect(context.broadcast).not.toHaveBeenCalled();
       expect(context.broadcastToConnIds).toHaveBeenCalledWith(
         "plugin.approval.requested",
@@ -482,7 +487,10 @@ describe("applyPluginNodeInvokePolicy", () => {
         expect.objectContaining({
           id: record.id,
           request: expect.objectContaining({
-            ...expectedRoute,
+            turnSourceChannel: "tui",
+            turnSourceTo: "terminal",
+            turnSourceAccountId: "default",
+            turnSourceThreadId: 7,
             agentId: "main",
             sessionKey: "agent:main:telegram:direct:alice",
           }),
@@ -647,13 +655,12 @@ it.each([true, false])(
   "plugin dispatch snapshots only bound turn source (bound=%s)",
   async (bound) => {
     onTestFinished(() => resetPluginRuntimeStateForTest());
-    const originalSource = {
+    const source = {
       channel: "telegram",
       to: "-100123:topic:42",
       accountId: "work",
       threadId: "42",
     };
-    const source = { ...originalSource };
     setDangerousDemoCommandRegistry([
       createDemoPolicy(async (ctx) => {
         source.to = "mutated-owner";
@@ -674,7 +681,12 @@ it.each([true, false])(
     expect(result?.ok).toBe(true);
     expect(invoke).toHaveBeenCalledOnce();
     if (bound) {
-      expect(invoke.mock.calls[0]?.[0]?.turnSource).toEqual(originalSource);
+      expect(invoke.mock.calls[0]?.[0]?.turnSource).toEqual({
+        channel: "telegram",
+        to: "-100123:topic:42",
+        accountId: "work",
+        threadId: "42",
+      });
     } else {
       expect(invoke.mock.calls[0]?.[0]?.turnSource).toBeUndefined();
     }

@@ -102,6 +102,7 @@ describe("CodexNativeSubagentMonitor", () => {
           rootTurnId: "parent-b",
         }),
       );
+      onTestFinished(() => resumed.release());
       await second.unregister();
       await expect(releaseForResume()).rejects.toThrow("claimed by active work; stop it first");
       if (status === "interrupted") {
@@ -170,7 +171,10 @@ describe("CodexNativeSubagentMonitor", () => {
     expect(monitor.resolveModelThreadId("child-b")).toBeUndefined();
     const stillA = await captureSource(originalRequest);
     expect(stillA.modelMapping).toEqual(mappingA);
-    expect(stillA.source).toBe(a);
+    expect(stillA.source?.bindModelExecution?.(testModel("model-a"))).toBeDefined();
+    expect(() => stillA.source?.bindModelExecution?.(testModel("model-b"))).toThrow(
+      "does not admit",
+    );
     expect(b.release).not.toHaveBeenCalled();
     stillA.release();
     await client.finishTurn("child-a", agentMessage("a-final", "A finished"));
@@ -185,7 +189,8 @@ describe("CodexNativeSubagentMonitor", () => {
       rootTurnId: "parent-b",
     });
     expect(next.modelMapping).toEqual(mappingB);
-    expect(next.source).toBe(b);
+    expect(next.source?.bindModelExecution?.(testModel("model-b"))).toBeDefined();
+    expect(() => next.source?.bindModelExecution?.(testModel("model-a"))).toThrow("does not admit");
     await client.finishTurn("child-b", agentMessage("b-final", "B finished"));
     next.release();
     expect(monitor.resolveModelThreadId("child-b")).toBeUndefined();
@@ -229,7 +234,7 @@ describe("CodexNativeSubagentMonitor", () => {
       turnId: "child-b-turn",
     });
     expect(sibling.nativeReviewRequired).toBe(false);
-    expect(sibling.source).toBe(source);
+    expect(sibling.source?.bindModelExecution?.(testModel("model-b"))).toBeDefined();
     await notifyChildStarted(client, "child-b", "grandchild", "/root/child-b/grandchild");
     await client.item(directSpawnItem("v2", "child-b", "grandchild"), "child-b-turn", "child-b");
     await client.notify({
@@ -244,7 +249,7 @@ describe("CodexNativeSubagentMonitor", () => {
       parentTurnId: "child-b-turn",
       rootTurnId: "parent-turn",
     });
-    expect(nested.source).toBe(source);
+    expect(nested.source?.bindModelExecution?.(testModel("model-b"))).toBeDefined();
     first.release();
     sibling.release();
     nested.release();

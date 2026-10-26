@@ -183,7 +183,7 @@ describe("setup inference credential provider lifetime", () => {
             routeAgentId: "main",
             workspace: state.workspaceDir,
             agentDir: state.agentDir(),
-            effects: { credentialsSaved: false, configPersisted: false },
+            effects: { credentialsSaved: false },
             beforePersistentEffect: async () => {},
             params: {
               kind: "provider-auth",

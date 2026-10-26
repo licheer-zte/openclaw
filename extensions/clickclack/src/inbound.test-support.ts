@@ -3,7 +3,6 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { buildAgentSessionKey, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { vi } from "vitest";
-import { resolveClickClackAccount } from "./accounts.js";
 import type { ClickClackDiscussionBinding } from "./discussions/binding-store.js";
 import {
   asyncDiscussionTestStore,
@@ -43,84 +42,111 @@ export function createInboundRuntime(includeExecution: boolean): PluginRuntime {
     return store;
   }) as unknown as PluginRuntime["state"]["openSyncKeyedStore"];
   runtime.state.openKeyedStoreV2 = <T>(
-    ...args: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>
-  ) => asyncDiscussionTestStore<T>(runtime.state.openSyncKeyedStore, ...args);
+    options: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
+    authority?: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[1],
+  ) => asyncDiscussionTestStore<T>(runtime.state.openSyncKeyedStore, options, authority);
   return runtime;
 }
 
-export const createInboundMessage = (
+export function createInboundMessage(
   overrides: Partial<ClickClackMessage> = {},
-): ClickClackMessage => ({
-  id: "msg_1",
-  workspace_id: "wsp_1",
-  channel_id: "chn_1",
-  author_id: "usr_owner",
-  thread_root_id: "msg_1",
-  body: "/fast on",
-  body_format: "markdown",
-  created_at: "2026-05-09T12:00:00.000Z",
-  author: createInboundAuthor(),
-  ...overrides,
-});
+): ClickClackMessage {
+  return {
+    id: "msg_1",
+    workspace_id: "wsp_1",
+    channel_id: "chn_1",
+    author_id: "usr_owner",
+    thread_root_id: "msg_1",
+    body: "/fast on",
+    body_format: "markdown",
+    created_at: "2026-05-09T12:00:00.000Z",
+    author: createInboundAuthor(),
+    ...overrides,
+  };
+}
 
-export const createInboundDiscussionBinding = (
+export function createInboundDiscussionBinding(
   overrides: Partial<ClickClackDiscussionBinding> = {},
-): ClickClackDiscussionBinding => ({
-  accountId: "default",
-  agentId: "research",
-  sessionId: "session-id",
-  serverBaseUrl: "http://127.0.0.1:8080",
-  externalRef: "openclaw:test:research",
-  externalUrl: "",
-  workspaceRef: "wsp_1",
-  workspaceId: "wsp_1",
-  channelId: "chn_1",
-  channelRouteId: "discussion-route",
-  workspaceRouteId: "workspace-route",
-  section: "Sessions",
-  archived: false,
-  label: "Research",
-  ...overrides,
-});
+): ClickClackDiscussionBinding {
+  return {
+    accountId: "default",
+    agentId: "research",
+    sessionId: "session-id",
+    serverBaseUrl: "http://127.0.0.1:8080",
+    externalRef: "openclaw:test:research",
+    externalUrl: "",
+    workspaceRef: "wsp_1",
+    workspaceId: "wsp_1",
+    channelId: "chn_1",
+    channelRouteId: "discussion-route",
+    workspaceRouteId: "workspace-route",
+    section: "Sessions",
+    archived: false,
+    label: "Research",
+    ...overrides,
+  };
+}
 
-export const createInboundDiscussionConfig = (): CoreConfig => ({
-  channels: {
-    clickclack: {
-      ...location,
-      enabled: true,
-      token: "test-token-placeholder",
-      discussions: { enabled: true, workspace: "wsp_1" },
+export function createInboundDiscussionConfig(): CoreConfig {
+  return {
+    channels: {
+      clickclack: {
+        ...location,
+        enabled: true,
+        token: "test-token-placeholder",
+        discussions: { enabled: true, workspace: "wsp_1" },
+      },
     },
-  },
-});
+  };
+}
 
-export const createInboundAgentAccount = (
+export function createInboundAgentAccount(
   overrides: Partial<ResolvedClickClackAccount> = {},
-): ResolvedClickClackAccount => ({
-  ...resolveClickClackAccount({
-    cfg: {
-      channels: { clickclack: { ...location, token: "test-token-placeholder", toolsAllow: [] } },
-    },
-    env: {},
-  }),
-  botUserId: "usr_receiver",
-  botHandle: "blackbird",
-  ...overrides,
-  config: { ...location, allowFrom: ["*"], ...overrides.config },
-});
+): ResolvedClickClackAccount {
+  const config = { ...location, allowFrom: ["*"], ...overrides.config };
+  return {
+    ...location,
+    accountId: "default",
+    enabled: true,
+    configured: true,
+    apiEndpoint: "http://127.0.0.1:8080",
+    token: "test-token-placeholder",
+    replyMode: "agent",
+    toolsAllow: [],
+    defaultTo: "channel:general",
+    allowFrom: ["*"],
+    botUserId: "usr_receiver",
+    botHandle: "blackbird",
+    allowBots: false,
+    reconnectMs: 1_500,
+    agentActivity: false,
+    commandMenu: true,
+    discussions: { enabled: false, workspace: "wsp_1", section: "Sessions" },
+    requireMention: false,
+    mentionPatterns: [],
+    groups: {},
+    ...overrides,
+    config,
+  };
+}
 
-export const createInboundAuthor = (overrides: Partial<ClickClackUser> = {}): ClickClackUser => ({
-  id: "usr_owner",
-  kind: "human",
-  display_name: "Peter",
-  handle: "steipete",
-  avatar_url: "",
-  created_at: "2026-05-09T12:00:00.000Z",
-  ...overrides,
-});
+export function createInboundAuthor(overrides: Partial<ClickClackUser> = {}): ClickClackUser {
+  return {
+    id: "usr_owner",
+    kind: "human",
+    display_name: "Peter",
+    handle: "steipete",
+    avatar_url: "",
+    created_at: "2026-05-09T12:00:00.000Z",
+    ...overrides,
+  };
+}
 
 export function createInboundAccountConfig(
-  {
+  account: ResolvedClickClackAccount,
+  config: CoreConfig = {},
+): CoreConfig {
+  const {
     accountId,
     configured: _configured,
     apiEndpoint,
@@ -130,14 +156,12 @@ export function createInboundAccountConfig(
     botHandle: _botHandle,
     config: authoredConfig,
     ...settings
-  }: ResolvedClickClackAccount,
-  config: CoreConfig = {},
-): CoreConfig {
+  } = account;
   const accountConfig = {
     ...authoredConfig,
     ...settings,
     apiBaseUrl: apiEndpoint,
-    workspace: authoredConfig.workspace ?? settings.workspace,
+    workspace: authoredConfig.workspace ?? account.workspace,
     botUserId: authoredConfig.botUserId,
   };
   return {

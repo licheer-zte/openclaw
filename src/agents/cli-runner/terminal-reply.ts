@@ -2,6 +2,7 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   prepareAgentRunTerminalReply,
   sanitizeAgentRunTerminalReply,
+  type PreparedAgentRunTerminalReply,
 } from "../agent-run-terminal-reply.js";
 import type { CliOutput } from "../cli-output-contracts.js";
 import {
@@ -53,7 +54,15 @@ export function resolveCliSourceReplyMirror(params: {
   return { payloads, delivered, visibleText };
 }
 
-export function prepareCliRunTerminalReply(context: PreparedCliRunContext, output: CliOutput) {
+export type PreparedCliRunTerminalReply = PreparedAgentRunTerminalReply & {
+  sourceReplyMirror: { payloads: ReplyPayload[]; delivered: boolean; visibleText?: string };
+  completedFinalSource: boolean;
+};
+
+export function prepareCliRunTerminalReply(
+  context: PreparedCliRunContext,
+  output: CliOutput,
+): PreparedCliRunTerminalReply {
   let sourceReplyMirror = resolveCliSourceReplyMirror({
     evidence: output,
     runParams: context.params,

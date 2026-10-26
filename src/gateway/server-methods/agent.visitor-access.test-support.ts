@@ -12,7 +12,6 @@ import {
 } from "../../plugins/services.test-support.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createVisitorAccessPluginConfig } from "../../test-utils/visitor-access-config.test-support.js";
 import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodRegistry,
@@ -57,7 +56,16 @@ export function createVisitorGatewayConfig(workspaceDir: string): OpenClawConfig
       },
     },
     tools: { allow: ["visitor_invite"] },
-    plugins: createVisitorAccessPluginConfig("test-account", "test-app", "test-token"),
+    plugins: {
+      allow: ["visitor-access"],
+      slots: { memory: "none" },
+      entries: {
+        "visitor-access": {
+          enabled: true,
+          config: { accountId: "test-account", appId: "test-app", apiToken: "test-token" },
+        },
+      },
+    },
   };
 }
 

@@ -1,4 +1,3 @@
-import { resolveAgentEntry } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { projectSkillSnapshot } from "../runtime/refresh.js";
@@ -22,27 +21,11 @@ export async function buildSkillSnapshot(
   opts?: WorkspaceSkillBuildOptions & { snapshotVersion?: number },
 ): Promise<SkillSnapshot> {
   const { eligible, skillFilter } = await resolveWorkspaceSkillPromptEntries(workspaceDir, opts);
-  const agent =
-    opts?.config && opts.agentId ? resolveAgentEntry(opts.config, opts.agentId) : undefined;
   const snapshot = await projectSkillSnapshot({
     workspaceDir,
     eligible,
     skillFilter,
-    // Eligibility is already selected. Rendering needs no channel, provider, or plugin config.
-    config: opts?.config
-      ? {
-          skills: { limits: opts.config.skills?.limits },
-          ...(agent
-            ? {
-                agents: {
-                  entries: {
-                    [agent.id]: { agentDir: agent.agentDir, skillsLimits: agent.skillsLimits },
-                  },
-                },
-              }
-            : {}),
-        }
-      : undefined,
+    config: opts?.config,
     agentId: opts?.agentId,
     skillOverrides: opts?.skillOverrides,
     eligibility: opts?.eligibility

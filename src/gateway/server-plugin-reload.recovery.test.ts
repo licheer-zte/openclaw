@@ -64,7 +64,6 @@ import {
 import {
   verifyGatewayMemoryReplacement,
   verifyGatewayMemoryWatcherRestart,
-  verifyUnchangedMemoryServiceSurvivesReload,
 } from "./server-plugin-reload.memory.test-support.js";
 import {
   createRecoveryChannelManager,
@@ -414,9 +413,6 @@ it.for(["pending", "initialized", "separate-registry", "rollback"] as const)(
   (providerState, { signal }) =>
     verifyGatewayMemoryWatcherRestart(createRecoveryFixture, providerState, signal),
 );
-
-it("keeps an unchanged memory plugin's service running across an unrelated reload", () =>
-  verifyUnchangedMemoryServiceSurvivesReload(createRecoveryFixture));
 
 it.for([
   { owner: "retained", failure: "before-drain" },

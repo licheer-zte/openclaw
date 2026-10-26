@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
   dualRoutes,
@@ -21,11 +21,11 @@ import {
   readPreparedCatalog,
   registerGatewayModelCatalogPrivateAccess,
 } from "../server-model-catalog-auth.js";
-import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import { buildModelsListResult, prepareModelsListResult } from "./models-list-result.js";
-import { createModelsListTestContext } from "./models-list-result.openai-routes.test-support.js";
-
-afterEach(() => vi.useRealTimers());
+import {
+  createModelsListTestContext,
+  WITHOUT_OPENAI_ENV_AUTH,
+} from "./models-list-result.openai-routes.test-support.js";
 
 const advertisedTiers = ["priority", "ultrafast"];
 const subscriptionFields = { api: subscriptionRoute.api, baseUrl: subscriptionRoute.baseUrl };
@@ -90,7 +90,6 @@ function preparePublic(context: ReturnType<typeof createModelsListTestContext>) 
 it.each(["profile", "direct"] as const)(
   "keeps %s API-key tiers selectable and projects transient fulfillment without discovery",
   async (source) => {
-    vi.useFakeTimers({ toFake: ["Date"] });
     const model = catalogModel("synthetic-api-model");
     const profileId = source === "profile" ? "openai:api-fixture" : undefined;
     const cfg = modelConfig([model.id]);
@@ -152,15 +151,12 @@ it.each(["profile", "direct"] as const)(
       serviceTierObservations: observations,
     });
     observe(tierObservation("ultrafast", "ultrafast"));
-    observe(tierObservation("priority", "priority"));
     expect(read()).toMatchObject({
-      serviceTiers: advertisedTiers,
-      serviceTierObservations: observations,
+      serviceTierObservations: [priority],
     });
-    vi.setSystemTime(Date.now() + 60_000);
+    observe(tierObservation("priority", "priority"));
     expect(read()).not.toHaveProperty("serviceTierObservation");
     expect(read()).not.toHaveProperty("serviceTierObservations");
-    expect(read()).toMatchObject({ serviceTiers: advertisedTiers });
   },
 );
 it.for(["codex", "openclaw"] as const)(

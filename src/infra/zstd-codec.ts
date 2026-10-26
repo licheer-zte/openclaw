@@ -24,16 +24,7 @@ export function resolveZstdCodec(): ZstdCodec {
     decompress: (data, maxOutputLength) =>
       zlib.zstdDecompressSync(
         data,
-        maxOutputLength === undefined
-          ? undefined
-          : {
-              maxOutputLength,
-              // Small bounded frames need no full default chunk; one spare byte avoids a full-chunk retry.
-              chunkSize: Math.max(
-                zlib.constants.Z_MIN_CHUNK,
-                Math.min(zlib.constants.Z_DEFAULT_CHUNK, maxOutputLength + 1),
-              ),
-            },
+        maxOutputLength === undefined ? undefined : { maxOutputLength },
       ),
   });
 }

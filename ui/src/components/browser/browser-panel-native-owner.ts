@@ -4,6 +4,7 @@ import {
   readNativeBrowserState,
   subscribeNativeBrowserState,
   type NativeBrowserMessage,
+  type NativeBrowserState,
   type NativeBrowserTab,
 } from "../../app/native-browser-bridge.ts";
 import { subscribeNativeOverlayOcclusion } from "../../lib/native-overlay-occlusion.ts";
@@ -278,10 +279,10 @@ export function createBrowserPanelNative(controller: BrowserPanelNativeHost) {
     return allNativeTabs.filter((tab) => includesTab(tab));
   }
 
-  function acceptTabs(tabs: NativeBrowserTab[], activatePopups: boolean): void {
+  function acceptState(state: NativeBrowserState, activatePopups: boolean): void {
     const previous = new Set(nativeTabs().map((tab) => tab.id));
     const activeBefore = native.activeTab;
-    allNativeTabs = tabs;
+    allNativeTabs = state.tabs;
     controller.setState("tabs", native.mergeRemoteTabs(controller.tabs));
     const view = controller.view;
     if (
@@ -292,7 +293,7 @@ export function createBrowserPanelNative(controller: BrowserPanelNativeHost) {
       controller.setState("view", null);
     }
     for (const id of popupScopes.keys()) {
-      if (!tabs.some((tab) => tab.id === id)) {
+      if (!state.tabs.some((tab) => tab.id === id)) {
         popupScopes.delete(id);
       }
     }
@@ -377,9 +378,9 @@ export function createBrowserPanelNative(controller: BrowserPanelNativeHost) {
       presenters.add(presenterEntry);
       const initial = readNativeBrowserState();
       if (initial) {
-        acceptTabs(initial.tabs, false);
+        acceptState(initial, false);
       }
-      const stopState = subscribeNativeBrowserState((state) => acceptTabs(state.tabs, true));
+      const stopState = subscribeNativeBrowserState((state) => acceptState(state, true));
       const stopPresentation = presentation.mount();
       return () => {
         stopState();
@@ -413,13 +414,6 @@ export function createBrowserPanelNative(controller: BrowserPanelNativeHost) {
       }
       if (reply && !reply.ok) {
         controller.reportError(reply.error);
-      } else if (reply?.ok && request.type === "close") {
-        // The native close commits before its scheduled state push. Publish the
-        // acknowledged removal before callers decide whether to close the panel.
-        acceptTabs(
-          allNativeTabs.filter((tab) => tab.id !== request.tabId),
-          false,
-        );
       }
       return reply?.ok === true;
     },

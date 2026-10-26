@@ -17,7 +17,7 @@ const OnboardingRecommendationMatchSchema = z.object({
   }),
 });
 
-const OnboardingRecommendationMatchesSchema = z.array(OnboardingRecommendationMatchSchema);
+export const OnboardingRecommendationMatchesSchema = z.array(OnboardingRecommendationMatchSchema);
 
 export type OnboardingRecommendationMatch = z.infer<typeof OnboardingRecommendationMatchSchema>;
 

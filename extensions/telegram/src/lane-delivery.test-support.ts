@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { expect, vi } from "vitest";
 import { createTestDraftStream } from "./draft-stream.test-helpers.js";
@@ -6,6 +5,7 @@ import {
   createLaneTextDeliverer,
   type DraftLaneState,
   type LaneDeliveryResult,
+  type LaneName,
 } from "./lane-delivery-text-deliverer.js";
 import { createTelegramPromptContextProjectionSequence } from "./prompt-context-projection.js";
 
@@ -14,45 +14,61 @@ type PromptContextRecord = Parameters<
 >[0]["record"];
 type DelivererOptions = Parameters<typeof createLaneTextDeliverer>[0];
 
-const emptyLane = { lastPartialText: "", hasStreamedMessage: false, finalized: false };
-const lane = (stream: DraftLaneState["stream"]): DraftLaneState => ({
-  ...emptyLane,
-  stream,
-  retainedPromptContextPages: [],
-});
+function lane(stream: DraftLaneState["stream"]): DraftLaneState {
+  return {
+    stream,
+    lastPartialText: "",
+    hasStreamedMessage: false,
+    finalized: false,
+    retainedPromptContextPages: [],
+  };
+}
 
-export function createHarness({
-  answerStream,
-  answerMessageId,
-  ...options
-}: {
+export function createHarness(params?: {
   answerMessageId?: number;
   answerStream?: DraftLaneState["stream"] | null;
   resolveFinalPayloadCandidate?: DelivererOptions["resolveFinalPayloadCandidate"];
   resolveFinalPresentationText?: DelivererOptions["resolveFinalPresentationText"];
-} = {}) {
+}) {
   const answer =
-    answerStream === null
+    params?.answerStream === null
       ? undefined
-      : (answerStream ?? createTestDraftStream({ messageId: answerMessageId }));
+      : (params?.answerStream ?? createTestDraftStream({ messageId: params?.answerMessageId }));
   const reasoning = createTestDraftStream();
-  const lanes = { answer: lane(answer), reasoning: lane(reasoning) };
-  const mocks = {
-    sendPayload: vi.fn<DelivererOptions["sendPayload"]>(async () => ({ visibleReplySent: true })),
-    editStreamMessage: vi.fn().mockResolvedValue(undefined),
-    recordPromptContextPreview: vi.fn<PromptContextRecord>().mockResolvedValue(true),
-    markDelivered: vi.fn(),
+  const lanes: Record<LaneName, DraftLaneState> = {
+    answer: lane(answer),
+    reasoning: lane(reasoning),
   };
+  const sendPayload = vi
+    .fn<DelivererOptions["sendPayload"]>()
+    .mockResolvedValue({ visibleReplySent: true });
+  const editStreamMessage = vi.fn().mockResolvedValue(undefined);
+  const recordPromptContextPreview = vi.fn<PromptContextRecord>().mockResolvedValue(true);
+  const createPromptContextSequence = () =>
+    createTelegramPromptContextProjectionSequence({ record: recordPromptContextPreview });
+  const markDelivered = vi.fn();
+
   const deliverLaneText = createLaneTextDeliverer({
-    ...mocks,
     lanes,
-    createPromptContextSequence: () =>
-      createTelegramPromptContextProjectionSequence({ record: mocks.recordPromptContextPreview }),
-    ...options,
+    sendPayload,
+    editStreamMessage,
+    createPromptContextSequence,
+    resolveFinalPayloadCandidate: params?.resolveFinalPayloadCandidate,
+    resolveFinalPresentationText: params?.resolveFinalPresentationText,
     log: () => {},
+    markDelivered,
   });
 
-  return { deliverLaneText, lanes, answer, reasoning, ...mocks };
+  return {
+    deliverLaneText,
+    lanes,
+    answer,
+    reasoning,
+    sendPayload,
+    editStreamMessage,
+    recordPromptContextPreview,
+    markDelivered,
+  };
 }
 
 type Harness = ReturnType<typeof createHarness>;
@@ -77,8 +93,13 @@ export async function deliverProjectedFinalAnswer(harness: Harness, text: string
   });
 }
 
-export function expectPreviewFinalized(result: LaneDeliveryResult) {
-  assert(result.kind === "preview-finalized", `expected preview-finalized, got ${result.kind}`);
+export function expectPreviewFinalized(
+  result: LaneDeliveryResult,
+): Extract<LaneDeliveryResult, { kind: "preview-finalized" }>["delivery"] {
+  expect(result.kind).toBe("preview-finalized");
+  if (result.kind !== "preview-finalized") {
+    throw new Error(`expected preview-finalized, got ${result.kind}`);
+  }
   return result.delivery;
 }
 
@@ -87,11 +108,14 @@ export function expectRecordedPreview(
   index: number,
   params: { messageId?: number; text: string; partIndex: number; finalPart: boolean },
 ) {
-  const { messageId = 999, text, ...projection } = params;
   expect(recordPromptContextPreview.mock.calls[index]?.[0]).toEqual({
-    messageId,
-    text,
-    projection: { transcriptMessageId: "assistant-1", ...projection },
+    messageId: params.messageId ?? 999,
+    text: params.text,
+    projection: {
+      transcriptMessageId: "assistant-1",
+      partIndex: params.partIndex,
+      finalPart: params.finalPart,
+    },
   });
 }
 

@@ -1,3 +1,4 @@
+// Shared session fixture for the CLI transcript account boundary tests.
 import path from "node:path";
 import { expect } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -7,6 +8,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { appendTranscriptEventSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import type { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../sessions/session-manager.js";
@@ -14,10 +16,10 @@ import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { buildCliSessionHistoryPrompt, loadCliSessionPromptContext } from "./session-history.js";
 import type { PreparedCliRunContext } from "./types.js";
 
-type RunParams = PreparedCliRunContext["params"];
+type SessionStoreTempDirs = ReturnType<typeof useSessionStoreTempDirs>;
 
 export async function createHistoryBoundaryFixture(
-  sessionDirs: { make(): string },
+  sessionDirs: SessionStoreTempDirs,
   withHeader = true,
 ) {
   setRuntimeConfigSnapshot({});
@@ -42,17 +44,20 @@ export async function createHistoryBoundaryFixture(
   let runNumber = 0;
   const withRun = async <T>(
     runId: string,
-    action: (params: RunParams) => Promise<T>,
-    overrides: Partial<RunParams> = {},
+    action: (params: PreparedCliRunContext["params"]) => Promise<T>,
+    overrides: Partial<PreparedCliRunContext["params"]> = {},
   ) => {
     const admission = prepareSystemAgentRunAdmission({}, runId, "main", "history-test");
     try {
       return await action({
-        ...target,
         admittedRunContext: await admission.admit("embedded"),
         runId,
+        agentId: target.agentId,
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
         sessionFile: target.sessionKey,
         sessionTarget: target,
+        storePath: target.storePath,
         provider: "test-cli",
         model: "test-model",
         prompt: "current ask",
@@ -66,8 +71,8 @@ export async function createHistoryBoundaryFixture(
   };
   const run = async <T>(
     epoch: string | undefined,
-    action: (allowed: boolean, params: RunParams) => Promise<T>,
-    overrides: Partial<RunParams> = {},
+    action: (allowed: boolean, params: PreparedCliRunContext["params"]) => Promise<T>,
+    overrides: Partial<PreparedCliRunContext["params"]> = {},
     credential?: AuthProfileCredential,
     preparedBackend?: Parameters<typeof prepareCliHistoryBoundary>[1]["preparedBackend"],
   ) => {
@@ -95,14 +100,15 @@ export async function createHistoryBoundaryFixture(
   return { target, manager, run, seed, withRun };
 }
 
-export async function history(allowed: boolean, params: RunParams) {
-  const { reseedMessages } = await loadCliSessionPromptContext({
-    ...params,
-    allowRawTranscriptReseed: true,
-    rawTranscriptReseedReason: allowed ? "missing-transcript" : "auth-unknown",
-  });
+export async function history(allowed: boolean, params: PreparedCliRunContext["params"]) {
   return buildCliSessionHistoryPrompt({
-    messages: reseedMessages,
+    messages: (
+      await loadCliSessionPromptContext({
+        ...params,
+        allowRawTranscriptReseed: true,
+        rawTranscriptReseedReason: allowed ? "missing-transcript" : "auth-unknown",
+      })
+    ).reseedMessages,
     prompt: "current ask",
     maxHistoryChars: 8192,
   });

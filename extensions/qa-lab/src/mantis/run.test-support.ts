@@ -1,9 +1,10 @@
+// Qa Lab test support builds Mantis command results and lane summaries.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { vi } from "vitest";
 import type { CommandRunner, CrabboxInspect } from "./crabbox-runtime.js";
-import type { MantisCommandResult, MantisCommandRunner } from "./run-command.runtime.js";
+import type { MantisCommandRunner } from "./run-command.runtime.js";
 
 export async function mockManagedCrabboxBinary() {
   const actual = await vi.importActual<
@@ -22,7 +23,11 @@ export function createMantisCommandRunner(
   inspect: CrabboxInspect & { id: string },
   onCommand: (...args: Parameters<CommandRunner>) => Promise<void>,
 ) {
-  const commands: { command: string; args: readonly string[]; env?: NodeJS.ProcessEnv }[] = [];
+  const commands: Array<{
+    command: string;
+    args: readonly string[];
+    env?: NodeJS.ProcessEnv;
+  }> = [];
   const runner = vi.fn<CommandRunner>(async (command, args, options) => {
     commands.push({ command, args, env: options.env });
     await onCommand(command, args, options);
@@ -54,14 +59,22 @@ export function requireArgAfter(args: readonly string[], flag: string): string {
   return expectDefined(args[index + 1], `${flag} argument value`);
 }
 
-export type StubCommandResult = MantisCommandResult;
+export type StubCommandResult = {
+  code: number | null;
+  killed: boolean;
+  signal: NodeJS.Signals | null;
+  stderr: string;
+  stdout: string;
+  stdoutTruncatedBytes?: number;
+  termination: "exit" | "timeout" | "no-output-timeout" | "signal";
+};
 
 export function successfulCommandResult(stdout = ""): StubCommandResult {
   return { code: 0, killed: false, signal: null, stderr: "", stdout, termination: "exit" };
 }
 
 export function failedCommandResult(code = 1): StubCommandResult {
-  return { ...successfulCommandResult(), code };
+  return { code, killed: false, signal: null, stderr: "", stdout: "", termination: "exit" };
 }
 
 export async function mockMantisSetupCommand(
@@ -69,8 +82,13 @@ export async function mockMantisSetupCommand(
 ) {
   if (command === "git" && execution.stage === "worktree-add") {
     await fs.mkdir(String(args[4]), { recursive: true });
-  } else if (command === "git" && execution.stage === "worktree-cleanup" && args[1] === "remove") {
-    await fs.rm(execution.cwd, { force: true, recursive: true });
+    return successfulCommandResult();
+  }
+  if (command === "git" && execution.stage === "worktree-cleanup") {
+    if (args[1] === "remove") {
+      await fs.rm(execution.cwd, { force: true, recursive: true });
+    }
+    return successfulCommandResult();
   }
   return successfulCommandResult();
 }
@@ -86,8 +104,14 @@ export async function writeLegacyLaneSummary(params: {
   const repoRootArg = requireArgAfter(params.args, "--repo-root");
   const outputDirArg = requireArgAfter(params.args, "--output-dir");
   const lane = outputDirArg.endsWith("baseline") ? "baseline" : "candidate";
-  const scenario = { id: params.scenario, status: lane === "baseline" ? "fail" : "pass" };
-  await writeMantisArtifacts(path.join(repoRootArg, outputDirArg), {
-    "discord-qa-summary.json": `${JSON.stringify({ scenarios: [scenario] }, null, 2)}\n`,
-  });
+  const outputDir = path.join(repoRootArg, outputDirArg);
+  await fs.mkdir(outputDir, { recursive: true });
+  await fs.writeFile(
+    path.join(outputDir, "discord-qa-summary.json"),
+    `${JSON.stringify(
+      { scenarios: [{ id: params.scenario, status: lane === "baseline" ? "fail" : "pass" }] },
+      null,
+      2,
+    )}\n`,
+  );
 }

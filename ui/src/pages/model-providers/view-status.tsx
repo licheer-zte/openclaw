@@ -1,4 +1,3 @@
-import type { ModelAuthStatusProfile } from "../../api/types.ts";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -6,26 +5,6 @@ import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import type { ModelProviderAuthKind, ModelProviderCard } from "./data.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
-
-/** The auth owner supplies a reason for unusable grants, not for routine access expiry. */
-export function isAccessTokenExpiry(profile: ModelAuthStatusProfile): boolean {
-  return (
-    profile.type === "oauth" &&
-    (profile.status === "expiring" || profile.status === "expired") &&
-    profile.reasonCode === undefined
-  );
-}
-
-export function profileAuthProblem(profile: ModelAuthStatusProfile): string | undefined {
-  if (profile.type !== "oauth") {
-    return undefined;
-  }
-  if (profile.reasonCode === "missing_credential") {
-    return "modelProviders.status.signInAgain";
-  }
-  // The existing reason covers both pending and failed refresh markers, not just rejection.
-  return profile.reasonCode === "expired" ? "modelProviders.status.signInUnavailable" : undefined;
-}
 
 const AUTH_STATUS: Record<
   ModelProviderAuthKind,
@@ -38,7 +17,8 @@ const AUTH_STATUS: Record<
   "api-key": { kind: "muted", labelKey: "modelProviders.status.apiKey" },
 };
 
-function renderAuthStatus(auth: ModelProviderCard["auth"]) {
+function renderAuthStatus(card: ModelProviderCard) {
+  const auth = card.auth;
   if (!auth) {
     return undefined;
   }
@@ -71,16 +51,10 @@ export function isProviderUsable(card: ModelProviderCard): boolean {
   );
 }
 
-export function needsAuthAttention(card: ModelProviderCard): boolean {
-  if (card.auth?.kind === "missing") {
-    return true;
-  }
-  if (card.auth?.kind !== "expired" && card.auth?.kind !== "expiring") {
-    return false;
-  }
-  // A rollup has no credential type. Unknown or mixed expiry retains its warning.
-  const expiring = card.profiles.filter((profile) => profile.status === card.auth?.kind);
-  return expiring.length === 0 || !expiring.every(isAccessTokenExpiry);
+function needsAuthAttention(card: ModelProviderCard): boolean {
+  return (
+    card.auth?.kind === "expired" || card.auth?.kind === "missing" || card.auth?.kind === "expiring"
+  );
 }
 
 export function hasVerifiedProvider(card: ModelProviderCard): boolean {
@@ -102,18 +76,17 @@ export function renderProviderStatus(card: ModelProviderCard) {
       />
     );
   }
-  if (card.catalogStatus === "auth-rejected") {
-    // The card-wide outcome does not identify which saved credential was rejected.
-    return <SettingsStatus kind="danger" label={t("modelProviders.status.denied")} />;
-  }
   if (needsAuthAttention(card)) {
-    return renderAuthStatus(card.auth);
+    return renderAuthStatus(card);
+  }
+  if (card.catalogStatus === "auth-rejected") {
+    return <SettingsStatus kind={"danger"} label={t("modelProviders.status.denied")} />;
   }
   if (card.catalogStatus === "unavailable") {
     return <SettingsStatus kind={"warn"} label={t("modelProviders.status.modelsUnavailable")} />;
   }
   if (!isProviderUsable(card)) {
-    return renderAuthStatus(card.auth);
+    return renderAuthStatus(card);
   }
   const verified = hasVerifiedProvider(card);
   const ready = verified && card.availableModelCount > 0;

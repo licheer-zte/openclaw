@@ -8,40 +8,9 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { prepareProjectedSessionSharing, prepareSessionSharing } from "./session-sharing.js";
-import {
-  sharingPolicyClient,
-  sharingPolicyTarget,
-  rolePolicyConfig,
-} from "./session-sharing.test-utils.js";
+import { sharingPolicyClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 
 afterEach(() => vi.restoreAllMocks());
-
-it("reuses interleaved audience keys without expanding scopes on cache hits", () => {
-  const cfg = rolePolicyConfig();
-  const revision = {};
-  const clients = ["alice", "bob"].map((user) => sharingPolicyClient({ user }));
-  const key = (client: (typeof clients)[number]) =>
-    prepareProjectedSessionSharing({ cfg, client, isMember: () => false }).getCacheKey(revision);
-  const initial = clients.map(key);
-  const scopes = clients[0]!.connect.scopes!;
-  const iterate = vi.spyOn(scopes, Symbol.iterator);
-  for (let i = 0; i < 3; i++) {
-    expect(clients.map(key)).toEqual(initial);
-  }
-  expect(iterate).not.toHaveBeenCalled();
-  iterate.mockRestore();
-
-  // Scope values, not the array identity, remain live authorization inputs.
-  scopes[0] = "operator.admin";
-  expect(key(clients[0]!)).not.toBe(initial[0]);
-  expect(key(clients[1]!)).toBe(initial[1]);
-  scopes[0] = "operator.read";
-  expect(key(clients[0]!)).toBe(initial[0]);
-  clients[0]!.connect.scopes = [];
-  const empty = key(clients[0]!);
-  clients[0]!.connect.scopes = undefined;
-  expect(key(clients[0]!)).not.toBe(empty);
-});
 
 it("refreshes retained sharing facts on profile changes and clears them when identity detaches", async () => {
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
@@ -50,15 +19,23 @@ it("refreshes retained sharing facts on profile changes and clears them when ide
     using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const client = sharingPolicyClient({ user: source.id }) as GatewayWsClient;
     prepareGatewayRecipientProfile(client);
+    expect(client.preparedSessionProfile).toEqual({
+      profileId: source.id,
+      aliases: new Set([source.id]),
+      role: null,
+      githubLogin: null,
+    });
     const stop = onUserProfilesChanged(() => prepareGatewayRecipientProfile(client));
     const cfg = rolePolicyConfig();
     let revision = {};
-    const share = () => prepareProjectedSessionSharing({ cfg, client, isMember: () => false });
-    const key = () => share().getCacheKey(revision);
+    const key = () =>
+      prepareProjectedSessionSharing({ cfg, client, isMember: () => false }).getCacheKey(revision);
     try {
       const initialKey = key();
+      expect(key()).toBe(initialKey);
       setUserProfileRole(source.id, "view");
       expect(client.preparedSessionProfile?.role).toBe("view");
+      // The same effective policy still has the same canonical audience key.
       expect(key()).toBe(initialKey);
       setUserProfileRole(target.id, "none");
       linkEmail("source@example.test", target.id);
@@ -71,7 +48,8 @@ it("refreshes retained sharing facts on profile changes and clears them when ide
       const mergedKey = key();
       expect(mergedKey).not.toBe(initialKey);
       client.connect.scopes!.push("operator.admin");
-      expect(key()).not.toBe(mergedKey);
+      const adminKey = key();
+      expect(adminKey).not.toBe(mergedKey);
       client.connect.scopes!.pop();
       expect(key()).toBe(mergedKey);
       // The owner retires the revision when publishing same-object policy edits.
@@ -81,7 +59,11 @@ it("refreshes retained sharing facts on profile changes and clears them when ide
       cfg.gateway!.roles!.definitions.none!.sessions.others = "none";
       revision = {};
       const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-      const sharing = share();
+      const sharing = prepareProjectedSessionSharing({
+        cfg,
+        client,
+        isMember: () => false,
+      });
       expect(sharing.sessionCap).toBe("none");
       expect(sharing.isCreator({ type: "human", source: "profile", id: source.id })).toBe(true);
       expect(sharing.entryFilter?.("agent:main:foreign", { visibility: "shared" })).toBe(false);
@@ -101,8 +83,19 @@ it("uses fresh prepared caller, alias, role, and membership facts without queryi
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const owner = ensureProfileForEmail("owner@example.test");
     const oldOwner = ensureProfileForEmail("old-owner@example.test");
-    const target = sharingPolicyTarget({ type: "human", id: oldOwner.id });
-    target.entry.visibility = "shared";
+    const target = {
+      agentId: "main",
+      canonicalKey: "agent:main:shared",
+      storeKey: "agent:main:shared",
+      storeKeys: ["agent:main:shared"],
+      storePath: "/unused/prepared-sharing",
+      entry: {
+        sessionId: "shared-session",
+        updatedAt: 1,
+        visibility: "shared" as const,
+        createdActor: { type: "human" as const, source: "profile" as const, id: oldOwner.id },
+      },
+    };
     const client = sharingPolicyClient({ user: owner.id });
     const cfg = rolePolicyConfig();
     const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
@@ -113,15 +106,13 @@ it("uses fresh prepared caller, alias, role, and membership facts without queryi
       [new Set([owner.id]), undefined, true, "member", true],
       [new Set([owner.id]), "write", false, "member", true],
       [new Set([owner.id]), "none", true, "viewer", false],
-      [new Set([owner.id]), "invited", false, "viewer", false],
-      [new Set([owner.id]), "invited", true, "member", true],
     ] as const) {
       const sharing = prepareSessionSharing(
         { cfg, client },
         { aliases, sessionCap, isMember: () => member },
       );
       expect(sharing.roleForTarget(target)).toBe(expectedRole);
-      expect(sharing.canReadTarget(target)).toBe(visible);
+      expect(sharing.entryFilter?.(target.canonicalKey, target.entry)).toBe(visible);
       expect(sharing.authorizeTarget(target) === null).toBe(visible);
     }
     client.authenticatedUserProfile!.profileId = oldOwner.id;

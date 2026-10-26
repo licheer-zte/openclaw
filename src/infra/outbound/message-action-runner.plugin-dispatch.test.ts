@@ -292,8 +292,10 @@ describe("runMessageAction plugin dispatch", () => {
         sendResult,
       });
       const result = await runBroadcast("gatewaychat");
-      expect(result.kind).toBe("broadcast");
-      expect(result).toHaveProperty("payload.results", [
+      if (result.kind !== "broadcast") {
+        throw new Error("expected broadcast result");
+      }
+      expect(result.payload.results).toEqual([
         {
           channel: "gatewaychat",
           to: "user-123",

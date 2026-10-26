@@ -63,8 +63,6 @@ export type ColdLoadRpcRecord = {
   ms: number;
   requestMs: number;
   responseMs: number;
-  responseOk?: boolean;
-  initialHistoryOk?: boolean;
   dispatchMs?: number;
   responseAtMs?: number;
   abandoned?: true;

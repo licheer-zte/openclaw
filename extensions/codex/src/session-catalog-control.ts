@@ -2,7 +2,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveCodexAppServerLocalHomeDir } from "./app-server/auth-start-options.js";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import type { CodexAppServerStartOptions } from "./app-server/config-contracts.js";
@@ -43,14 +42,6 @@ import type {
   CodexSessionCatalogControl,
   CodexSessionCatalogControlFactory,
 } from "./session-catalog-types.js";
-
-const loadCatalogIndex = createLazyRuntimeModule(() => import("./session-catalog-index.js"));
-const loadCatalogProjection = createLazyRuntimeModule(
-  () => import("./session-catalog-projection.js"),
-);
-const loadCommandRpc = createLazyRuntimeModule(() => import("./command-rpc.js"));
-const loadSharedClient = createLazyRuntimeModule(() => import("./app-server/shared-client.js"));
-const loadRequest = createLazyRuntimeModule(() => import("./app-server/request.js"));
 
 type CodexCatalogRequestMethod =
   | typeof CODEX_CONTROL_METHODS.archiveThread
@@ -281,7 +272,10 @@ export function createCodexSessionCatalogControl(params: {
       const [
         { CodexCatalogIndex },
         { canReuseCodexCatalogPreview, projectCodexCatalogDeltaPage, projectCodexCatalogPage },
-      ] = await Promise.all([loadCatalogIndex(), loadCatalogProjection()]);
+      ] = await Promise.all([
+        import("./session-catalog-index.js"),
+        import("./session-catalog-projection.js"),
+      ]);
       if (closed) {
         throw new Error("Codex resident catalog is closed");
       }
@@ -467,7 +461,7 @@ export function createCodexSessionCatalogControl(params: {
     return createCodexCatalogRequestSnapshot(
       runtime.requestTimeoutMs,
       async (method, requestParams, timeoutMs, assertCurrent, observation) => {
-        const { codexControlRequest } = await loadCommandRpc();
+        const { codexControlRequest } = await import("./command-rpc.js");
         return await codexControlRequest(pluginConfig, method, requestParams, {
           ...requestOptions,
           authProfileId: null,
@@ -516,8 +510,8 @@ export function createCodexSessionCatalogControl(params: {
         getLeasedSharedCodexAppServerClient,
         releaseLeasedSharedCodexAppServerClient,
         retireSharedCodexAppServerClientIfCurrent,
-      } = await loadSharedClient();
-      const { requestCodexAppServerClientJson } = await loadRequest();
+      } = await import("./app-server/shared-client.js");
+      const { requestCodexAppServerClientJson } = await import("./app-server/request.js");
       const client = await getLeasedSharedCodexAppServerClient({
         agentDir,
         config: runtimeConfig,
@@ -606,7 +600,8 @@ export function createCodexSessionCatalogControl(params: {
       // Node disconnect owns these transports; Gateway service retirement does not.
       const clients = getSharedCodexAppServerClientState();
       if (clients.liveClients.size > 0 || clients.startup.pending.size > 0) {
-        const { clearSharedCodexAppServerClientAndWait } = await loadSharedClient();
+        const { clearSharedCodexAppServerClientAndWait } =
+          await import("./app-server/shared-client.js");
         await clearSharedCodexAppServerClientAndWait();
       }
     },

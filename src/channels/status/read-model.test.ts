@@ -5,6 +5,7 @@ import {
   hasRuntimeCredentialAvailable,
   markConfiguredUnavailableCredentialStatusesAvailable,
   normalizeRuntimeChannelAccountSnapshots,
+  resolveChannelAccountStatusRows,
 } from "./read-model.js";
 
 describe("channel status read model", () => {
@@ -21,6 +22,34 @@ describe("channel status read model", () => {
 
     expect(accounts.get("discord")).toStrictEqual([{ accountId: "default", configured: true }]);
     expect(accounts.has("slack")).toBe(false);
+  });
+
+  it("merges runtime-only accounts and prefers gateway snapshots", async () => {
+    const rows = await resolveChannelAccountStatusRows({
+      localAccountIds: ["default"],
+      runtimeAccounts: [
+        { accountId: "default", configured: true, tokenSource: "env" },
+        { accountId: "ops", configured: true, tokenSource: "env" },
+      ],
+      resolveLocalSnapshot: async (accountId) => ({
+        accountId,
+        configured: false,
+        tokenSource: "none",
+      }),
+    });
+
+    expect(rows).toStrictEqual([
+      {
+        accountId: "default",
+        source: "gateway",
+        snapshot: { accountId: "default", configured: true, tokenSource: "env" },
+      },
+      {
+        accountId: "ops",
+        source: "gateway",
+        snapshot: { accountId: "ops", configured: true, tokenSource: "env" },
+      },
+    ]);
   });
 
   it("finds legacy live accounts by id/name fallback for status summaries", () => {

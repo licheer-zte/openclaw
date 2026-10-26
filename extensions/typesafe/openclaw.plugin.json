@@ -115,8 +115,7 @@
               "decision": {
                 "protocol": "typesafe-systemone",
                 "input": [
-                  "text",
-                  "image"
+                  "text"
                 ],
                 "questions": {
                   "boolean": {
@@ -139,14 +138,7 @@
                 "reasoning": {
                   "modes": ["auto"]
                 },
-                "confidence": "provider-specific",
-                "limits": {
-                  "image": {
-                    "maxBytes": 4194304,
-                    "mimeTypes": ["image/png", "image/jpeg"],
-                    "remoteUrls": false
-                  }
-                }
+                "confidence": "provider-specific"
               }
             }
           },
@@ -160,8 +152,7 @@
               "decision": {
                 "protocol": "typesafe-systemone",
                 "input": [
-                  "text",
-                  "image"
+                  "text"
                 ],
                 "questions": {
                   "boolean": {
@@ -184,14 +175,7 @@
                 "reasoning": {
                   "modes": ["auto"]
                 },
-                "confidence": "provider-specific",
-                "limits": {
-                  "image": {
-                    "maxBytes": 4194304,
-                    "mimeTypes": ["image/png", "image/jpeg"],
-                    "remoteUrls": false
-                  }
-                }
+                "confidence": "provider-specific"
               }
             }
           },
@@ -204,8 +188,7 @@
               "decision": {
                 "protocol": "typesafe-systemone",
                 "input": [
-                  "text",
-                  "image"
+                  "text"
                 ],
                 "questions": {
                   "boolean": {
@@ -230,11 +213,6 @@
                 },
                 "confidence": "provider-specific",
                 "limits": {
-                  "image": {
-                    "maxBytes": 4194304,
-                    "mimeTypes": ["image/png", "image/jpeg"],
-                    "remoteUrls": false
-                  },
                   "maxRequestTokens": 64000,
                   "maxStateAndQuestionTokens": 32000
                 },

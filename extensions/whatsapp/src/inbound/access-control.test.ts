@@ -21,8 +21,13 @@ beforeAll(async () => {
 const PHONE = "+15550001111";
 const SELF = "+15550009999";
 const GROUP = "120363401234567890@g.us";
-const groupMessage = { from: GROUP, group: true };
-const samePhone = { from: SELF, senderE164: SELF };
+const groupMessage = { from: GROUP, group: true, remoteJid: GROUP };
+const samePhone = {
+  from: SELF,
+  senderE164: SELF,
+  pushName: "Owner",
+  remoteJid: "15550009999@s.whatsapp.net",
+};
 type Input = Partial<Parameters<typeof normalizeTestWhatsAppMessage>[0]>;
 
 function configure(whatsapp: Record<string, unknown>, extra: Record<string, unknown> = {}) {
@@ -38,18 +43,26 @@ async function access(overrides: Input = {}) {
 }
 function command(input: Input = {}, group = false, authDir?: string) {
   const from = input.from ?? (group ? GROUP : PHONE);
+  const sender = input.senderE164 ?? (group ? PHONE : from);
+  const self = input.selfE164 ?? SELF;
   return authorize({
     cfg: getAccessControlTestConfig() as never,
     authDir,
     msg: createTestWebInboundMessage({
+      event: { id: group ? "cmd-group" : "cmd-dm" },
+      payload: { body: "/status" },
       platform: {
-        senderE164: input.senderJid ? undefined : (input.senderE164 ?? (group ? PHONE : from)),
-        senderJid: input.senderJid ?? undefined,
-        selfE164: input.selfE164 ?? SELF,
+        chatJid: from,
+        recipientJid: self,
+        senderE164: sender,
+        selfE164: self,
+        ...(input.senderJid ? { senderJid: input.senderJid, senderE164: undefined } : {}),
       },
       admission: {
         accountId: input.accountId ?? "work",
         conversation: { kind: group ? "group" : "direct", id: from },
+        sender: { id: sender },
+        ...(group ? { senderAccess: { reasonCode: "group_policy_allowed" } } : {}),
       },
     }) as never,
   });
@@ -59,10 +72,10 @@ function noPairing() {
   expect(sendMessageMock).not.toHaveBeenCalled();
 }
 async function checkBoth(allowed: boolean, input: Input = {}, group = false) {
-  expect([
-    Boolean(await access({ accountId: "work", ...(group ? groupMessage : {}), ...input })),
-    await command(input, group),
-  ]).toEqual([allowed, allowed]);
+  expect(
+    (await access({ accountId: "work", ...(group ? groupMessage : {}), ...input })) === null,
+  ).toBe(!allowed);
+  expect(await command(input, group)).toBe(allowed);
   noPairing();
 }
 
@@ -105,7 +118,12 @@ describe("WhatsApp admission and command authorization", () => {
     "requires enabled self-chat for implicit same-phone access: %s",
     async (enabled) => {
       configure({ dmPolicy: "pairing", allowFrom: [PHONE], selfChatMode: enabled });
-      await checkBoth(enabled, { ...samePhone, accountId: "default", isFromMe: enabled });
+      await checkBoth(enabled, {
+        ...samePhone,
+        accountId: "default",
+        selfE164: SELF,
+        isFromMe: enabled,
+      });
     },
   );
   it("honors an account overriding channel self-chat", async () => {
@@ -119,7 +137,9 @@ describe("WhatsApp admission and command authorization", () => {
   });
   it("does not grant group command ownership through implicit linked-phone access", async () => {
     configure({ dmPolicy: "pairing", groupPolicy: "open", allowFrom: [PHONE] });
-    expect(await command({ accountId: "default", senderE164: SELF }, true)).toBe(false);
+    expect(await command({ accountId: "default", senderE164: SELF, selfE164: SELF }, true)).toBe(
+      false,
+    );
   });
   it.each([false, true])("allows generic sender access groups (group: %s)", async (group) => {
     configure(

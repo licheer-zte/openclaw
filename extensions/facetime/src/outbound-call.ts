@@ -32,7 +32,18 @@ export type PendingFaceTimeDial = FaceTimeDialRequest & {
   proxyIdentifier?: string;
 };
 
-export function normalizeFaceTimeOutboundIdentityEvent(value: unknown) {
+type FaceTimeOutboundIdentityEvent = {
+  event: "ft-outbound-call-identified";
+  data: {
+    dial_id: string;
+    call_uuid?: string;
+    proxy_identifier?: string;
+  };
+};
+
+export function normalizeFaceTimeOutboundIdentityEvent(
+  value: unknown,
+): FaceTimeOutboundIdentityEvent | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
@@ -51,7 +62,7 @@ export function normalizeFaceTimeOutboundIdentityEvent(value: unknown) {
     return undefined;
   }
   return {
-    event: "ft-outbound-call-identified" as const,
+    event: "ft-outbound-call-identified",
     data: {
       dial_id: dialID,
       ...(callUUID ? { call_uuid: callUUID } : {}),

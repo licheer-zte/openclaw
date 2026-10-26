@@ -13,23 +13,13 @@ const executionValidators = resolveGlobalSingleton(
   () => new AsyncLocalStorage<ScopedToolExecutionValidator>(),
 );
 
-function rejectClosedToolExecutionValidation(): never {
-  throw new Error("Tool execution validation scope is closed");
-}
-
 /** Keep per-call validation inside the policy wrapper's final execution boundary. */
 export async function runWithToolExecutionValidation<T>(
   toolCallId: string,
   validator: ToolExecutionValidator,
   execute: () => Promise<T>,
 ): Promise<T> {
-  const scope = { toolCallId, validate: validator };
-  try {
-    return await executionValidators.run(scope, execute);
-  } finally {
-    // Sockets and timers inherit this frame; retire the run closure without bypassing validation.
-    scope.validate = rejectClosedToolExecutionValidation;
-  }
+  return await executionValidators.run({ toolCallId, validate: validator }, execute);
 }
 
 /** Validate hook-adjusted arguments without leaking a validator into concurrent calls. */

@@ -279,7 +279,8 @@ export const projectsHandlers: GatewayRequestHandlers = {
         return;
       }
       assertCurrent();
-      const { resolveSessionProjectCheckoutOptions } = await import("../session-project-source.js");
+      const { resolveSessionProjectCheckoutOptions } =
+        await import("../session-worktree-preparation.js");
       const options = await resolveSessionProjectCheckoutOptions({
         cfg,
         projectId: params.projectId,

@@ -46,10 +46,7 @@ const executeLocalTurn: SessionPlacementAdmissionProvider["executeLocalTurn"] = 
   _claim,
   runLocal,
 ) => await runLocal();
-const localResult = (text?: string, durationMs = 1) => ({
-  ...(text === undefined ? {} : { payloads: [{ text }] }),
-  meta: { durationMs },
-});
+const localResult = () => ({ meta: { durationMs: 1 } });
 const acceptedSpawn = (runId = "child") => ({
   runId,
   childSessionKey: "agent:main:subagent:child",
@@ -179,7 +176,7 @@ describe("local turn placement admission", () => {
       const parentTask = async () => {
         turnStarted.resolve();
         await activeTurn.promise;
-        return localResult("parent done");
+        return { payloads: [{ text: "parent done" }], meta: { durationMs: 1 } };
       };
       const parent =
         runtime === "local CLI"
@@ -194,7 +191,7 @@ describe("local turn placement admission", () => {
       await turnStarted.promise;
       const followup = withLocalSessionPlacementTurnSettlement(
         { ...claim, runId: "completion" },
-        async () => localResult("completion visible"),
+        async () => ({ payloads: [{ text: "completion visible" }], meta: { durationMs: 1 } }),
       );
       const result = followup.then(
         (value) => ({ value }),
@@ -204,7 +201,10 @@ describe("local turn placement admission", () => {
         activeTurn.resolve();
         await parent;
         expect(await result).toEqual({
-          value: localResult("completion visible"),
+          value: {
+            payloads: [{ text: "completion visible" }],
+            meta: { durationMs: 1 },
+          },
         });
         expect(events).toEqual([
           "claim:parent",
@@ -230,9 +230,10 @@ describe("local turn placement admission", () => {
     const gate = createDeferredCore();
     const started = createDeferredCore();
     const abort = new AbortController();
-    const task = vi.fn(async () => localResult());
+    const task = vi.fn(async () => ({ meta: { durationMs: 1 } }));
     let claims = 0;
-    const provider = {
+    const provider: SessionPlacementAdmissionProvider = {
+      assertCompactionSuccessorAllowed,
       executeLocalTurn: async (_claim, runLocal) => {
         claims += 1;
         if (stage === "placement") {
@@ -241,8 +242,9 @@ describe("local turn placement admission", () => {
         }
         return runLocal();
       },
-    } satisfies Partial<SessionPlacementAdmissionProvider>;
-    installProvider(provider);
+      executeTurn: async (_claim, _params, runLocal) => runLocal(),
+    };
+    uninstallProvider = installSessionPlacementAdmissionProvider(provider);
     const blocker =
       stage === "queued"
         ? withSessionTurn({ sessionKey: "agent:main:fenced", sessionId: "fenced" }, async () => {
@@ -268,7 +270,7 @@ describe("local turn placement admission", () => {
     if (change === "cancelled") {
       abort.abort(new Error("cancelled before admission"));
     } else if (change === "provider replaced") {
-      installProvider({ ...provider });
+      uninstallProvider = installSessionPlacementAdmissionProvider({ ...provider });
     } else {
       rotateAgentEventLifecycleGeneration();
     }
@@ -393,7 +395,7 @@ describe("local turn placement admission", () => {
           if (outcome === "rejects") {
             throw failure;
           }
-          return localResult();
+          return { meta: { durationMs: 1 } };
         },
       );
       if (outcome === "rejects") {
@@ -411,7 +413,10 @@ describe("local turn placement admission", () => {
       async (_claim, _params, _runLocal, admitTurn) => {
         admitTurn?.();
         admitTurn?.();
-        return localResult("remote", 2);
+        return {
+          payloads: [{ text: "remote" }],
+          meta: { durationMs: 2 },
+        };
       },
     );
     installProvider({ executeTurn });
@@ -631,7 +636,7 @@ describe("local turn placement admission", () => {
           assertCurrent();
           started.resolve();
           await release.promise;
-          return localResult();
+          return { meta: { durationMs: 1 } };
         },
       );
       await started.promise;
@@ -643,7 +648,7 @@ describe("local turn placement admission", () => {
               { sessionId, sessionKey, runId: `${sessionId}-replacement` },
               async (assertCurrent) => {
                 assertCurrent();
-                return localResult();
+                return { meta: { durationMs: 1 } };
               },
             );
             release.resolve();

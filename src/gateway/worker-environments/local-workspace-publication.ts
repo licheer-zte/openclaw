@@ -4,15 +4,6 @@ import type {
   LocalWorkspaceProjection,
 } from "./local-workspace-store.types.js";
 
-function freezeProjection(row: LocalWorkspaceProjection): LocalWorkspaceProjection {
-  const pack = row.journal_pack;
-  if (Buffer.isBuffer(pack)) {
-    // Worker/database rows expose plain byte views, without Node Buffer's JSON behavior.
-    row.journal_pack = new Uint8Array(pack.buffer, pack.byteOffset, pack.byteLength);
-  }
-  return Object.freeze(row);
-}
-
 /** Reconstruct only the admitted mutation; caller-provided prior rows carry no authority. */
 export function readLocalWorkspaceCommit(
   value: unknown,
@@ -28,7 +19,7 @@ export function readLocalWorkspaceCommit(
   }
   if (isRecord(value) && value.worktree_id === id) {
     if (mutation.kind === "create" && value.revision === 0) {
-      return freezeProjection({ ...mutation.row, revision: 0 });
+      return Object.freeze({ ...mutation.row, revision: 0 });
     }
     if (
       mutation.kind === "update" &&
@@ -36,7 +27,7 @@ export function readLocalWorkspaceCommit(
       previous.revision === mutation.revision &&
       value.revision === mutation.revision + 1
     ) {
-      return freezeProjection({
+      return Object.freeze({
         ...previous,
         ...Object.fromEntries(
           Object.entries(mutation.patch).filter(([, entry]) => entry !== undefined),

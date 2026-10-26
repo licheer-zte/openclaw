@@ -83,7 +83,7 @@ import {
   type SharedCodexAppServerClientEntry,
   type SharedCodexAppServerClientStartup,
 } from "./shared-client-lifecycle.js";
-import * as codexStartup from "./shared-client-start-policy.js";
+import { shouldTrackDesktopGeneration } from "./shared-client-start-policy.js";
 import {
   resolveCodexAppServerSpawnIdentity,
   type CodexAppServerClientProcessIdentity,
@@ -212,7 +212,7 @@ async function resolveCodexAppServerClientStartContext(
     (requestedStartOptions.homeScope === "user"
       ? undefined
       : resolveDefaultAgentDir(options?.config ?? {}));
-  const desktopGeneration = codexStartup.shouldTrackDesktopGeneration(
+  const desktopGeneration = shouldTrackDesktopGeneration(
     requestedStartOptions,
     options?.pluginConfig,
   )
@@ -762,7 +762,7 @@ async function startInitializedCodexAppServerClientOnce(
       throw error;
     }
     const runtimeArtifactModule = params.runtimeArtifactMode
-      ? await waitForStartup(codexStartup.loadRuntimeArtifact)
+      ? await waitForStartup(() => import("./runtime-artifact.js"))
       : undefined;
     const runtimeArtifactBeforeStart = runtimeArtifactModule
       ? await waitForStartup(() =>

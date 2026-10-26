@@ -25,20 +25,6 @@ export function createCodexTestBindingStateStore(
     comparison: JSON.stringify([key, values.get(key)]),
   });
   return {
-    prepareGuard: async (key, assertValueCurrent) => {
-      let released = false;
-      return {
-        assertCurrent() {
-          if (released) {
-            throw new Error("Binding guard released");
-          }
-          assertValueCurrent(values.get(key));
-        },
-        release() {
-          released = true;
-        },
-      };
-    },
     prepareRead: async (key) => {
       let released = false;
       return {

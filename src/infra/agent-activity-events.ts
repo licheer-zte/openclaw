@@ -124,7 +124,9 @@ export function projectAgentToolActivity(tool: ToolActivityInput): AgentActivity
       kind: "tool",
       phase: tool.phase === "result" ? "end" : tool.phase,
       title: meta ? `${label} ${meta}` : label,
-      ...(status ? { status } : { summary: "Outcome unknown" }),
+      ...(status
+        ? { status }
+        : { summary: "Outcome unknown", title: `${label} — outcome unknown` }),
       ...(approval
         ? {
             approvalId: normalizeOptionalString(details?.approvalId),
@@ -281,7 +283,6 @@ export function projectAgentHistoryActivity(
       if (isToolCallContentType(block.type)) {
         const name =
           normalizeOptionalString(block.name) ?? normalizeOptionalString(block.toolName) ?? "Tool";
-        const args = executedArgs ?? block.arguments ?? block.args ?? block.input;
         // A transcript call is not live authority. Its result may be absent or
         // outside this page; only live events can establish running activity.
         facts.set(key, {
@@ -292,10 +293,10 @@ export function projectAgentHistoryActivity(
           name,
           presentationName: unwrapToolCallForDisplay({
             name,
-            args,
+            args: executedArgs ?? block.arguments ?? block.args ?? block.input,
           }).name,
           phase: "result",
-          args,
+          args: executedArgs,
         });
       }
     }
@@ -358,7 +359,6 @@ export function projectAgentHistoryActivity(
     });
     if (fact.result === undefined) {
       activity.unpairedCall = true;
-      delete activity.summary;
     }
     return {
       key,

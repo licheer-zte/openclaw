@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../../test/helpers/wizard-prompter.js";
-import { writeFixtureJsonSync } from "../../cli/cli-fixtures.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
@@ -31,11 +30,14 @@ it("keeps the active plugin registry when provider sign-in is declined", async (
   const root = fs.realpathSync(tempDirs.makeTempDir());
   const pluginDir = path.join(root, "provider");
   fs.mkdirSync(pluginDir);
-  writeFixtureJsonSync(path.join(pluginDir, "openclaw.plugin.json"), {
-    id: "auth-registry-fixture",
-    providers: ["fixture-provider"],
-    configSchema: { type: "object" },
-  });
+  fs.writeFileSync(
+    path.join(pluginDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: "auth-registry-fixture",
+      providers: ["fixture-provider"],
+      configSchema: { type: "object" },
+    }),
+  );
   fs.writeFileSync(
     path.join(pluginDir, "index.cjs"),
     `module.exports = {

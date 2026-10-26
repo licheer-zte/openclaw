@@ -30,6 +30,7 @@ suite.define(() => {
         await page.clock.install();
         const sessionKey = "agent:main:scope-reader";
         const operatorMethods = [
+          "board.get",
           "presence.activity",
           "cron.list",
           "cron.status",
@@ -300,7 +301,7 @@ suite.define(() => {
           "Reconnecting… · 2 queued",
         );
         expect(await content.boundingBox()).toEqual(connectedContentBounds);
-        expect((await connectionStatus.boundingBox())!.height).toBe(28);
+        expect((await connectionStatus.boundingBox())!.height).toBe(44);
         const identityStatus = footer.locator(".sidebar-identity-card");
         expect(await identityStatus.isVisible()).toBe(true);
         expect(await identityStatus.getAttribute("data-connection-status")).toBe("reconnecting");
@@ -366,7 +367,7 @@ suite.define(() => {
         await page.keyboard.press("Escape");
         await gateway.setOnline(true);
         await waitForControlUiGatewayReady(page);
-        await connectionStatus.getByText("Connected", { exact: true }).waitFor();
+        await connectionStatus.waitFor({ state: "detached" });
         await expect
           .poll(() => identityStatus.getAttribute("data-connection-status"))
           .toBe("connected");

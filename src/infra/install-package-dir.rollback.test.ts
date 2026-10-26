@@ -45,29 +45,10 @@ const expectMissing = (file: string) =>
   expect(fs.lstat(file)).rejects.toHaveProperty("code", "ENOENT");
 const writeText = (directory: string, text: string, name = "marker.txt") =>
   fs.writeFile(path.join(directory, name), text);
-const ioError = (message: string, code = "EIO") => Object.assign(new Error(message), { code });
 const backupHook = (remember: (directory: string) => void) => async (directory: string) => {
   remember(directory);
   return { ok: true as const };
 };
-
-function recordBackup() {
-  const backup = { path: "", afterBackup: backupHook((directory) => (backup.path = directory)) };
-  return backup;
-}
-
-function expectFailure(
-  result: Awaited<ReturnType<typeof installPackageDir>>,
-  ...details: string[]
-) {
-  expect(result.ok).toBe(false);
-  if (result.ok) {
-    throw new Error("expected install failure");
-  }
-  for (const detail of details) {
-    expect(result.error).toContain(detail);
-  }
-}
 
 function afterRename(effect: (from: fsSync.PathLike, to: fsSync.PathLike) => void | Promise<void>) {
   const rename = fs.rename.bind(fs);
@@ -75,17 +56,6 @@ function afterRename(effect: (from: fsSync.PathLike, to: fsSync.PathLike) => voi
     await rename(from, to);
     return effect(from, to);
   });
-}
-
-function afterPublication(targetDir: string, effect: () => void | Promise<void>) {
-  let published = false;
-  afterRename((_from, to) => {
-    if (!published && samePath(to, targetDir)) {
-      published = true;
-      return effect();
-    }
-  });
-  return () => published;
 }
 
 function beforeRemove(effect: (target: string) => void | Promise<void>) {
@@ -96,11 +66,6 @@ function beforeRemove(effect: (target: string) => void | Promise<void>) {
       }
     },
   });
-}
-
-function isInsideIdentity(target: string, identity: fsSync.BigIntStats) {
-  const parent = fsSync.lstatSync(path.dirname(target), { bigint: true, throwIfNoEntry: false });
-  return parent?.dev === identity.dev && parent.ino === identity.ino;
 }
 
 function failUnlinkOnce(shouldFail: (file: fsSync.PathLike) => boolean, error: Error) {
@@ -121,7 +86,7 @@ function holdMarker(targetDir: string, onHold: () => Promise<void>, code = "EBUS
   vi.spyOn(fs, "unlink").mockImplementation(async (file) => {
     if (samePath(file, path.join(targetDir, "marker.txt"))) {
       await onHold();
-      throw ioError("held plugin file", code);
+      throw Object.assign(new Error("held plugin file"), { code });
     }
     return unlink(file);
   });
@@ -171,7 +136,7 @@ describe("installPackageDir rollback", () => {
         const copy = fsSync.cpSync.bind(fsSync);
         vi.spyOn(fsSync, "cpSync").mockImplementation((source, destination, options) => {
           if (recovering) {
-            throw ioError("recovery disk full", "ENOSPC");
+            throw Object.assign(new Error("recovery disk full"), { code: "ENOSPC" });
           }
           return copy(source, destination, options);
         });
@@ -190,7 +155,10 @@ describe("installPackageDir rollback", () => {
       const backups = await fs.readdir(backupRoot);
       await expectText(targetDir, "old");
       if (failure === "retry") {
-        expectFailure(result, "stop the Gateway and retry");
+        expect(result).toMatchObject({
+          ok: false,
+          error: expect.stringContaining("stop the Gateway and retry"),
+        });
         expect(result).not.toHaveProperty("recoveryIncomplete");
         expect(backups).toEqual([]);
         await expectText(targetDir, "keep config", "openclaw.plugin.json");
@@ -201,11 +169,16 @@ describe("installPackageDir rollback", () => {
       } else {
         expect(backups).toHaveLength(1);
         const backup = path.join(backupRoot, expectDefined(backups[0], "recovery backup"));
-        expect(result).toHaveProperty("recoveryIncomplete", true);
-        expectFailure(
-          result,
-          "backup recovery path: " + backup,
-          failure === "I/O failure" ? "recovery disk full" : "recovery owner closed",
+        expect(result).toMatchObject({
+          ok: false,
+          recoveryIncomplete: true,
+          error: expect.stringContaining("backup recovery path: " + backup),
+        });
+        expect(result).toHaveProperty(
+          "error",
+          expect.stringContaining(
+            failure === "I/O failure" ? "recovery disk full" : "recovery owner closed",
+          ),
         );
         await expectText(backup, "old");
         await expectText(backup, "keep config", "openclaw.plugin.json");
@@ -245,11 +218,19 @@ describe("installPackageDir rollback", () => {
         options: Pick<Parameters<typeof installPackageDir>[0], "sourceHardlinks"> = {},
         assertOwned?: () => void,
       ) {
-        const backup = recordBackup();
-        const result = await install({ ...options, afterBackup: backup.afterBackup }, assertOwned);
+        let backupDir = "";
+        const result = await install(
+          {
+            ...options,
+            afterBackup: backupHook((directory) => {
+              backupDir = directory;
+            }),
+          },
+          assertOwned,
+        );
         expect(result.ok).toBe(true);
         return {
-          backupDir: backup.path,
+          backupDir,
           transaction: expectDefined(
             resolvePackageDirInstallTransaction(result),
             "retained package transaction",
@@ -258,69 +239,6 @@ describe("installPackageDir rollback", () => {
       },
     };
   }
-
-  it.each(["commit", "rollback", "internal failure"] as const)(
-    "awaits original durable authority before %s touches the shared install",
-    async (action) => {
-      const { sourceDir, targetDir } = await createFixture("awaited-settlement-owner");
-      const refusal = new Error("durable install owner replaced");
-      let owned = true;
-      let published = false;
-      let backupDir = "";
-      const prepareSettlement = vi.fn(async () => {
-        await Promise.resolve();
-        if (!owned) {
-          throw refusal;
-        }
-      });
-      afterRename((_from, to) => {
-        if (samePath(to, targetDir)) {
-          published = true;
-          if (action === "internal failure") {
-            owned = false;
-          }
-        }
-      });
-      const result = await installPackageDir(
-        requestDeferredPackageDirInstall(
-          {
-            ...updateOptions(sourceDir, targetDir),
-            afterBackup: backupHook((directory) => {
-              backupDir = directory;
-            }),
-            beforePersistentApply: () => {
-              if (published && action === "internal failure") {
-                throw new Error("publication cancelled");
-              }
-            },
-          },
-          () => {},
-          prepareSettlement,
-        ),
-      );
-      expect(published).toBe(true);
-      const identity = await fs.lstat(targetDir, { bigint: true });
-      if (action === "internal failure") {
-        expect(result).toMatchObject({
-          ok: false,
-          recoveryIncomplete: true,
-          error: expect.stringContaining(refusal.message),
-        });
-      } else {
-        const transaction = expectDefined(
-          resolvePackageDirInstallTransaction(result),
-          "deferred transaction",
-        );
-        owned = false;
-        await expect(transaction[action]()).rejects.toBe(refusal);
-        owned = true;
-        await expect(transaction[action]()).rejects.toBe(refusal);
-      }
-      expect(prepareSettlement).toHaveBeenCalledOnce();
-      await expectPackage(targetDir, "new", identity);
-      await expectText(backupDir, "old");
-    },
-  );
 
   it.each(["commit", "rollback"] as const)(
     "rejects %s under a successor lease after the original install owner retires",
@@ -354,8 +272,11 @@ describe("installPackageDir rollback", () => {
         return { ok: false as const, error: "backup rejected" };
       },
     });
-    expect(result).toHaveProperty("recoveryIncomplete", true);
-    expectFailure(result, "backup retained");
+    expect(result).toMatchObject({
+      ok: false,
+      recoveryIncomplete: true,
+      error: expect.stringContaining("backup retained"),
+    });
     await expectText(targetDir, "successor", "successor.txt");
     await expectMissing(path.join(targetDir, "marker.txt"));
   });
@@ -385,7 +306,7 @@ describe("installPackageDir rollback", () => {
     });
 
     expect(revoked).toBe(true);
-    expectFailure(result, expired.message);
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining(expired.message) });
     await expectText(targetDir, "old");
     await expectText(targetDir, "successor-owned", "successor.txt");
   });
@@ -406,7 +327,15 @@ describe("installPackageDir rollback", () => {
       const publishedIdentity = await fs.lstat(targetDir, { bigint: true });
       let pauseConsumed = false;
       beforeRemove(async (target) => {
-        if (!pauseConsumed && isInsideIdentity(target, publishedIdentity)) {
+        const candidate = fsSync.lstatSync(path.dirname(target), {
+          bigint: true,
+          throwIfNoEntry: false,
+        });
+        if (
+          !pauseConsumed &&
+          candidate?.dev === publishedIdentity.dev &&
+          candidate.ino === publishedIdentity.ino
+        ) {
           pauseConsumed = true;
           paused.resolve();
           await release.promise;
@@ -453,7 +382,7 @@ describe("installPackageDir rollback", () => {
       const { installBaseDir, targetDir, retain } = await createFixture("rollback-retry");
       const { backupDir, transaction } = await retain();
       const publishedIdentity = await fs.lstat(targetDir, { bigint: true });
-      const error = ioError(`${failure} failed`);
+      const ioError = Object.assign(new Error(`${failure} failed`), { code: "EIO" });
       let injected = false;
       const realRename = fs.rename.bind(fs);
       if (failure === "removal") {
@@ -465,9 +394,17 @@ describe("installPackageDir rollback", () => {
           target,
           options,
         ) {
-          if (!injected && isInsideIdentity(path.join(this.rootReal, target), publishedIdentity)) {
+          const current = fsSync.lstatSync(path.dirname(path.join(this.rootReal, target)), {
+            bigint: true,
+            throwIfNoEntry: false,
+          });
+          if (
+            !injected &&
+            current?.dev === publishedIdentity.dev &&
+            current.ino === publishedIdentity.ino
+          ) {
             injected = true;
-            throw error;
+            throw ioError;
           }
           await remove.call(this, target, options);
         });
@@ -475,7 +412,7 @@ describe("installPackageDir rollback", () => {
         vi.spyOn(fs, "rename").mockImplementation((...args: Parameters<typeof fs.rename>) => {
           if (!injected && samePath(args[1], targetDir)) {
             injected = true;
-            return Promise.reject(error);
+            return Promise.reject(ioError);
           }
           return realRename(...args);
         });
@@ -484,11 +421,11 @@ describe("installPackageDir rollback", () => {
       const rollback = transaction.rollback();
       if (failure === "restoration") {
         await expect(rollback).rejects.toMatchObject({
-          cause: error,
+          cause: ioError,
           message: expect.stringContaining(backupDir),
         });
       } else {
-        await expect(rollback).rejects.toBe(error);
+        await expect(rollback).rejects.toBe(ioError);
       }
       expect(injected).toBe(true);
       await expectText(backupDir, "old");
@@ -505,7 +442,7 @@ describe("installPackageDir rollback", () => {
       const { retain, sourceDir, targetDir } = await createFixture("settlement-refusal");
       await writeText(targetDir, "first", "a.txt");
       await writeText(targetDir, "retained", "b.txt");
-      const refusal = ioError("owner refused");
+      const refusal = Object.assign(new Error("owner refused"), { code: "EIO" });
       let armed = false;
       let triggered = false;
       const assertOwned = () => {
@@ -514,20 +451,22 @@ describe("installPackageDir rollback", () => {
           throw refusal;
         }
       };
-      const backup = recordBackup();
+      let backupDir = "";
       let liveIdentity: fsSync.BigIntStats | undefined;
-      afterPublication(targetDir, async () => {
-        liveIdentity = await fs.lstat(targetDir, { bigint: true });
+      afterRename(async (_from, to) => {
+        if (samePath(to, targetDir)) {
+          liveIdentity = await fs.lstat(targetDir, { bigint: true });
+        }
       });
       beforeRemove((target) => {
-        if (!triggered && samePath(target, path.join(backup.path, "b.txt"))) {
+        if (!triggered && samePath(target, path.join(backupDir, "b.txt"))) {
           triggered = true;
           armed = true;
         }
       });
       const transaction = retained
         ? await retain({}, assertOwned).then((result) => {
-            backup.path = result.backupDir;
+            backupDir = result.backupDir;
             return result.transaction;
           })
         : undefined;
@@ -536,22 +475,24 @@ describe("installPackageDir rollback", () => {
         : installPackageDir({
             ...updateOptions(sourceDir, targetDir),
             beforePersistentApply: assertOwned,
-            afterBackup: backup.afterBackup,
+            afterBackup: backupHook((directory) => {
+              backupDir = directory;
+            }),
           });
       await expect(retirement).rejects.toBe(refusal);
-      await expectMissing(path.join(backup.path, "a.txt"));
+      await expectMissing(path.join(backupDir, "a.txt"));
       if (transaction) {
         for (const action of ["commit", "rollback", "commit", "rollback"] as const) {
           await expect(transaction[action]()).rejects.toBe(refusal);
         }
-        await expectText(backup.path, "old");
+        await expectText(backupDir, "old");
       }
       await expectPackage(
         targetDir,
         "new",
         expectDefined(liveIdentity, "published package identity"),
       );
-      await expectText(backup.path, "retained", "b.txt");
+      await expectText(backupDir, "retained", "b.txt");
     },
   );
 
@@ -634,18 +575,24 @@ describe("installPackageDir rollback", () => {
         await fs.rm(targetDir, { recursive: true });
       }
       let stageDir = "";
+      let published = false;
       let callerActive = true;
-      const sourceCleanupError = ioError("published source cleanup failed");
+      const sourceCleanupError = Object.assign(new Error("published source cleanup failed"), {
+        code: "EIO",
+      });
       const callerError = new Error("initiating caller closed after publication");
-      const published = afterPublication(targetDir, () => {
-        if (failure === "caller revocation") {
-          callerActive = false;
+      afterRename((_from, to) => {
+        if (!published && samePath(to, targetDir)) {
+          published = true;
+          if (failure === "caller revocation") {
+            callerActive = false;
+          }
         }
       });
       const cleanupFailed = failUnlinkOnce(
         (file) =>
           failure === "source cleanup" &&
-          published() &&
+          published &&
           samePath(file, path.join(stageDir, "marker.txt")),
         sourceCleanupError,
       );
@@ -667,12 +614,14 @@ describe("installPackageDir rollback", () => {
         () => {},
       );
 
-      expect(published()).toBe(true);
+      expect(published).toBe(true);
       expect(failure === "caller revocation" ? !callerActive : cleanupFailed()).toBe(true);
-      expectFailure(
-        result,
-        failure === "source cleanup" ? sourceCleanupError.message : callerError.message,
-      );
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining(
+          failure === "source cleanup" ? sourceCleanupError.message : callerError.message,
+        ),
+      });
       if (mode === "update") {
         await expectText(targetDir, "old");
       } else {
@@ -719,10 +668,17 @@ describe("installPackageDir rollback", () => {
       const { backupDir, transaction } = await retain({
         sourceHardlinks: "reject",
       });
-      const cleanupError = ioError("restored backup cleanup failed");
-      const restored = afterPublication(targetDir, () => {});
+      let restored = false;
+      const cleanupError = Object.assign(new Error("restored backup cleanup failed"), {
+        code: "EIO",
+      });
+      afterRename((_from, to) => {
+        if (samePath(to, targetDir)) {
+          restored = true;
+        }
+      });
       const cleanupFailed = failUnlinkOnce(
-        (file) => restored() && samePath(path.dirname(String(file)), backupDir),
+        (file) => restored && samePath(path.dirname(String(file)), backupDir),
         cleanupError,
       );
 
@@ -730,7 +686,7 @@ describe("installPackageDir rollback", () => {
         () => undefined,
         (error: unknown) => error,
       );
-      expect(restored()).toBe(true);
+      expect(restored).toBe(true);
       expect(cleanupFailed()).toBe(true);
       for (const detail of [cleanupError.message, "published", targetDir, backupDir]) {
         expect(String(rollbackError)).toContain(detail);
@@ -785,11 +741,15 @@ describe("installPackageDir rollback", () => {
     const { leaseOptions, install, targetDir } = await createFixture("revoked-publication-owner");
     const reachedPublication = createDeferred();
     const resumeCleanup = createDeferred();
-    const backup = recordBackup();
+    let published = false;
+    let backupDir = "";
     let pendingInstall: ReturnType<typeof installPackageDir> | undefined;
-    const published = afterPublication(targetDir, async () => {
-      reachedPublication.resolve();
-      await resumeCleanup.promise;
+    afterRename(async (_from, to) => {
+      if (!published && samePath(to, targetDir)) {
+        published = true;
+        reachedPublication.resolve();
+        await resumeCleanup.promise;
+      }
     });
 
     const lifecycle = withPluginLifecycleLease(leaseOptions, async (lease) => {
@@ -797,7 +757,9 @@ describe("installPackageDir rollback", () => {
       pendingInstall = install(
         {
           sourceHardlinks: "reject",
-          afterBackup: backup.afterBackup,
+          afterBackup: backupHook((directory) => {
+            backupDir = directory;
+          }),
         },
         assertOwned,
       );
@@ -815,11 +777,17 @@ describe("installPackageDir rollback", () => {
       const publishedIdentity = await fs.lstat(targetDir, { bigint: true });
       resumeCleanup.resolve();
       const result = await expectDefined(pendingInstall, "in-flight install");
-      expect(published()).toBe(true);
-      expectFailure(result, "published", targetDir, backup.path);
+      expect(published).toBe(true);
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        throw new Error("expected closed lifecycle ownership to reject source cleanup");
+      }
+      expect.soft(result.error).toContain("published");
+      expect.soft(result.error).toContain(targetDir);
       await expectPackage(targetDir, "new", publishedIdentity);
-      expect(backup.path).not.toBe("");
-      await expectText(backup.path, "old");
+      expect(backupDir).not.toBe("");
+      expect.soft(result.error).toContain(backupDir);
+      await expectText(backupDir, "old");
     } finally {
       resumeCleanup.resolve();
       await lifecycle.catch(() => undefined);

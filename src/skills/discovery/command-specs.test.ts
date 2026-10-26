@@ -1,3 +1,4 @@
+// Command spec tests cover skill-provided command metadata and filtering.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,20 +33,28 @@ vi.mock("../../plugins/plugin-registry-contributions.js", async (importOriginal)
   }),
 }));
 
-const tempDirs = createTempDirTracker();
-let buildWorkspaceSkillCommandSpecs: typeof import("./command-specs.js").buildWorkspaceSkillCommandSpecs;
+vi.mock("../loading/workspace-skill-loader.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../loading/workspace-skill-loader.js")>()),
+  loadVisibleSkills: () => [],
+}));
 
-beforeEach(async () => {
+const tempDirs = createTempDirTracker();
+
+beforeEach(() => {
   vi.resetModules();
   bundleCommandState.plugins = [];
-  vi.clearAllMocks();
-  ({ buildWorkspaceSkillCommandSpecs } = await import("./command-specs.js"));
+  skillsLoggerMock.debug.mockClear();
+  skillsLoggerMock.trace.mockClear();
 });
 
-afterEach(() => tempDirs.cleanup());
+afterEach(() => {
+  bundleCommandState.plugins = [];
+  tempDirs.cleanup();
+});
 
 describe("buildWorkspaceSkillCommandSpecs", () => {
-  it("uses shared user-invocable skill exposure policy", () => {
+  it("uses shared user-invocable skill exposure policy", async () => {
+    const { buildWorkspaceSkillCommandSpecs } = await import("./command-specs.js");
     const specs = buildWorkspaceSkillCommandSpecs("/workspace", {
       entries: [
         createFixtureSkillEntry("visible"),
@@ -68,39 +77,39 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     expect(specs.map((spec) => spec.skillName)).toEqual(["visible"]);
   });
 
-  it("preserves workspace skill descriptions for provider-specific limits", () => {
+  it("preserves workspace skill descriptions for provider-specific limits", async () => {
+    const { buildWorkspaceSkillCommandSpecs } = await import("./command-specs.js");
+    const prefix = "a".repeat(98);
     const entry = createFixtureSkillEntry("emoji-skill");
     entry.skill.displayName = "Emoji Skill";
-    entry.skill.description = `${"a".repeat(98)}😀 extra text beyond the limit`;
+    entry.skill.description = `${prefix}😀 extra text beyond the limit`;
 
     const specs = buildWorkspaceSkillCommandSpecs("/workspace", {
       entries: [entry],
     });
 
-    expect(specs[0]).toMatchObject({
-      displayName: "Emoji Skill",
-      description: entry.skill.description,
-      skillFile: entry.skill.filePath,
-    });
+    expect(specs[0]?.displayName).toBe("Emoji Skill");
+    expect(specs[0]?.description).toBe(entry.skill.description);
+    expect(specs[0]?.skillFile).toBe(entry.skill.filePath);
     expect(specs[0]).not.toHaveProperty("skillFileHost");
   });
 
   it("preserves bundle command descriptions for provider-specific limits", async () => {
-    const description = `${"a".repeat(98)}😀 extra text beyond the limit`;
+    const { buildWorkspaceSkillCommandSpecs } = await import("./command-specs.js");
+    const prefix = "a".repeat(98);
+    const description = `${prefix}😀 extra text beyond the limit`;
     const workspaceDir = tempDirs.make("openclaw-command-specs-");
     const pluginRoot = path.join(workspaceDir, "bundle-plugin");
-    const files = [
-      [".claude-plugin/plugin.json", JSON.stringify({ name: "bundle-plugin" })],
-      [
-        "commands/bundle-emoji.md",
-        `---\nname: bundle-emoji\ndescription: ${description}\n---\nRun the bundled command.\n`,
-      ],
-    ] as const;
-    for (const [file, content] of files) {
-      const target = path.join(pluginRoot, file);
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.writeFile(target, content);
-    }
+    await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
+    await fs.mkdir(path.join(pluginRoot, "commands"), { recursive: true });
+    await fs.writeFile(
+      path.join(pluginRoot, ".claude-plugin", "plugin.json"),
+      JSON.stringify({ name: "bundle-plugin" }),
+    );
+    await fs.writeFile(
+      path.join(pluginRoot, "commands", "bundle-emoji.md"),
+      `---\nname: bundle-emoji\ndescription: ${description}\n---\nRun the bundled command.\n`,
+    );
     bundleCommandState.plugins = [
       createPluginManifestRecordFixture({
         id: "bundle-plugin",
@@ -124,10 +133,12 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     });
   });
 
-  it("bounds the skill command debug cache and re-logs evicted keys", () => {
-    const entries = Array.from({ length: 1025 }, (_, index) =>
-      createFixtureSkillEntry(`raw ${index}`),
-    );
+  it("bounds the skill command debug cache and re-logs evicted keys", async () => {
+    const { buildWorkspaceSkillCommandSpecs } = await import("./command-specs.js");
+    const entries = [];
+    for (let index = 0; index < 1025; index += 1) {
+      entries.push(createFixtureSkillEntry(`raw ${index}`));
+    }
 
     buildWorkspaceSkillCommandSpecs("/workspace", { entries });
     expect(skillsLoggerMock.trace).toHaveBeenCalledTimes(1025);

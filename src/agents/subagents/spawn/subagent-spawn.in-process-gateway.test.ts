@@ -229,7 +229,6 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
       throw new Error("Unexpected fixture recovery");
     };
     gatewayContext.recoveryRuntime = {
-      prepareFailedWorkerPlacement: async () => undefined,
       prepareRestartRecovery: () => undefined,
       resumeChatInput: unexpectedRecovery,
       waitForAgent: async <T>(params: { runId: string }): Promise<T> => {

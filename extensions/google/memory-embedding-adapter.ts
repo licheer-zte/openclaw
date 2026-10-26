@@ -60,7 +60,6 @@ export const geminiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
                 input: chunk.embeddingInput ?? { text: chunk.text },
                 model: client.model,
                 role: "document",
-                documentFormatApplied: batch.documentFormatApplied,
                 taskType: "RETRIEVAL_DOCUMENT",
                 modelPath: client.modelPath,
                 outputDimensionality: client.outputDimensionality,

@@ -581,12 +581,8 @@ export const captureOpenClawStateIntegrityAdmission = asyncResources.integrity;
 /** Bind worker-created storage to its captured admission without publishing a native handle. */
 export function publishOpenClawStateDatabaseWorkerAdmission(
   admission: OpenClawStateDatabaseReadAdmission,
-  preparedIdentity?: DatabasePathIdentity,
 ): void {
-  if (preparedIdentity) {
-    admission.assertCurrent();
-  }
-  asyncResources.publish(admission.databasePath, preparedIdentity);
+  asyncResources.publish(admission.databasePath);
   admission.assertCurrent();
 }
 

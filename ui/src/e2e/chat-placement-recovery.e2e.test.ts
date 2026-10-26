@@ -1,7 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { nativeRuntime } from "../test-helpers/chat-model.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -154,7 +153,14 @@ suite.define(() => {
       ...recoverySession("repository-recovery", "Recover repository session"),
       repositoryWorkspaceId: "repository-workspace-1",
       placement: placement("local"),
-      agentRuntime: { ...nativeRuntime(), devicePlacementSupported: true },
+      agentRuntime: {
+        id: "openclaw",
+        cloudPlacementSupported: true,
+        cloudPlacementExecutionMode: "worker-turn",
+        devicePlacementSupported: true,
+        devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+        source: "model",
+      },
     } satisfies GatewaySessionRow;
     const { page, gateway, composer } = await openRecovery(session, {
       featureMethods: ["chat.send", "sessions.dispatch"],

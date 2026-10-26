@@ -143,6 +143,7 @@ describe("accepted results through registered message actions", () => {
         assertDirectAdapterHandoff: callerAuthority.assertCurrent,
         onPlatformSendDispatch,
         skipQueue: true,
+        suppressTranscriptMirror: true,
       });
 
       expect(result).toMatchObject({ kind: "send", handledBy: mode, dryRun: false });
@@ -188,6 +189,7 @@ describe("accepted results through registered message actions", () => {
         action: "broadcast",
         params: { channel, targets: ["room-1", "room-2"], message: "broadcast reply" },
         skipQueue: true,
+        suppressTranscriptMirror: true,
         assertDirectAdapterHandoff: callerAuthority.assertCurrent,
       });
 
@@ -244,6 +246,7 @@ describe("accepted results through registered message actions", () => {
           message: "partial reply",
         },
         conversationReadOrigin: "direct-operator",
+        suppressTranscriptMirror: true,
         assertDirectAdapterHandoff: callerAuthority.assertCurrent,
       });
 

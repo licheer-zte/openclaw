@@ -24,7 +24,6 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { createRecordedAccountSnapshots } from "../server-methods/channels.status.test-helpers.js";
 import { collectGatewayHealthSnapshot as collectHealth } from "./collector.js";
-import { createTelegramIngressPressure } from "./delivery-queue.test-support.js";
 
 let state: OpenClawTestState | undefined;
 const agents: OpenClawConfig["agents"] = {
@@ -174,7 +173,17 @@ it("preserves ingress failures and pressure when outbound admission capture fail
     });
   const countOutbound = vi.spyOn(deliveryQueueState, "countFailedDeliveryQueueEntries");
   const failed = [{ channelId: "telegram", accountId: "ops", count: 1 }];
-  const pressure = createTelegramIngressPressure();
+  const pressure = [
+    {
+      channelId: "telegram",
+      accountId: "ops",
+      laneCount: 1,
+      pendingCount: 56,
+      claimedCount: 0,
+      blockedCount: 55,
+      oldestReceivedAt: 1_000,
+    },
+  ];
   vi.spyOn(ingressHealth, "countChannelIngressQueueHealth").mockResolvedValue({
     failed,
     pressure,

@@ -6,6 +6,13 @@ import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 type CodingTools = ReturnType<typeof createOpenClawCodingTools>;
+const pluginOnlyConstructionPlan = {
+  includeBaseCodingTools: false,
+  includeShellTools: false,
+  includeChannelTools: false,
+  includeOpenClawTools: false,
+  includePluginTools: true,
+};
 
 export function registerPluginOnlyCallerIdentityCase({
   testConfig,
@@ -16,8 +23,7 @@ export function registerPluginOnlyCallerIdentityCase({
 }) {
   async function execute(options: NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>) {
     let identity: ReturnType<typeof getGatewayToolCallerIdentity>;
-    using spy = vi.spyOn(pluginTools, "resolveOpenClawPluginToolsForOptions");
-    spy.mockReturnValue([
+    const spy = vi.spyOn(pluginTools, "resolveOpenClawPluginToolsForOptions").mockReturnValue([
       {
         ...createStubTool("file_fetch"),
         execute: async () => {
@@ -26,13 +32,18 @@ export function registerPluginOnlyCallerIdentityCase({
         },
       },
     ]);
-    const tools = createOpenClawCodingTools({
-      agentId: "main",
-      includeCoreTools: false,
-      ...options,
-    });
-    await requireTool(tools, "file_fetch").execute?.("tool-call", {});
-    return identity;
+    try {
+      const tools = createOpenClawCodingTools({
+        agentId: "main",
+        includeCoreTools: false,
+        toolConstructionPlan: pluginOnlyConstructionPlan,
+        ...options,
+      });
+      await requireTool(tools, "file_fetch").execute?.("tool-call", {});
+      return identity;
+    } finally {
+      spy.mockRestore();
+    }
   }
   it("wraps plugin-only tools with scheduled creator authority and live routing context", async () => {
     const observedIdentity = await execute({
@@ -56,14 +67,16 @@ export function registerPluginOnlyCallerIdentityCase({
       runtimeToolAllowlist: ["file_fetch"],
       inheritRuntimeToolAllowlist: true,
     });
-    expect(observedIdentity).toMatchObject({
+    expect(observedIdentity).toEqual({
       agentId: "main",
+      assertToolAllowed: expect.any(Function),
       requesterOrigin: expect.objectContaining({
         sessionKey: "agent:main:telegram:direct:alice",
         messageProvider: "discord-voice",
         accountId: "work",
         messageThreadId: "42",
       }),
+      sessionEventSettings: { permissionMode: undefined },
       sessionEventToolsAllow: ["file_fetch"],
       sessionKey: "agent:main:telegram:direct:alice",
       turnSourceChannel: "discord",

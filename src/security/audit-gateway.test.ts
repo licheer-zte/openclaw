@@ -5,7 +5,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createConfigIO } from "../config/io.js";
 import { collectGatewayConfigFindings } from "./audit-gateway-config.js";
-import { collectSecretsInConfigFindings } from "./audit-secrets.js";
 import { runSecurityAuditCore } from "./audit.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -19,7 +18,6 @@ function finding(checkId: string, severity?: string) {
 function lan(auth: NonNullable<OpenClawConfig["gateway"]>["auth"]): OpenClawConfig {
   return { gateway: { bind: "lan", auth } };
 }
-const secretRef = (id: string) => ({ source: "env", provider: "default", id }) as const;
 
 describe("security audit gateway config findings", () => {
   it.each([
@@ -60,51 +58,59 @@ describe("security audit gateway config findings", () => {
       "config.secrets.hooks_token_in_config",
     ]) {
       expect(report.findings.some((entry) => entry.checkId === checkId)).toBe(stored);
-      expect(
-        collectSecretsInConfigFindings(snapshot.config).some((entry) => entry.checkId === checkId),
-      ).toBe(stored);
     }
   });
 
   it("does not allow Tailscale auth outside loopback", () => {
     const cfg: OpenClawConfig = {
       gateway: {
-        ...lan({ allowTailscale: true }).gateway,
+        bind: "lan",
+        auth: { allowTailscale: true },
         tailscale: { mode: "serve" },
       },
     };
     expect(collect(cfg)).toContainEqual(finding("gateway.bind_no_auth", "critical"));
   });
 
-  it.each(["token", "password"] as const)("flags a blank %s as critical", (credential) => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        bind: "loopback",
-        auth: { mode: credential, [credential]: "  " },
-      },
-    };
-    const findings = collect(cfg);
-    expect(findings).toContainEqual(finding(`gateway.${credential}_placeholder_value`, "critical"));
-    // The placeholder finding replaces the misleading length-only warning.
-    expect(findings).not.toContainEqual(finding(`gateway.${credential}_too_short`));
+  describe.each(["token", "password"] as const)("%s strength", (credential) => {
+    it.each(["  "])('flags a stringified nullish gateway secret as critical: "%s"', (secret) => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          bind: "loopback",
+          auth: { mode: credential, [credential]: secret },
+        },
+      };
+      const findings = collect(cfg);
+      expect(findings).toContainEqual(
+        finding(`gateway.${credential}_placeholder_value`, "critical"),
+      );
+      // The placeholder finding replaces the misleading length-only warning.
+      expect(findings).not.toContainEqual(finding(`gateway.${credential}_too_short`));
+    });
   });
 
   it("evaluates gateway auth presence and rate-limit guardrails", () => {
     const noAuth = finding("gateway.bind_no_auth");
-    expect(collect(lan({}))).toContainEqual(finding("gateway.bind_no_auth", "critical"));
-
-    expect(collect(lan({ password: secretRef("OPENCLAW_GATEWAY_PASSWORD") }))).not.toContainEqual(
-      noAuth,
+    expect(collect({ gateway: { bind: "lan", auth: {} } })).toContainEqual(
+      finding("gateway.bind_no_auth", "critical"),
     );
 
+    const passwordConfig = lan({
+      password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
+    });
+    expect(collect(passwordConfig)).not.toContainEqual(noAuth);
+
     const sourceConfig: OpenClawConfig = {
-      ...lan({ token: secretRef("OPENCLAW_GATEWAY_TOKEN") }),
+      ...lan({ token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" } }),
       secrets: { providers: { default: { source: "env" } } },
     };
-    const resolvedConfig = { ...lan({}), secrets: sourceConfig.secrets };
+    const resolvedConfig: OpenClawConfig = {
+      ...lan({}),
+      secrets: sourceConfig.secrets,
+    };
     expect(collect(resolvedConfig, sourceConfig)).not.toContainEqual(noAuth);
 
-    expect(collect(lan({ token: "secret" }))).toContainEqual(
+    expect(collect({ gateway: { bind: "lan", auth: { token: "secret" } } })).toContainEqual(
       finding("gateway.auth_no_rate_limit", "warn"),
     );
     const rateLimitedConfig = lan({

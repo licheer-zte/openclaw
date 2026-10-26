@@ -14,12 +14,22 @@ it("keeps rejected/accepted selection and keyed nodes authoritative", () => {
     ],
   });
   let reject = true;
-  const onSelect = vi.fn((active: string) => void (!reject && set((s) => ({ ...s, active }))));
+  const onSelect = vi.fn((active: string) => {
+    if (reject) {
+      return false;
+    }
+    set((previous) => ({ ...previous, active }));
+    return true;
+  });
   const view = render(() => (
     <>
       <Tabs {...state()} ariaLabel="Example" onSelect={onSelect} />
-      <TabPanel id="ap" tabId="at" active={state().active === "a"} children="A" />
-      <TabPanel id="bp" tabId="bt" active={state().active === "b"} children="B" />
+      <TabPanel id="ap" tabId="at" active={state().active === "a"}>
+        A
+      </TabPanel>
+      <TabPanel id="bp" tabId="bt" active={state().active === "b"}>
+        B
+      </TabPanel>
     </>
   ));
   flush();
@@ -49,7 +59,7 @@ it("keeps rejected/accepted selection and keyed nodes authoritative", () => {
   expect(onSelect).toHaveBeenCalledTimes(2);
 });
 
-it("skips aria-disabled tabs in manual and automatic activation", () => {
+it("keeps manual focus through reorder and activation changes", () => {
   const [state, set] = createSignal<Pick<TabsProps, "active" | "activation" | "items">>({
     active: "a",
     activation: "manual",
@@ -59,8 +69,13 @@ it("skips aria-disabled tabs in manual and automatic activation", () => {
       { value: "b", label: "B" },
     ],
   });
-  const onSelect = (active: string) => void set((s) => ({ ...s, active }));
-  const view = render(() => <Tabs {...state()} onSelect={onSelect} ariaLabel="Manual" />);
+  const view = render(() => (
+    <Tabs
+      {...state()}
+      onSelect={(active) => void set((s) => ({ ...s, active }))}
+      ariaLabel="Manual"
+    />
+  ));
   const key = (element: HTMLElement, name: string) => {
     fireEvent.keyDown(element, { key: name });
     flush();
@@ -72,10 +87,18 @@ it("skips aria-disabled tabs in manual and automatic activation", () => {
   expect(document.activeElement).toBe(beta);
   expect(beta.tabIndex).toBe(0);
   expect(alpha.getAttribute("aria-selected")).toBe("true");
+  key(beta, "Enter");
+  expect(beta.hasAttribute("active")).toBe(true);
+  set((s) => ({ ...s, items: s.items.toReversed() }));
+  flush();
+  expect(beta.hasAttribute("active")).toBe(true);
+  set((s) => ({ ...s, active: null }));
+  flush();
+  expect(view.queryByRole("tab", { selected: true })).toBeNull();
   set((s) => ({ ...s, activation: "auto" }));
   flush();
-  key(alpha, "End");
-  expect(document.activeElement).toBe(beta);
-  expect(beta.hasAttribute("active")).toBe(true);
+  key(beta, "End");
+  expect(document.activeElement).toBe(alpha);
+  expect(alpha.hasAttribute("active")).toBe(true);
   expect(view.getByRole("tab", { name: "Blocked" }).tabIndex).toBe(-1);
 });

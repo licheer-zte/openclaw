@@ -546,12 +546,10 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       if (
         text !== undefined &&
         (type === "text" ||
-          (type === "input_text" && (role === "user" || isAssistantMessage)) ||
-          (type === "output_text" && isAssistantMessage))
+          (role === "user" && type === "input_text") ||
+          (role === "assistant" && (type === "input_text" || type === "output_text")))
       ) {
-        return isAssistantMessage && item.openclawFallback === true
-          ? []
-          : normalizeText(text, true);
+        return normalizeText(text, true);
       }
       return [
         {

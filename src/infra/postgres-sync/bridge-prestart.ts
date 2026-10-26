@@ -7,8 +7,11 @@ import {
   POSTGRES_STATEMENT_TIMEOUT_MS,
 } from "../database-engine/policy.js";
 import { hasIdlePostgresBridge } from "./idle-bridges.js";
-import { recordPostgresPoolFailure } from "./pool-state.js";
-import { selectPostgresPoolService, type PostgresPoolSetup } from "./pool.js";
+import {
+  recordPostgresPoolFailure,
+  selectPostgresPoolService,
+  type PostgresPoolSetup,
+} from "./pool.js";
 import type { PostgresBridge } from "./protocol.js";
 
 type PostgresBridgeParameters = {

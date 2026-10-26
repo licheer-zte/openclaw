@@ -24,8 +24,14 @@ type ComposerState = Parameters<typeof persistChatComposerState>[0] & {
   selectedChatSessionIncognito: boolean;
 };
 
+const LEGACY_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v1:";
+
+function gatewayOwner(gatewayUrl: string | null | undefined): string {
+  return gatewayUrl?.trim() || "default";
+}
+
 export function legacyStorageKeyForGateway(gatewayUrl: string | null | undefined): string {
-  return `openclaw.control.chatComposer.v1:${encodeURIComponent(gatewayUrl?.trim() || "default").slice(0, 240)}`;
+  return `${LEGACY_STORAGE_KEY_PREFIX}${encodeURIComponent(gatewayOwner(gatewayUrl)).slice(0, 240)}`;
 }
 
 export function createState(overrides: Partial<ComposerState> = {}): ComposerState {
@@ -62,8 +68,13 @@ export function admitItem(
   item: ChatQueueItem,
   sessionKey = state.sessionKey,
 ) {
-  const admission = captureChatOutboxAdmission(state, sessionKey, item.agentId);
-  return admitStoredChatComposerQueueItemResult(state, admission, item) === "admitted";
+  return (
+    admitStoredChatComposerQueueItemResult(
+      state,
+      captureChatOutboxAdmission(state, sessionKey, item.agentId),
+      item,
+    ) === "admitted"
+  );
 }
 
 export function reviewLegacyItem(state: ComposerState, id: string) {

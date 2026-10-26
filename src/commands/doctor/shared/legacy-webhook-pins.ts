@@ -82,7 +82,6 @@ export type HistoricalWebhookCompletion = {
 type HistoricalWebhookPinState = {
   env: NodeJS.ProcessEnv;
   completion?: HistoricalWebhookCompletion;
-  preserveConfiguredListeners: boolean;
   existingInstallation?: boolean;
 };
 
@@ -90,9 +89,8 @@ type HistoricalWebhookPinState = {
 export function createHistoricalWebhookPinMigration(
   env: NodeJS.ProcessEnv = process.env,
   completion?: HistoricalWebhookCompletion,
-  preserveConfiguredListeners = false,
 ) {
-  const state: HistoricalWebhookPinState = { env, completion, preserveConfiguredListeners };
+  const state: HistoricalWebhookPinState = { env, completion };
   return applyHistoricalWebhookPins.bind(undefined, state);
 }
 
@@ -134,7 +132,6 @@ function applyHistoricalWebhookPins(
       ? []
       : mutation.historicalWebhookAccountIds;
   const existing =
-    state.preserveConfiguredListeners ||
     marker !== undefined ||
     isTruthyEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS) ||
     (state.existingInstallation ??= Boolean(

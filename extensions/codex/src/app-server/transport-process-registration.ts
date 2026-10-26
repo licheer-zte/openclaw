@@ -3,7 +3,6 @@ import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { z } from "zod";
@@ -14,10 +13,6 @@ import {
   readCodexAppServerProcessCommand,
   readCodexAppServerProcessSnapshot,
 } from "./transport-process-snapshot.js";
-
-const loadPluginStateStoreRuntime = createLazyRuntimeModule(
-  () => import("openclaw/plugin-sdk/plugin-state-store-runtime"),
-);
 
 // Startup tolerates transient host load; signal containment retains its shorter budget.
 const PROCESS_REGISTRATION_INSPECTION_MS = 10_000;
@@ -59,7 +54,8 @@ function fingerprintProcessCommand(command: string): string {
 
 async function openProcessRegistrationStore() {
   const env = { ...process.env, OPENCLAW_STATE_DIR: resolveStateDir() };
-  const { createPluginStateKeyedStore } = await loadPluginStateStoreRuntime();
+  const { createPluginStateKeyedStore } =
+    await import("openclaw/plugin-sdk/plugin-state-store-runtime");
   return createPluginStateKeyedStore<ProcessRegistration>("codex", {
     namespace: "app-server-processes",
     maxEntries: 512,

@@ -161,7 +161,12 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       if (!html) {
         expect(fields.rich_message).toMatchObject({
           skip_entity_detection: true,
-          blocks: [{ type: "table", caption: "Pipeline" }],
+          blocks: [
+            {
+              type: "table",
+              caption: "Pipeline",
+            },
+          ],
         });
       } else {
         expect(fields.text).toContain("Pipeline");

@@ -183,13 +183,6 @@ export class SqliteWorkerBroker {
   ): Promise<SqliteWorkerStore<Operations> | undefined> {
     // Cached client callbacks share this scope; never capture the opening options in it.
     const { maintenanceScope, cleanupAccess } = options;
-    const databaseIdentity = options.expectedIdentity
-      ? {
-          databasePath: options.databasePath,
-          key: options.expectedIdentity,
-          birthtime: options.expectedBirthtime,
-        }
-      : undefined;
     options.signal?.throwIfAborted();
     options.assertCurrent?.();
     const { databasePath, inputHash, identity, key } =
@@ -198,16 +191,13 @@ export class SqliteWorkerBroker {
     if (reusable && this.actors.get(key) !== reusable.actor) {
       return undefined;
     }
-    const stateAccess = await captureStateDatabaseAccess(
+    const stateAccess = captureStateDatabaseAccess(
       options.stateDatabasePath ?? identity.canonicalPath,
     );
-    const assertStateAccess = await stateAccess.prepareAccess({
+    stateAccess.assertAccessAllowed({
       maintenanceScope: options.maintenanceScope,
       schemaLease: options.cleanupAccess,
     });
-    options.signal?.throwIfAborted();
-    options.assertCurrent?.();
-    assertStateAccess();
     const input = options.input;
     const admittedPaths = captureSqliteWorkerAdmissionPaths(
       databasePath,
@@ -277,7 +267,6 @@ export class SqliteWorkerBroker {
         markNativeStopped: nativeStopped.resolve,
         id: ++this.nextActor,
         key,
-        identity,
         // Native ownership pins its opening paths even after the first client closes.
         pathReferences: new Map([...admittedPaths].map((pathname) => [pathname, 1])),
         moduleUrl,
@@ -303,7 +292,6 @@ export class SqliteWorkerBroker {
         {
           type: "open",
           actor: actor.id,
-          databaseIdentity,
           moduleUrl,
           databasePath,
           ...(options.createAdmission
@@ -333,11 +321,10 @@ export class SqliteWorkerBroker {
           const existing = this.actors.get(id);
           return existing !== undefined && existing !== opening;
         });
-        opening.identity = physical;
-        if (physical.key !== key) {
+        if (physical !== key) {
           this.actors.delete(key);
-          opening.key = physical.key;
-          this.actors.set(physical.key, opening);
+          opening.key = physical;
+          this.actors.set(physical, opening);
         }
       });
     }
@@ -378,7 +365,6 @@ export class SqliteWorkerBroker {
           {
             type: "execute",
             actor: owned.id,
-            databaseIdentity,
             input: payload,
             ...(scope?.stateContext ? { stateContext: scope.stateContext } : {}),
           },
@@ -450,7 +436,7 @@ export class SqliteWorkerBroker {
     return this.lifecycle.retireActor(identity);
   }
 
-  getActorIdentity(store: object): Readonly<Pick<Actor, "key" | "databasePath" | "identity">> {
+  getActorIdentity(store: object): Readonly<Pick<Actor, "key" | "databasePath">> {
     const client = this.stores.get(store);
     // Retained facts remain readable after worker failure; dispatch owns liveness.
     if (!client || client.sealed || !client.actor.stateContext) {

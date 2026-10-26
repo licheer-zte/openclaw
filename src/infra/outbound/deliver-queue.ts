@@ -288,8 +288,9 @@ async function runOutboundDeliveryWithQueue(
         channel,
         to,
         accountId: params.accountId,
-        sessionKeyForInternalHooks: params.session?.key,
-        isGroup: params.session?.conversationType === "group",
+        sessionKeyForInternalHooks: params.mirror?.sessionKey ?? params.session?.key,
+        isGroup: params.mirror?.isGroup,
+        groupId: params.mirror?.groupId,
         runId: params.replyPayloadSendingHook?.runId,
         logPrefix: OUTBOUND_DELIVERY_LOG_SCOPE,
       });

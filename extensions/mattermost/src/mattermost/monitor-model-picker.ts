@@ -16,10 +16,7 @@ import {
   renderMattermostProviderPickerView,
   resolveMattermostModelPickerCurrentModel,
 } from "./model-picker.js";
-import {
-  authorizeMattermostCommandInvocation,
-  MATTERMOST_PAIRING_QUEUE_FULL_TEXT,
-} from "./monitor-auth.js";
+import { authorizeMattermostCommandInvocation } from "./monitor-auth.js";
 import { buildMattermostEventPlan } from "./monitor-event-plan.js";
 import { dispatchMattermostInteractionReply } from "./monitor-interaction-dispatch.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
@@ -81,13 +78,11 @@ export function createMattermostModelPickerInteractionHandler(
           meta: { name: params.userName },
         });
         return {
-          ephemeral_text: code
-            ? core.channel.pairing.buildPairingReply({
-                channel: "mattermost",
-                idLine: `Your Mattermost user id: ${params.payload.user_id}`,
-                code,
-              })
-            : MATTERMOST_PAIRING_QUEUE_FULL_TEXT,
+          ephemeral_text: core.channel.pairing.buildPairingReply({
+            channel: "mattermost",
+            idLine: `Your Mattermost user id: ${params.payload.user_id}`,
+            code,
+          }),
         };
       }
       const denyText =

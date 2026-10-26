@@ -5,8 +5,9 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { MessagePort, Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { runWithSqliteDatabaseAdmissionTurn } from "./sqlite-database-admission-turn.js";
 import {
   captureSqliteDatabaseAdmissions,
@@ -123,7 +124,7 @@ it("settles worker facts through admission without echoing snapshots in ordinary
   let factAtReply: number | undefined;
   // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the emitting worker.
   const originalEmit = Worker.prototype.emit;
-  vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
+  const messages = vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
     this: Worker,
     event: string | symbol,
     reply: SqliteWorkerReply,
@@ -134,14 +135,21 @@ it("settles worker facts through admission without echoing snapshots in ordinary
     }
     return Reflect.apply(originalEmit, this, [event, reply]);
   });
-  const store = await openStore(broker, location);
-  publishSqliteDatabaseAdmission(database, hostFactKey, 1);
-  await store!.execute({ type: "admitted", input: { measureHostAbsence: true } });
-  // The host receives the new worker fact before the broker sees the ordinary reply.
-  expect(factAtReply).toBe(1);
-  await store!.close();
-  for (const reply of replies) {
-    expect(reply).not.toHaveProperty("databaseAdmissions");
+  try {
+    const store = await openStore(broker, location);
+    for (const value of [1, 2]) {
+      publishSqliteDatabaseAdmission(database, hostFactKey, value);
+      await store!.execute({ type: "admitted", input: { measureHostAbsence: true } });
+      // The host receives the new worker fact before the broker sees the ordinary reply.
+      expect(factAtReply).toBe(1);
+    }
+    await store!.close();
+    expect(replies).toHaveLength(4);
+    for (const reply of replies) {
+      expect(reply).not.toHaveProperty("databaseAdmissions");
+    }
+  } finally {
+    messages.mockRestore();
   }
 });
 
@@ -200,7 +208,13 @@ it("joins host admission created after a worker's operation context before its f
       }),
     ),
   ).toEqual({ native: true, admitted: true });
-  expect(getAdmittedSqliteSchemaFacts(reader!)?.tables.has("worker_publication")).toBe(true);
+  const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+  try {
+    expect(getAdmittedSqliteSchemaFacts(reader!)?.tables.has("worker_publication")).toBe(true);
+    expect(observation.queries).toEqual([]);
+  } finally {
+    observation.restore();
+  }
 });
 
 it("settles scoped writes without host metadata round trips after peer registrations", async () => {
@@ -209,12 +223,11 @@ it("settles scoped writes without host metadata round trips after peer registrat
   database.exec("CREATE TABLE original(value)");
   admitSqliteSchema(database);
   const broker = createBroker();
-  const token = (key: string) => readSqliteDatabaseScopedWriteToken(database, key);
 
   const store = await openStore(broker, location);
   const predecessor = store!.execute({ type: "admitted", input: undefined });
-  let first = token("first");
-  const second = token("second");
+  let first = readSqliteDatabaseScopedWriteToken(database, "first");
+  const second = readSqliteDatabaseScopedWriteToken(database, "second");
   let current = true;
   const refused = new Error("Queued scope lost authority");
   const rejected = broker.runOperation(
@@ -233,22 +246,17 @@ it("settles scoped writes without host metadata round trips after peer registrat
   expect(outcomes[0]!.status).toBe("fulfilled");
   expect(outcomes[1]).toEqual({ status: "rejected", reason: refused });
   // A new publication must not acknowledge scopes captured by a refused dispatch.
-  token("after-rejection");
+  readSqliteDatabaseScopedWriteToken(database, "after-rejection");
   await store!.execute({
     type: "writeRows",
     input: { sql: "INSERT INTO original VALUES (2)", sessionKeys: ["second"] },
   });
-  expect(token("first")).toBe(first);
-  expect(token("second")).not.toBe(second);
-  let secondCommitted = token("second");
+  expect(readSqliteDatabaseScopedWriteToken(database, "first")).toBe(first);
+  expect(readSqliteDatabaseScopedWriteToken(database, "second")).not.toBe(second);
+  let secondCommitted = readSqliteDatabaseScopedWriteToken(database, "second");
 
-  const writeAfterPublication = async (
-    value: number,
-    sessionKey: string,
-    publish: () => string | undefined,
-  ) => {
-    let published: string | undefined;
-    const result = await broker.runOperation(
+  const writeAfterPublication = (value: number, sessionKey: string, publish: () => void) =>
+    broker.runOperation(
       store!,
       (scope) =>
         scope.execute({
@@ -263,45 +271,57 @@ it("settles scoped writes without host metadata round trips after peer registrat
       undefined,
       hostAdmission(location, (request, grant) => {
         if (request.stage === "transaction") {
-          published = publish();
+          publish();
         }
         grant();
       }),
     );
-    expect(result).toEqual({ lookupMessages: 0 });
-    expect(published).toBeTypeOf("string");
-    return published;
-  };
 
   // Publish after dispatch so the accepted writer cannot already have the new scope.
-  const late = await writeAfterPublication(3, "late", () => token("late"));
-  expect(token("late")).not.toBe(late);
-  expect(token("first")).not.toBe(first);
-  expect(token("second")).not.toBe(secondCommitted);
-  first = token("first");
-  secondCommitted = token("second");
+  let late: string | undefined;
+  expect(
+    await writeAfterPublication(3, "late", () => {
+      late = readSqliteDatabaseScopedWriteToken(database, "late");
+    }),
+  ).toEqual({ lookupMessages: 0 });
+  expect(late).toBeTypeOf("string");
+  expect(readSqliteDatabaseScopedWriteToken(database, "late")).not.toBe(late);
+  expect(readSqliteDatabaseScopedWriteToken(database, "first")).not.toBe(first);
+  expect(readSqliteDatabaseScopedWriteToken(database, "second")).not.toBe(secondCommitted);
+  first = readSqliteDatabaseScopedWriteToken(database, "first");
+  secondCommitted = readSqliteDatabaseScopedWriteToken(database, "second");
 
   // A new unrelated scope does not prevent a known shared cell from settling exactly.
-  const unrelated = await writeAfterPublication(5, "second", () => token("unrelated"));
-  expect(token("unrelated")).toBe(unrelated);
-  expect(token("first")).toBe(first);
-  expect(token("second")).not.toBe(secondCommitted);
+  let unrelated: string | undefined;
+  expect(
+    await writeAfterPublication(5, "second", () => {
+      unrelated = readSqliteDatabaseScopedWriteToken(database, "unrelated");
+    }),
+  ).toEqual({ lookupMessages: 0 });
+  expect(unrelated).toBeTypeOf("string");
+  expect(readSqliteDatabaseScopedWriteToken(database, "unrelated")).toBe(unrelated);
+  expect(readSqliteDatabaseScopedWriteToken(database, "first")).toBe(first);
+  expect(readSqliteDatabaseScopedWriteToken(database, "second")).not.toBe(secondCommitted);
 
   // Pressure evicts the writer's cell; settlement must invalidate its replacement too.
-  const replacement = await writeAfterPublication(6, "second", () => {
-    for (let index = 0; index < 160; index++) {
-      token(`${index}:${"x".repeat(4096)}`);
-    }
-    return token("second");
-  });
-  expect(token("second")).not.toBe(replacement);
-  expect(token("first")).not.toBe(first);
-  first = token("first");
-  secondCommitted = token("second");
+  let replacement: string | undefined;
+  expect(
+    await writeAfterPublication(6, "second", () => {
+      for (let index = 0; index < 160; index++) {
+        readSqliteDatabaseScopedWriteToken(database, `${index}:${"x".repeat(4096)}`);
+      }
+      replacement = readSqliteDatabaseScopedWriteToken(database, "second");
+    }),
+  ).toEqual({ lookupMessages: 0 });
+  expect(replacement).toBeTypeOf("string");
+  expect(readSqliteDatabaseScopedWriteToken(database, "second")).not.toBe(replacement);
+  expect(readSqliteDatabaseScopedWriteToken(database, "first")).not.toBe(first);
+  first = readSqliteDatabaseScopedWriteToken(database, "first");
+  secondCommitted = readSqliteDatabaseScopedWriteToken(database, "second");
 
   await store!.execute({ type: "writeRows", input: { sql: "INSERT INTO original VALUES (4)" } });
-  expect(token("first")).not.toBe(first);
-  expect(token("second")).not.toBe(secondCommitted);
+  expect(readSqliteDatabaseScopedWriteToken(database, "first")).not.toBe(first);
+  expect(readSqliteDatabaseScopedWriteToken(database, "second")).not.toBe(secondCommitted);
   expect(database.prepare("SELECT value FROM original ORDER BY value").all()).toEqual([
     { value: 2 },
     { value: 3 },
@@ -370,10 +390,14 @@ it("publishes through a retained physical database after its original pathname i
   await store!.execute({ type: "mutate", input: undefined });
   expect(hasPendingSqliteDatabaseSchemaMutation(reader)).toBe(false);
   expect(getAdmittedSqliteSchemaFacts(reader)?.tables.has("worker_publication")).toBe(true);
-  using replacement = openDatabase(location, { readOnly: true });
-  admitSqliteSchema(replacement);
-  expect(getAdmittedSqliteSchemaFacts(replacement)?.tables.has("worker_publication")).toBe(false);
-  expect(replacement.prepare("SELECT value FROM proof").get()).toEqual({ value: 99 });
+  const replacement = openDatabase(location, { readOnly: true });
+  try {
+    admitSqliteSchema(replacement);
+    expect(getAdmittedSqliteSchemaFacts(replacement)?.tables.has("worker_publication")).toBe(false);
+    expect(replacement.prepare("SELECT value FROM proof").get()).toEqual({ value: 99 });
+  } finally {
+    replacement.close();
+  }
 });
 it("preserves a sibling writer's POSIX lock when an unhosted worker retires", async () => {
   const location = path.join(tempDirs.make("sqlite-unhosted-lock-"), "shared.sqlite");
@@ -433,9 +457,13 @@ it("scopes admission replies to one database, shares them across isolates, and r
   );
 
   const [first, second] = stores;
-  const unrelated = path.join(root, "unrelated.sqlite");
-  createDatabase(unrelated, 0);
-  admitSqliteSchema(openDatabase(unrelated));
+  const unrelated = Array.from({ length: 3 }, (_, index) =>
+    path.join(root, `unrelated-${index}.sqlite`),
+  );
+  for (const filename of unrelated) {
+    createDatabase(filename, 0);
+    admitSqliteSchema(openDatabase(filename));
+  }
   const replies: string[][] = [];
   // oxlint-disable-next-line typescript/unbound-method -- call retains the sending port.
   const postMessage = MessagePort.prototype.postMessage;
@@ -463,11 +491,13 @@ it("scopes admission replies to one database, shares them across isolates, and r
   );
   post.mockRestore();
   expect(replies.flat()).toContain(location);
-  expect(replies.flat()).not.toContain(unrelated);
+  expect(replies.flat().filter((filename) => unrelated.includes(filename))).toEqual([]);
   const secondRead = await second!.execute({ type: "read", input: { path: location } });
+  const reopened = await first!.execute({ type: "read", input: { path: location } });
   expect(firstRead.threadId).not.toBe(secondRead.threadId);
-  for (const read of [firstRead, secondRead]) {
-    expect(read).toMatchObject({ values: [42], sql: [] });
+  for (const read of [firstRead, secondRead, reopened]) {
+    expect(read.values).toEqual([42]);
+    expect(read.sql).toEqual([]);
   }
   expect(
     await brokers[0]!.runOperation(
@@ -491,7 +521,8 @@ it("scopes admission replies to one database, shares them across isolates, and r
   expect(replacement.values).toEqual([43]);
   expect(replacement.sql.length).toBeGreaterThan(0);
   const sharedReplacement = await first!.execute({ type: "read", input: { path: location } });
-  expect(sharedReplacement).toMatchObject({ values: [43], sql: [] });
+  expect(sharedReplacement.values).toEqual([43]);
+  expect(sharedReplacement.sql).toEqual([]);
 
   const holder = openDatabase(location);
   admitSqliteSchema(holder);
@@ -500,14 +531,17 @@ it("scopes admission replies to one database, shares them across isolates, and r
   )!;
   holder.close();
   await second!.execute({ type: "retirePath", input: { path: location } });
-  {
-    using readmitted = openDatabase(location, { readOnly: true });
-    using sibling = openDatabase(location, { readOnly: true });
+  const readmitted = openDatabase(location, { readOnly: true });
+  const sibling = openDatabase(location, { readOnly: true });
+  try {
     admitSqliteSchema(readmitted);
     admitSqliteSchema(sibling);
     expect(getAdmittedSqliteSchemaFacts(sibling)?.admissionId).toBe(
       getAdmittedSqliteSchemaFacts(readmitted)?.admissionId,
     );
+  } finally {
+    readmitted.close();
+    sibling.close();
   }
   await second!.execute({ type: "retirePath", input: { path: location } });
   expect(
@@ -537,6 +571,7 @@ it("shares facts with retained task workers across awaited host exchanges", asyn
   const root = tempDirs.make("sqlite-admission-tasks-");
   const location = path.join(root, "shared.sqlite");
   createDatabase(location, 1);
+  let retained: DatabaseSync | undefined;
   const pools = Array.from({ length: 2 }, () => createTaskPool(true));
   try {
     const ready = await Promise.all(pools.map((pool) => pool.run({}, {})));
@@ -545,7 +580,8 @@ it("shares facts with retained task workers across awaited host exchanges", asyn
       { path: location, awaitPublication: true },
       {
         async onRequest() {
-          admitSqliteSchema(openDatabase(location));
+          retained = openDatabase(location);
+          admitSqliteSchema(retained);
           return { input: undefined, timeoutMs: 300_000 };
         },
       },
@@ -600,6 +636,7 @@ it("shares facts with retained task workers across awaited host exchanges", asyn
     expect(existsSync(uncaptured)).toBe(false);
   } finally {
     await Promise.all(pools.map((pool) => pool.close()));
+    retained?.close();
   }
 });
 

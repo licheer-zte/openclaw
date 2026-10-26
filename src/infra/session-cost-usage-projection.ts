@@ -230,12 +230,15 @@ export async function projectCostUsageSummary(
       totals,
     });
   }
-  return finishUsageCostSummary({
-    daily,
+  const refreshedAt = reader.refreshedAt();
+  fillMissingDays(daily, params.startMs, params.endMs, formatDay);
+  return {
+    updatedAt: Date.now(),
+    days: countCalendarDays(params.startMs, params.endMs, formatDay),
+    daily: Array.from(daily, ([date, bucket]) => Object.assign({ date }, bucket)).toSorted((a, b) =>
+      a.date.localeCompare(b.date),
+    ),
     totals,
-    startMs: params.startMs,
-    endMs: params.endMs,
-    formatDay,
     cacheStatus: {
       status:
         staleFiles === 0 && deferredFiles === 0
@@ -246,30 +249,8 @@ export async function projectCostUsageSummary(
       cachedFiles,
       pendingFiles: staleFiles + deferredFiles,
       staleFiles,
-      refreshedAt: reader.refreshedAt(),
+      refreshedAt,
     },
-  });
-}
-
-/** Zero-fill the requested calendar and order daily totals for `usage.cost`. */
-export function finishUsageCostSummary(params: {
-  daily: Map<string, CostUsageTotals>;
-  totals: CostUsageTotals;
-  startMs: number;
-  endMs: number;
-  formatDay: UsageDayKeyFormatter;
-  cacheStatus: UsageCacheStatus;
-}): CostUsageSummary {
-  const { daily, formatDay } = params;
-  fillMissingDays(daily, params.startMs, params.endMs, formatDay);
-  return {
-    updatedAt: Date.now(),
-    days: countCalendarDays(params.startMs, params.endMs, formatDay),
-    daily: Array.from(daily, ([date, bucket]) => Object.assign({ date }, bucket)).toSorted((a, b) =>
-      a.date.localeCompare(b.date),
-    ),
-    totals: params.totals,
-    cacheStatus: params.cacheStatus,
   };
 }
 
@@ -277,6 +258,7 @@ export async function projectSessionCostSummaries(
   params: UsageCostRollupRowSource & {
     sessions: ReadonlyArray<{ sessionId?: string; sessionFile: string }>;
     files: ReadonlyArray<UsageCostTranscriptFile | undefined>;
+    deferredSessionIndexes?: ReadonlySet<number>;
     pricingFingerprint: string;
     startMs?: number;
     endMs?: number;
@@ -313,7 +295,7 @@ export async function projectSessionCostSummaries(
     (params.startMs === undefined && params.endMs === undefined);
   const formatDay = createUsageDayKeyFormatter(params.dayBucket);
   let cachedFiles = 0;
-  const deferredIndexes = new Set<number>();
+  const deferredIndexes = new Set(params.deferredSessionIndexes);
   const reader = createRollupProjectionReader(params);
   for (const [filePath, requests] of requestsByPath) {
     const { entry, checkpoint, requests: usableRequests } = await reader.read(filePath, requests);

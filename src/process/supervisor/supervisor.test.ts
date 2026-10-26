@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import { performance } from "node:perf_hooks";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,14 +8,7 @@ import { createProcessSupervisor } from "./supervisor.js";
 import { createStubChildAdapter, type StubChildAdapter } from "./supervisor.test-support.js";
 import type { SpawnInput } from "./types.js";
 
-const { child, pty, readMemory } = vi.hoisted(() => ({
-  child: vi.fn(),
-  pty: vi.fn(),
-  readMemory:
-    vi.fn<
-      (path: string, encoding: string, callback: (error: null, text: string) => void) => void
-    >(),
-}));
+const { child, pty } = vi.hoisted(() => ({ child: vi.fn(), pty: vi.fn() }));
 vi.mock("./adapters/child.js", () => ({
   createChildAdapter: async (
     ...args: Parameters<typeof import("./adapters/child.js").createChildAdapter>
@@ -24,9 +18,10 @@ vi.mock("./adapters/child.js", () => ({
   }),
 }));
 vi.mock("./adapters/pty.js", () => ({ createPtyAdapter: pty }));
-vi.mock("node:fs", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:fs")>()),
-  readFile: readMemory,
+vi.mock("node:fs/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs/promises")>()),
+  readFile: vi.fn(),
+  readdir: vi.fn(),
 }));
 
 let supervisor: ReturnType<typeof createProcessSupervisor>;
@@ -79,7 +74,8 @@ async function expectRejectedReplacement(input: SpawnInput, error: string, cance
 beforeEach(() => {
   child.mockReset();
   pty.mockReset();
-  readMemory.mockReset();
+  vi.mocked(fs.readFile).mockReset();
+  vi.mocked(fs.readdir).mockReset();
   supervisor = createProcessSupervisor();
 });
 afterEach(() => {
@@ -94,9 +90,8 @@ describe("process supervisor", () => {
     async (mode) => {
       vi.useFakeTimers();
       mockProcessPlatform("linux");
-      const read = readMemory.mockImplementation((_path, _options, callback) => {
-        callback(null, "VmRSS:\t256 kB\n");
-      });
+      const read = vi.mocked(fs.readFile).mockResolvedValue("VmRSS:\t256 kB\n");
+      vi.mocked(fs.readdir).mockResolvedValue([]);
       const adapter = terminating();
       adapter.memoryRootPid = 4321;
       if (mode === "pty") {
@@ -116,7 +111,7 @@ describe("process supervisor", () => {
         adapter.settle(0);
       } else {
         expect(adapter.killMock).toHaveBeenCalledExactlyOnceWith("SIGKILL");
-        expect(read).toHaveBeenCalledWith("/proc/4321/status", "utf8", expect.any(Function));
+        expect(read).toHaveBeenCalledWith("/proc/4321/status", "utf8");
         await expect(run.wait()).resolves.toMatchObject({
           reason: "memory-limit",
           timedOut: false,

@@ -5,7 +5,6 @@ import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/serv
 import { SANDBOX_HOST_PATH } from "../../../src/agents/sandbox-host.js";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
-import { createDeferred } from "../../../test/helpers/promise.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -318,7 +317,10 @@ suite.define(() => {
               },
             ],
           };
-          const { promise: documentGate, resolve: releaseDocument } = createDeferred();
+          let releaseDocument!: () => void;
+          const documentGate = new Promise<void>((resolve) => {
+            releaseDocument = resolve;
+          });
           await page.route(widgetUrl, async (route) => {
             await documentGate;
             await route.fulfill({

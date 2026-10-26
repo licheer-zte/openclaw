@@ -159,14 +159,14 @@ describe("update candidate canary", () => {
       (filename: string) => filename === continuationEntry,
     );
     stubHealthyGateway();
-    const result = await validate();
+    const result = await validateUpdateCandidateCanary(canaryStateOptions(3_000));
     expect(result.status).toBe("ok");
     expect(mocks.spawn.mock.calls.some(([, args]) => args.includes(continuationEntry))).toBe(true);
   });
 
   readiness.registerCanaryReadinessBudgetTests(() => root, mocks);
   registerCanaryMigrationPolicyTests({ mocks, canaryStateOptions, getChildEnv: () => childEnv });
-  registerCanarySnapshotCapacityTests({ canaryStateOptions, mocks });
+  registerCanarySnapshotCapacityTests({ canaryStateOptions, getRoot: () => root, mocks });
 
   it.each(
     ["node", "bun"].filter(
@@ -200,7 +200,6 @@ describe("update candidate canary", () => {
         mcp: { apps: { enabled: true, sandboxPort: 18790 } },
         cron: { enabled: true },
       };
-      const originalConfig = structuredClone(config);
       const nodeRunner = process.platform === "win32" ? process.execPath : path.join(root, runtime);
       if (process.platform !== "win32") {
         // The snapshot watchdog also launches this runtime for a real builtin-only I/O probe.
@@ -242,7 +241,11 @@ describe("update candidate canary", () => {
         mcp: { apps: { enabled: false } },
       });
       expect(candidateConfig.gateway).not.toMatchObject({ port: config.gateway.port });
-      expect(config).toEqual(originalConfig);
+      expect(config).toEqual({
+        gateway: { port: 18789 },
+        mcp: { apps: { enabled: true, sandboxPort: 18790 } },
+        cron: { enabled: true },
+      });
       await expectRemoved(childEnv.OPENCLAW_STATE_DIR!);
     },
   );
@@ -537,7 +540,7 @@ describe("update candidate canary", () => {
         },
       );
       const env = { API_TOKEN: "synthetic-secret" };
-      const result = await validate({ env });
+      const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(3_000), env });
       expect(result).toMatchObject({ status: "error", phase });
       const failed = canaryOutcomeStep(result.steps)!;
       if (scenario === "startup-tail") {
@@ -597,7 +600,7 @@ describe("update candidate canary", () => {
 
   it("rejects a zero-exit continuation worker without its compiled schema contract before boot", async () => {
     runtimeContract = null;
-    const result = await validate();
+    const result = await validateUpdateCandidateCanary(canaryStateOptions(3_000));
     expect(result).toMatchObject({ status: "error", phase: "runtime" });
     expect(canaryOutcomeStep(result.steps)).toMatchObject({
       name: "candidate-recovery",
@@ -662,7 +665,7 @@ describe("update candidate canary", () => {
       });
       return child;
     });
-    const result = await validate();
+    const result = await validateUpdateCandidateCanary(canaryStateOptions(3_000));
     expect(result).toMatchObject({ status: "error", phase: overflow ? "plugins" : "runtime" });
   });
 
@@ -682,7 +685,7 @@ describe("update candidate canary", () => {
         child.emit("close", 1);
       }),
     );
-    const result = await validate();
+    const result = await validateUpdateCandidateCanary(canaryStateOptions(3_000));
     expect(result).toMatchObject({ status: "error", phase: "doctor" });
     expect(result.logTail.length).toBeLessThanOrEqual(40);
     expect(mocks.signal).toHaveBeenCalled();
@@ -703,7 +706,7 @@ describe("update candidate canary", () => {
         child.emit("close", 1);
       }),
     );
-    const result = await validate();
+    const result = await validateUpdateCandidateCanary(canaryStateOptions(3_000));
     expect(result.status).toBe("error");
     expect(result.logTail.join("\n")).not.toContain("synthetic-sensitive-suffix");
     expect(result.logTail).toContain("following-safe-line");
@@ -728,7 +731,7 @@ describe("update candidate canary", () => {
         return child;
       },
     );
-    const result = await validate();
+    const result = await validateUpdateCandidateCanary(canaryStateOptions(3_000));
     expect(result.status).toBe("ok");
     expect(result.steps.find((step) => step.name === "candidate-doctor")?.diagnostics).toEqual([
       "Doctor sections: database-preflight 1.2 s, contributions 3.4 s",

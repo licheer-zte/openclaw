@@ -103,19 +103,7 @@ export function canReuseMarkdownOwnership(
   if (!nextText.startsWith(previousText)) {
     return false;
   }
-  return canReuseMarkdownOwnershipForAppend(
-    previousText,
-    nextText.slice(previousText.length),
-    ownership,
-  );
-}
-
-/** Reuse a parsed prefix only when appending `appended` cannot change Markdown ownership. */
-export function canReuseMarkdownOwnershipForAppend(
-  previousText: string,
-  appended: string,
-  ownership?: ReturnType<typeof findCodeOwnership>,
-): boolean {
+  const appended = nextText.slice(previousText.length);
   if (!appended) {
     return true;
   }
@@ -148,7 +136,7 @@ export function canReuseMarkdownOwnershipForAppend(
   // Inline code inside a streamed link title stops being code when the title closes.
   if (
     ownership.retainStart < previousText.length &&
-    completesInlineLinkTitleForAppend(previousText, appended, ownership.retainStart)
+    completesInlineLinkTitle(previousText, nextText, ownership.retainStart)
   ) {
     return false;
   }
@@ -345,11 +333,8 @@ function hasReferenceDefinitionColon(text: string, labelStart: number) {
   return false;
 }
 
-function completesInlineLinkTitleForAppend(
-  previousText: string,
-  appended: string,
-  retainStart: number,
-) {
+function completesInlineLinkTitle(previousText: string, nextText: string, retainStart: number) {
+  const appended = nextText.slice(previousText.length);
   const appendedBoundary = appended.includes(">") ? stripBlockquotePrefixes(appended) : appended;
   if (!/["']\s*\)|\)\s*\)|^\s*\)/u.test(appendedBoundary)) {
     return false;

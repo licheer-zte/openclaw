@@ -1,16 +1,26 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { GatewayProtocolRequestError } from "../../packages/gateway-client/src/protocol-request.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
 import { printRecoveryFailureDiagnostics } from "./gateway.sessions-send-recovery.diagnostics.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
+const temporaryDirectories: string[] = [];
+
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await Promise.all(
+    temporaryDirectories
+      .splice(0)
+      .map((directory) => fs.rm(directory, { recursive: true, force: true })),
+  );
+});
 
 async function writeSyntheticLog(messages: string[]): Promise<string> {
-  const logPath = path.join(tempDirs.make("openclaw-recovery-diagnostic-"), "gateway.log");
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-recovery-diagnostic-"));
+  temporaryDirectories.push(directory);
+  const logPath = path.join(directory, "gateway.log");
   await fs.writeFile(
     logPath,
     `${messages.map((message) => JSON.stringify({ message })).join("\n")}\n`,
@@ -88,7 +98,8 @@ it("projects only exact known recovery refusals through the failure printer", as
       `${blockedLine(formattedRefusal(known[0][0]), 7, authenticInputId)} malformed-tail`,
     ],
   });
-  const projection = [...childLog.console, ...childLog.file].join("\n");
+  const projected = [...childLog.console, ...childLog.file];
+  const projection = projected.join("\n");
 
   for (const [, label] of known) {
     expect(projection.split(`"refusal":"${label}"`)).toHaveLength(2);

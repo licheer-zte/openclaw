@@ -278,6 +278,7 @@ archiveTest(
       }),
     );
     await waitForArchivePhase(active.aborted, archive, signal);
+    expect(active.controller.signal.aborted).toBe(true);
     expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
 
     let replacementAdmitted = false;
@@ -304,6 +305,7 @@ archiveTest(
     await Promise.resolve();
     expect(replacementAdmitted).toBe(false);
 
+    await Promise.resolve();
     expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
     persistence.resolve();
 
@@ -416,6 +418,7 @@ test.for(["creator", "changed identity"] as const)(
 
       const archive = track(authority.archive());
       await waitForArchivePhase(active.aborted, archive, signal);
+      expect(active.controller.signal.aborted).toBe(true);
 
       const sharing = track(authority.share());
       expect(await sharing).toMatchObject({ ok: true });
@@ -433,6 +436,7 @@ test.for(["creator", "changed identity"] as const)(
         return;
       }
       await waitForArchivePhase(reclaimEntered.promise, archive, signal);
+      expect(reclaim).toHaveBeenCalledOnce();
       expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
       reclaimGate.resolve();
       expect(await archive).toMatchObject({ ok: true });
@@ -450,7 +454,7 @@ archiveTest(
     const allowNestedReclaim = createDeferredCore();
     const contenderRelease = createDeferredCore();
     const contenderStarted = createDeferredCore();
-    const { current, context } = placementFixture(session, async () => {
+    const { current, reclaim, context } = placementFixture(session, async () => {
       reclaimEntered.resolve();
       await allowNestedReclaim.promise;
       await runSessionMutation({
@@ -482,6 +486,7 @@ archiveTest(
     contenderRelease.resolve();
     const [result] = await Promise.all([archive, contender]);
     expect(result.ok).toBe(true);
+    expect(reclaim).toHaveBeenCalledOnce();
     expect(current().state).toBe("reclaimed");
     expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toEqual(expect.any(Number));
   },
@@ -644,7 +649,9 @@ test.for([
 ] as const)("sessions.patchMany %s", ([, releaseFails], { signal }) =>
   withArchiveCleanup(signal, async ({ track, releaseOnAbort }) => {
     const batch = await createArchiveBatch();
-    const [firstSessionId] = batch.ids;
+    const {
+      ids: [firstSessionId, secondSessionId],
+    } = batch;
     const firstDrained = createDeferredCore();
     const firstStarted = createDeferredCore();
     const secondStarted = createDeferredCore();
@@ -673,6 +680,11 @@ test.for([
       Promise.all([firstStarted.promise, secondStarted.promise]),
       archive,
       signal,
+    );
+    expect(beginInferenceSessionDrain).toHaveBeenCalledTimes(2);
+    // Independent preparations race their worker reads; releases stay in target order below.
+    expect(beginInferenceSessionDrain.mock.calls.map(([sessionId]) => sessionId)).toEqual(
+      expect.arrayContaining([firstSessionId, secondSessionId]),
     );
     expect(firstRelease).not.toHaveBeenCalled();
     expect(secondRelease).not.toHaveBeenCalled();

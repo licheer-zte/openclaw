@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { resolveInstallationTarget } from "../infra/installation-target-context.js";
 import { readPackageVersion } from "../infra/package-json.js";
@@ -22,7 +21,6 @@ import {
 } from "./triage.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const installRoot = path.resolve(import.meta.dirname, "../..");
 let runtime: ReturnType<typeof createTriageRuntime>;
 const healthy = { ok: true, score: 0, summary: "Doctor lint reports no errors." };
 vi.mock("@clack/prompts", async (importOriginal) => ({
@@ -66,7 +64,7 @@ async function useRealRepairLoop() {
 }
 
 async function installationVersion() {
-  const version = await readPackageVersion(installRoot);
+  const version = await readPackageVersion(path.resolve(import.meta.dirname, "../.."));
   if (!version) {
     throw new Error("Fixture installation version missing");
   }
@@ -85,9 +83,6 @@ function expectLog(text: string | RegExp) {
 }
 function output() {
   return runtime.log.mock.calls.flat().join("\n");
-}
-function expectExactLog(text: string) {
-  expect(runtime.log).toHaveBeenCalledWith(text);
 }
 function doctorResult(severity?: "error" | "warning", message = "") {
   return {
@@ -298,15 +293,18 @@ describe("triage --run", () => {
     let updateResult: string | undefined;
     if (newer.startsWith("explicit")) {
       updateResult = path.join(stateDir, "explicit-failure.json");
-      await writeFixtureJson(updateResult, {
-        result: {
-          runId: failed.runId,
-          status: "error",
-          mode: "npm",
-          reason: "finalize:doctor",
-          steps: [],
-        },
-      });
+      await fs.writeFile(
+        updateResult,
+        JSON.stringify({
+          result: {
+            runId: failed.runId,
+            status: "error",
+            mode: "npm",
+            reason: "finalize:doctor",
+            steps: [],
+          },
+        }),
+      );
     }
     const command = runEmbedded({ updateResult });
     if (updateResult || newer.includes("restoration")) {
@@ -360,7 +358,9 @@ describe("triage --run", () => {
         return;
       }
       await command;
-      expectExactLog("Embedded repair already resolved: Doctor lint reports no errors.");
+      expect(runtime.log).toHaveBeenCalledWith(
+        "Embedded repair already resolved: Doctor lint reports no errors.",
+      );
       expect(mocks.runUpdateRepairTurn).not.toHaveBeenCalled();
       if (run) {
         expect(getUpdateRun(run.runId)?.status).toBe("failed");
@@ -435,9 +435,10 @@ describe("triage --run", () => {
   );
 
   it("keeps an older owned update continuation diagnostics-only even on a terminal", async () => {
-    await writeFixtureJson(path.join(stateDir, "openclaw.json"), {
-      agents: { defaults: { model: "openai/gpt-5.6-luna" } },
-    });
+    await fs.writeFile(
+      path.join(stateDir, "openclaw.json"),
+      JSON.stringify({ agents: { defaults: { model: "openai/gpt-5.6-luna" } } }),
+    );
     mocks.confirm.mockResolvedValue(false);
     await withTriageTerminal(true, () =>
       triageCommand(
@@ -455,7 +456,7 @@ describe("triage --run", () => {
     expect(mocks.runUpdateRepairTurn).not.toHaveBeenCalled();
     expect(output()).not.toContain("the embedded OpenClaw agent using your configured model");
     expect(output()).not.toContain("gpt-5.6-luna");
-    expectExactLog("No repair agent was started.");
+    expect(runtime.log).toHaveBeenCalledWith("No repair agent was started.");
   });
 
   it("runs one shared repair turn with fresh Doctor severity validation and the captured target", async () => {
@@ -486,7 +487,7 @@ describe("triage --run", () => {
           stateDir,
           configPath: path.join(stateDir, "openclaw.json"),
           workspaceDir: path.join(stateDir, "workspace"),
-          installRoot,
+          installRoot: path.resolve(import.meta.dirname, "../.."),
         },
         context: expect.objectContaining({
           error: "Operator requested installation triage",
@@ -499,7 +500,7 @@ describe("triage --run", () => {
     expect(mocks.runUtf8CommandWithTimeout).toHaveBeenCalledWith(
       [
         process.versions.bun ? "node" : process.execPath,
-        path.join(installRoot, "dist/index.js"),
+        path.resolve(import.meta.dirname, "../../dist/index.js"),
         "doctor",
         "--lint",
         "--json",
@@ -507,7 +508,7 @@ describe("triage --run", () => {
         "error",
       ],
       expect.objectContaining({
-        cwd: installRoot,
+        cwd: path.resolve(import.meta.dirname, "../.."),
         baseEnv: {},
         env: expect.objectContaining({
           OPENCLAW_STATE_DIR: stateDir,
@@ -520,7 +521,9 @@ describe("triage --run", () => {
         terminateOnOutputLimit: true,
       }),
     );
-    expectExactLog("Embedded repair repaired: Doctor lint reports no errors.");
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Embedded repair repaired: Doctor lint reports no errors.",
+    );
   });
 
   it.each([
@@ -616,8 +619,10 @@ describe("triage --run", () => {
       expect(mocks.runUpdateRepairLoop).toHaveBeenCalledOnce();
     } else {
       await expect(command).rejects.toMatchObject({ code: failure });
-      expectExactLog("Attempt completed.");
-      expectExactLog(`Embedded repair ${status}: Doctor lint found an error.`);
+      expect(runtime.log).toHaveBeenCalledWith("Attempt completed.");
+      expect(runtime.log).toHaveBeenCalledWith(
+        `Embedded repair ${status}: Doctor lint found an error.`,
+      );
       expect(runtime.error).toHaveBeenCalledWith(reason);
     }
   });
@@ -642,7 +647,7 @@ describe("triage --run", () => {
     mocks.runUpdateRepairLoop.mockImplementation(async ({ isCurrent, onEvent }) => {
       expect(isCurrent()).toBe(true);
       onEvent({ type: "turn-started", turn: 1, provider: "openai", model: "gpt-5.6-luna" });
-      expectExactLog("Starting repair turn 1 with openai/gpt-5.6-luna.");
+      expect(runtime.log).toHaveBeenCalledWith("Starting repair turn 1 with openai/gpt-5.6-luna.");
       current = false;
       return {
         status: "aborted",

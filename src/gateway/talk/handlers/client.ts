@@ -5,7 +5,6 @@ import {
   ErrorCodes,
   errorShape,
   validateTalkClientCloseParams,
-  validateTalkClientSayParams,
   validateTalkClientSteerParams,
   validateTalkClientToolCallParams,
   validateTalkClientTranscriptParams,
@@ -71,9 +70,8 @@ import { prepareTalkAgentConsultTranscript } from "../agent-consult-transcript.j
 import { prepareTalkClientControlAuthority } from "../client-agent-consult.js";
 import {
   closeTalkClientGatewayControlSession,
-  sendTalkClientGatewayControlSpeech,
+  resolveTalkAgentConsultAuthority,
 } from "../client-gateway-control.js";
-import { resolveTalkAgentConsultAuthority } from "../client-tool-authority.js";
 import { createTalkRunCancel } from "../realtime-run-control.js";
 import {
   ensureTalkRealtimeRelayVoiceSession,
@@ -110,35 +108,6 @@ const clientMutationError = (error: unknown) =>
 
 export const talkClientHandlers: GatewayRequestHandlers = {
   "talk.client.create": createTalkClient,
-  "talk.client.say": defineValidatedGatewayHandler(
-    "talk.client.say",
-    validateTalkClientSayParams,
-    (request) => {
-      const { params, respond } = request;
-      if (!params.text.trim() || Buffer.byteLength(params.text, "utf8") > 1024) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "text must contain 1–1024 UTF-8 bytes of speech"),
-        );
-        return;
-      }
-      const target = requirePreparedTalkSessionTarget(
-        request.sessionMutationAuthorization?.talkSessionTarget,
-      );
-      request.sessionMutationAuthorization?.assertCurrent();
-      readGatewayRequestMutationAuthority(request).assertCurrent();
-      target.assertCurrent(request.context.getRuntimeConfig());
-      sendTalkClientGatewayControlSpeech({
-        voiceSessionId: params.voiceSessionId,
-        sessionTarget: target,
-        connId: request.client?.connId,
-        text: params.text,
-      });
-      respond(true, { accepted: true }, undefined);
-    },
-    talkRequestError,
-  ),
   "talk.client.toolCall": defineValidatedGatewayHandler(
     "talk.client.toolCall",
     validateTalkClientToolCallParams,

@@ -4,11 +4,8 @@ import http from "node:http";
 import path from "node:path";
 import { Duplex } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
-import { promisify } from "node:util";
 import { WebSocket } from "../../../packages/gateway-client/src/websocket.js";
-import { listenLoopback } from "../../../test/helpers/gateway-integration-fixtures.js";
 import { setLoggerOverride } from "../../logging/logger.js";
-import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { gatewayTestTextTransport } from "../server/connection-transport.test-support.js";
 import { createNodeDesktopStreamBroker } from "./node-stream-broker.js";
 import { handleDesktopObserveUpgrade, mintDesktopObserverToken } from "./observe-bridge.js";
@@ -21,10 +18,19 @@ async function until(predicate: () => boolean) {
   }
 }
 
+async function listen(server: http.Server) {
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  return `ws://127.0.0.1:${address.port}`;
+}
+
 async function observe(mode: string) {
   const received: Buffer[] = [];
   let releaseWrite: (() => void) | undefined;
   let released = 0;
+  const pausedSockets: WebSocket[] = [];
   let closeObserver: ((code: number, reason: string) => void) | undefined;
   const stream = new Duplex({
     writableHighWaterMark: 1,
@@ -46,7 +52,7 @@ async function observe(mode: string) {
       },
     });
   });
-  const url = await listenLoopback(server, "ws");
+  const url = await listen(server);
   const { token } = mintDesktopObserverToken({
     sourceKey: "worker:runtime-proof",
     ownerEpoch: 1,
@@ -54,16 +60,23 @@ async function observe(mode: string) {
     attachment: { kind: "stream", streamId: "runtime-proof" },
   });
   const client = new WebSocket(`${url}/desktop/observe?token=${token}`);
+  const { pause } = Object.getOwnPropertyDescriptors(WebSocket.prototype);
+  const pauseSocket = pause.value;
+  assert.ok(pauseSocket);
+  WebSocket.prototype.pause = function (this: WebSocket) {
+    pausedSockets.push(this);
+    pauseSocket.call(this);
+  };
   try {
     await once(client, "open");
     const banner = once(client, "message");
     stream.push(Buffer.from("RFB 003.008\n"));
     assert.equal((await banner)[0].toString(), "RFB 003.008\n");
 
-    const closed = once(client, "close");
     if (mode === "observer-backpressure") {
       client.send(Buffer.from("first"));
       await until(() => Boolean(releaseWrite));
+      assert.equal(pausedSockets.at(-1)?.isPaused, true);
       client.send(Buffer.from("second"));
       await delay(25);
       assert.equal(stream.writableLength, 5);
@@ -73,25 +86,28 @@ async function observe(mode: string) {
       firstWrite?.();
       await until(() => Boolean(releaseWrite));
       assert.equal(Buffer.concat(received).toString(), "firstsecond");
+      assert.equal(pausedSockets.at(-1)?.isPaused, true);
+      const closed = once(client, "close");
       closeObserver?.(1012, "desktop stopped");
+      assert.equal((await closed)[0], 1012);
     } else if (mode === "observer-payload") {
+      const closed = once(client, "close");
       client.send(Buffer.alloc(1024 * 1024 + 1));
-    } else {
-      client.close();
-    }
-    const [code] = await closed;
-    if (mode === "observer-backpressure") {
-      assert.equal(code, 1012);
-    }
-    if (mode === "observer-payload") {
-      assert.equal(code, 1009);
+      assert.equal((await closed)[0], 1009);
       assert.equal(received.length, 0);
+    } else {
+      const closed = once(client, "close");
+      client.close();
+      await closed;
     }
     await until(() => stream.destroyed && released === 1);
   } finally {
+    Object.defineProperty(WebSocket.prototype, "pause", pause);
     client.terminate();
     stream.destroy();
-    await promisify(server.close.bind(server))();
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   }
 }
 
@@ -108,7 +124,11 @@ async function nodeStream(kind: "desktop" | "portal") {
           connId: binding.connId,
           socket: gatewayTestTextTransport(client),
           usesSharedGatewayAuth: false,
-          connect: gatewayConnect(undefined, { id: "node-host", mode: "node" }, 1, "node"),
+          connect: {
+            minProtocol: 1,
+            maxProtocol: 1,
+            client: { id: "node-host", version: "test", platform: "test", mode: "node" },
+          },
         },
         declaredCaps: [],
         caps: [],
@@ -122,7 +142,7 @@ async function nodeStream(kind: "desktop" | "portal") {
       isConnectionCurrentPairingState: async () => true,
     });
   });
-  const url = await listenLoopback(server, "ws");
+  const url = await listen(server);
   const client = new WebSocket(`${url}${ticket.attachPath}`);
   let stream: Duplex | undefined;
   try {
@@ -146,7 +166,9 @@ async function nodeStream(kind: "desktop" | "portal") {
     client.terminate();
     stream?.destroy();
     ticket.cancel();
-    await promisify(server.close.bind(server))();
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   }
 }
 
@@ -156,5 +178,9 @@ export async function runDesktopWebSocketRuntimeProbe(mode: string) {
     consoleLevel: "silent",
     file: path.join(process.cwd(), "desktop-runtime.log"),
   });
-  await (mode === "desktop" || mode === "portal" ? nodeStream(mode) : observe(mode));
+  if (mode === "desktop" || mode === "portal") {
+    await nodeStream(mode);
+  } else {
+    await observe(mode);
+  }
 }

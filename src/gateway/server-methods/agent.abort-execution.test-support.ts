@@ -23,8 +23,10 @@ const mocks = getAgentTestMocks();
 const sessionKey = "agent:main:main";
 type Cancellation = { action: "chat.abort" | "/stop"; lateFailure?: boolean; staleKey?: boolean };
 
-async function checkCancellation(cancellation: Cancellation, signal: AbortSignal) {
-  const { action, lateFailure, staleKey } = cancellation;
+async function checkCancellation(
+  { action, lateFailure, staleKey }: Cancellation,
+  signal: AbortSignal,
+) {
   prime();
   const finishRun = createDeferred();
   const context = makeContext();
@@ -34,6 +36,10 @@ async function checkCancellation(cancellation: Cancellation, signal: AbortSignal
   let capturedSignal: AbortSignal | undefined;
   mocks.agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
     capturedSignal = opts.abortSignal;
+    const entry = getRpcSource(runId);
+    if (entry?.input.abortSignal === opts.abortSignal) {
+      acceptedEntry = entry;
+    }
     await finishRun.promise;
     if (lateFailure) {
       throw new Error("late provider failure");
@@ -49,8 +55,8 @@ async function checkCancellation(cancellation: Cancellation, signal: AbortSignal
       { message: "hi", agentId: "main", sessionKey, idempotencyKey: runId },
       { context, reqId: runId, client },
     );
-    const active = (acceptedEntry = requireValue(getRpcSource(runId), "active run missing"));
-    expect(capturedSignal).toBe(active.input.abortSignal);
+    const active = requireValue(acceptedEntry, "active run missing");
+    expect(getRpcSource(runId)).toBe(active);
     if (staleKey) {
       expect(active.input.target?.sessionKey).toBe(sessionKey);
     } else {
@@ -89,7 +95,8 @@ async function checkCancellation(cancellation: Cancellation, signal: AbortSignal
   expect(getRpcSource(runId)).toBeUndefined();
   if (lateFailure) {
     const terminal = context.dedupe.get(`agent:${runId}`);
-    expect([terminal?.ok, terminal?.error]).toEqual([true, undefined]);
+    expect(terminal?.ok).toBe(true);
+    expect(terminal?.error).toBeUndefined();
     expectRecordFields(terminal?.payload, { runId, status: "timeout", summary: "aborted" });
   }
 }

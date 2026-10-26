@@ -105,13 +105,17 @@ describe("Codex app-server model catalog", () => {
         ],
       });
       const result = await owner.load(catalogParams, undefined);
-      expect(result.outcomes?.[0]?.modelAccessPrograms).toEqual([
-        {
-          modelId: "synthetic-opaque",
-          runtimeId: "codex",
-          cyber: ["standard", "daybreak_blue"],
-        },
-      ]);
+      expect(result.outcomes?.[0]?.modelAccessPrograms).toEqual(
+        type === "chatgpt"
+          ? [
+              {
+                modelId: "synthetic-opaque",
+                runtimeId: "codex",
+                cyber: ["standard", "daybreak_blue"],
+              },
+            ]
+          : undefined,
+      );
       expect(read()).toBeDefined();
       rpc.epoch += 1;
       expect(read()).toBeUndefined();
@@ -356,11 +360,7 @@ describe("Codex app-server model catalog", () => {
       const result = await owner.load(catalogParams, nativePluginConfig);
       expect(result.entries).toContainEqual(expect.objectContaining({ id: "synthetic-opaque" }));
       expect(result.outcomes).toEqual([
-        {
-          provider: "openai",
-          status: account ? "ready" : "unavailable",
-          ...(account ? { modelAccessPrograms: [] } : {}),
-        },
+        { provider: "openai", status: account ? "ready" : "unavailable" },
       ]);
       expect(read({}, nativePluginConfig)).toEqual(readiness);
       expect(read({ agentId: "another" }, nativePluginConfig)).toBeUndefined();

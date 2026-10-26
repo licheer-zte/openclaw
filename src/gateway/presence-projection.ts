@@ -5,8 +5,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
-import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
-import { READ_SCOPE } from "./operator-scopes.js";
+import { authorizeOperatorScopesForRequiredScope, READ_SCOPE } from "./method-scopes.js";
 import { isGatewayClientProfilePending } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { resolveSessionEventAgentScope } from "./session-request-agent.js";
@@ -17,10 +16,7 @@ import { isGatewayAdmin, prepareProjectedSessionSharing } from "./session-sharin
 export function createPresenceRecipientProjection(params: {
   cfg: OpenClawConfig;
   presence: SystemPresence[];
-  projection?: Pick<
-    SessionRowProjection,
-    "getPolicyConfig" | "sharingRevision" | "sharingTargetState"
-  >;
+  projection?: SessionRowProjection;
 }): (client: GatewayClient | null) => SystemPresence[] {
   const keys = [...new Set(params.presence.flatMap((row) => row.watchedSessions ?? []))];
   const memory = getSessionActorStorageBinding({});
@@ -45,8 +41,6 @@ export function createPresenceRecipientProjection(params: {
     }
   }
   const views = new Map<string, SystemPresence[]>();
-  const audiences = new Map<string, SystemPresence[]>();
-  const hasMemoryWatches = keys.some(isIncognitoSessionKey);
   let routingConfig: OpenClawConfig | undefined;
   let watches: Array<{ sessionKey: string; key: string; agentId?: string }> = [];
   let revision: object | undefined;
@@ -68,7 +62,7 @@ export function createPresenceRecipientProjection(params: {
     if (
       !client?.connect ||
       (client.connect.role ?? "operator") !== "operator" ||
-      !operatorScopeSatisfied(READ_SCOPE, client.connect.scopes ?? [])
+      !authorizeOperatorScopesForRequiredScope(READ_SCOPE, client.connect.scopes ?? []).allowed
     ) {
       return [];
     }
@@ -86,27 +80,18 @@ export function createPresenceRecipientProjection(params: {
         };
       });
       targets.clear();
-      audiences.clear();
     }
     const currentRevision = params.projection?.sharingRevision;
     if (revision !== currentRevision || currentRevision === undefined) {
       revision = currentRevision;
       targets.clear();
-      audiences.clear();
     }
     const canReadSessions = isGatewayAdmin(client) || !isGatewayClientProfilePending(client);
-    const sharing = prepareProjectedSessionSharing({
+    const { entryFilter } = prepareProjectedSessionSharing({
       cfg,
       client,
       isMember: () => false,
     });
-    // Memory actors have independent lifetimes; their watches must stay live.
-    const audience =
-      currentRevision && !hasMemoryWatches ? sharing.getCacheKey(currentRevision) : undefined;
-    const cached = audience === undefined ? undefined : audiences.get(audience);
-    if (cached) {
-      return cached;
-    }
     const visible = new Set<string>();
     const indexes: number[] = [];
     if (canReadSessions) {
@@ -115,7 +100,7 @@ export function createPresenceRecipientProjection(params: {
           continue;
         }
         const target = resolveTarget(sessionKey, key, agentId);
-        if (target && (sharing.entryFilter?.(target.canonicalKey, target.entry) ?? true)) {
+        if (target && (entryFilter?.(target.canonicalKey, target.entry) ?? true)) {
           visible.add(sessionKey);
           indexes.push(index);
         }
@@ -133,9 +118,6 @@ export function createPresenceRecipientProjection(params: {
         return watchedSessions.length ? { ...person, watchedSessions } : person;
       });
       views.set(signature, view);
-    }
-    if (audience !== undefined) {
-      audiences.set(audience, view);
     }
     return view;
   };

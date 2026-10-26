@@ -259,17 +259,25 @@ async function approvePendingNodePairing(nodeId: string, commands: string[]) {
   return pending;
 }
 
-async function invokeCanvasSnapshot(nodeId: string, idempotencyKey: string) {
+async function invokeCanvasSnapshot(
+  nodeId: string,
+  idempotencyKey: string,
+  params: { format?: string } = { format: "png" },
+) {
   return rpcReq<{ payload?: unknown; payloadJSON?: string | null }>(ws, "node.invoke", {
     nodeId,
     command: "canvas.snapshot",
-    params: { format: "png" },
+    params,
     idempotencyKey,
   });
 }
 
-async function expectCanvasSnapshotDenied(nodeId: string, idempotencyKey: string) {
-  expect(await invokeCanvasSnapshot(nodeId, idempotencyKey)).toMatchObject({
+async function expectCanvasSnapshotDenied(
+  nodeId: string,
+  idempotencyKey: string,
+  params?: { format?: string },
+) {
+  expect(await invokeCanvasSnapshot(nodeId, idempotencyKey, params)).toMatchObject({
     ok: false,
     error: { message: expect.stringContaining("node command not allowed") },
   });
@@ -508,7 +516,7 @@ describe("gateway node command allowlist", () => {
     });
     const emptyClient = await connectNodeClientWithNodePairing(empty);
     const emptyNodeId = await findConnectedNodeIdByDisplayName(empty.displayName);
-    await expectCanvasSnapshotDenied(emptyNodeId, "allowlist-2");
+    await expectCanvasSnapshotDenied(emptyNodeId, "allowlist-2", {});
     await emptyClient.stopAndWait();
     await expectConnectedNodeCount(0);
 

@@ -14,8 +14,8 @@ import type { PluginRuntimeApplication } from "./lifecycle.js";
 import { inspectPluginGenerationSources } from "./plugin-generation-source-inspection.js";
 import {
   hasPluginLifecycleLease,
-  withPluginLifecycleLeaseAsync,
-  type PluginMetadataLeaseContext,
+  withPluginLifecycleLease,
+  type PluginLifecycleLeaseContext,
 } from "./plugin-lifecycle-lease.js";
 import { readPluginMetadataStateRow } from "./plugin-metadata-state-worker.js";
 import { withPluginSourceCleanup } from "./source-cleanup.js";
@@ -142,16 +142,16 @@ export class PluginInstallRuntimeBatch {
   }
 
   /** Called before the original batch lease exits, after its compensation has settled. */
-  async prepare(lease: PluginMetadataLeaseContext): Promise<void> {
+  async prepare(lease: PluginLifecycleLeaseContext): Promise<void> {
     const databasePath = lease.databasePath;
-    await lease.assertOwned();
+    lease.assertOwned();
     this.databasePath = databasePath;
     if (!this.hasCommitted && this.retained.size === 0) {
       return;
     }
     // Settlement needs the final persisted row, even if this lease cached an earlier index.
     const row = await readPluginMetadataStateRow("installed-index", { path: databasePath });
-    await lease.assertOwned();
+    lease.assertOwned();
     const index = indexFromRow(row?.value_json);
     const current = index?.installRecords ?? {};
     const targets = new Map<string, PluginInstallBatchTarget>();
@@ -208,7 +208,7 @@ export class PluginInstallRuntimeBatch {
       }
       targets.set(pluginId, { pluginId, installHash, sourceDigests: commit.sourceDigests });
     }
-    await lease.assertOwned();
+    lease.assertOwned();
     this.targets = [...targets.values()].toSorted((a, b) => a.pluginId.localeCompare(b.pluginId));
   }
 
@@ -227,14 +227,13 @@ export class PluginInstallRuntimeBatch {
       for (const warning of application.warnings ?? []) {
         warn(warning);
       }
-      await withPluginLifecycleLeaseAsync(this.options, async (lease) => {
+      await withPluginLifecycleLease(this.options, async (lease) => {
         const assertOwned = () => {
-          lease.assertCurrent();
+          lease.assertOwned();
           if (lease.databasePath !== this.databasePath) {
             throw new Error("Plugin cleanup belongs to a different state database");
           }
         };
-        await lease.assertOwned();
         assertOwned();
         const sourceCleanups = this.installs.flatMap(({ commit, cleanups }) =>
           commit && targets.some((target) => target.pluginId === commit.pluginId) ? cleanups : [],
@@ -245,7 +244,6 @@ export class PluginInstallRuntimeBatch {
         const row = await readPluginMetadataStateRow("installed-index", {
           path: lease.databasePath,
         });
-        await lease.assertOwned();
         assertOwned();
         const index = indexFromRow(row?.value_json);
         if (!index) {
@@ -265,7 +263,6 @@ export class PluginInstallRuntimeBatch {
           }
         };
         for (const cleanup of sourceCleanups) {
-          await lease.assertOwned();
           assertCurrent();
           await cleanup(index, assertCurrent, warn);
           assertCurrent();

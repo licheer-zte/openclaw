@@ -1,8 +1,6 @@
 import fs from "node:fs/promises";
 import nodePath from "node:path";
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -10,11 +8,6 @@ import {
   BROWSER_PROXY_MAX_FILE_BYTES,
   BROWSER_PROXY_OWNED_TAB_CLOSE_PATH,
 } from "../browser-proxy-envelope.js";
-import type { stageBrowserProxyUploadRequest } from "../browser-proxy-upload.js";
-import type { closeTrackedCdpTarget } from "../browser/cdp.helpers.js";
-import { createCdpFixture } from "../browser/cdp.test-support.js";
-import { resolveBrowserConfig } from "../browser/config.js";
-import type { BrowserDispatchRequest } from "../browser/routes/dispatcher.js";
 import type { BrowserServerState } from "../browser/server-context.js";
 import { firstBrowserDispatchRequest, stagedReportUpload } from "./invoke-browser.test-support.js";
 
@@ -23,48 +16,65 @@ const BROWSER_PROXY_MAX_TOTAL_FILE_BYTES = 16 * 1024 * 1024;
 const okResponse = { status: 200, body: { ok: true } };
 const okPayload = JSON.stringify({ result: { ok: true } });
 
-const upload = {
-  envelope: "browser-upload-v1",
-  files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
-};
 function uploadParams(timeoutMs?: number) {
   return {
     body: {},
-    upload,
+    upload: {
+      envelope: "browser-upload-v1",
+      files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
+    },
     timeoutMs,
   };
 }
 
-function uploadRequest(timeoutMs?: number, body = {}) {
-  return invoke(
-    "/hooks/file-chooser",
-    { ...uploadParams(timeoutMs), body },
-    "browser.proxy.upload.v1",
-  );
+function uploadRequest(timeoutMs?: number) {
+  return invoke("/hooks/file-chooser", uploadParams(timeoutMs), "browser.proxy.upload.v1");
 }
 
 const control = vi.hoisted(() => ({
+  hasBrowserControlWork: vi.fn(() => false),
+  createBrowserControlContext: vi.fn(() => ({ control: true })),
+  getBrowserControlState: vi.fn<() => BrowserServerState | null>(() => null),
   startBrowserControlServiceFromConfig: vi.fn<() => Promise<BrowserServerState | null>>(),
 }));
 
 const cdp = vi.hoisted(() => ({
-  closeTrackedCdpTarget: vi.fn<typeof closeTrackedCdpTarget>(async () => ({ status: "closed" })),
+  closeTrackedCdpTarget: vi.fn(async () => ({ status: "closed" as const })),
   redactCdpUrl: vi.fn<(url: string) => string>(),
 }));
 
 const routes = vi.hoisted(() => ({
-  dispatch:
-    vi.fn<(request: BrowserDispatchRequest) => Promise<{ status: number; body: unknown }>>(),
+  dispatch: vi.fn(),
+  createBrowserRouteDispatcher: vi.fn(() => ({ dispatch: routes.dispatch })),
 }));
 
 const config = vi.hoisted(() => ({
-  current: {} as OpenClawConfig,
-  loadConfig: (): OpenClawConfig => config.current,
+  loadConfig: vi.fn(() => ({
+    browser: {},
+    nodeHost: { browserProxy: { enabled: true, allowProfiles: [] as string[] } },
+  })),
+}));
+
+const browserConfig = vi.hoisted(() => ({
+  resolveBrowserConfig: vi.fn(() => ({
+    enabled: true,
+    defaultProfile: "openclaw",
+    profiles: {
+      openclaw: { name: "openclaw", driver: "openclaw" as const, cdpUrl: "http://127.0.0.1:9222" },
+      user: { name: "user", driver: "existing-session" as const, cdpUrl: "http://127.0.0.1:9333" },
+    },
+    remoteCdpTimeoutMs: 20_000,
+    ssrfPolicy: undefined,
+  })),
+  resolveProfile: vi.fn(
+    (resolved: { profiles?: Record<string, unknown> }, name: string) =>
+      resolved.profiles?.[name] ?? null,
+  ),
 }));
 
 const uploads = vi.hoisted(() => ({
   hasBrowserProxyUploadWork: vi.fn(() => false),
-  stageBrowserProxyUploadRequest: vi.fn<typeof stageBrowserProxyUploadRequest>(),
+  stageBrowserProxyUploadRequest: vi.fn(),
   discardStagedBrowserProxyUpload: vi.fn(async () => {}),
   ensureBrowserProxyUploadCleanup: vi.fn(async () => {}),
 }));
@@ -82,10 +92,19 @@ vi.mock("openclaw/plugin-sdk/media-mime", async (importOriginal) => ({
 }));
 
 // mock-isolation: keep native tab closure and CDP I/O inside the owned fixture.
-vi.mock("../browser/cdp.helpers.js", () => cdp);
+vi.mock("../browser/cdp.helpers.js", () => ({
+  closeTrackedCdpTarget: cdp.closeTrackedCdpTarget,
+  redactCdpUrl: cdp.redactCdpUrl,
+}));
 
 vi.mock("../browser/cdp-reachability-policy.js", () => ({
   resolveCdpControlPolicy: vi.fn(() => undefined),
+}));
+
+// mock-isolation: use fixture profiles without reading operator browser configuration.
+vi.mock("../browser/config.js", () => ({
+  resolveBrowserConfig: browserConfig.resolveBrowserConfig,
+  resolveProfile: browserConfig.resolveProfile,
 }));
 
 // mock-isolation: stage synthetic uploads without touching the host upload store.
@@ -93,19 +112,19 @@ vi.mock("../browser-proxy-upload.js", () => uploads);
 
 // mock-isolation: capture proxy dispatch without starting browser routes.
 vi.mock("../browser/routes/dispatcher.js", () => ({
-  createBrowserRouteDispatcher: () => ({ dispatch: routes.dispatch }),
+  createBrowserRouteDispatcher: routes.createBrowserRouteDispatcher,
 }));
 
 // mock-isolation: exercise startup ownership without launching the browser service.
 vi.mock("../control-service.js", () => ({
-  createBrowserControlContext: () => ({ control: true }),
-  getBrowserControlState: () => null,
+  createBrowserControlContext: control.createBrowserControlContext,
+  getBrowserControlState: control.getBrowserControlState,
   startBrowserControlServiceFromConfig: control.startBrowserControlServiceFromConfig,
 }));
 
 // mock-isolation: keep pending browser work controlled by this startup fixture.
 vi.mock("../browser-control-state.js", () => ({
-  hasBrowserControlWork: () => false,
+  hasBrowserControlWork: control.hasBrowserControlWork,
 }));
 
 let runBrowserProxyCommand: typeof import("./invoke-browser.js").runBrowserProxyCommand;
@@ -116,10 +135,16 @@ function invoke(path: string, params: Record<string, unknown> = {}, command?: st
 }
 
 function allowProfiles(...profiles: string[]) {
-  config.current = {
-    ...config.current,
+  config.loadConfig.mockReturnValue({
+    browser: {},
     nodeHost: { browserProxy: { enabled: true, allowProfiles: profiles } },
-  };
+  });
+}
+
+function timeoutStatus(body: Record<string, unknown>) {
+  routes.dispatch
+    .mockImplementationOnce(() => new Promise(() => {}))
+    .mockResolvedValueOnce({ status: 200, body });
 }
 
 function dispatchResult(body: unknown, status = 200) {
@@ -132,8 +157,7 @@ async function expectSnapshotTimeout(
   message: RegExp,
 ) {
   vi.useFakeTimers();
-  routes.dispatch.mockImplementationOnce(() => new Promise(() => {}));
-  dispatchResult(status);
+  timeoutStatus(status);
   const result = expect(
     invoke("/snapshot", { method: "GET", profile, timeoutMs: 5 }),
   ).rejects.toThrow(message);
@@ -143,15 +167,8 @@ async function expectSnapshotTimeout(
 
 describe("runBrowserProxyCommand", () => {
   beforeEach(async () => {
-    config.current = {
-      browser: {
-        defaultProfile: "openclaw",
-        profiles: {
-          openclaw: { cdpUrl: "http://127.0.0.1:9222" },
-          user: { driver: "existing-session", cdpUrl: "http://127.0.0.1:9333" },
-        },
-      },
-    };
+    const { resolveBrowserConfig } =
+      await vi.importActual<typeof import("../browser/config.js")>("../browser/config.js");
     browserState = {
       server: null,
       port: 18_791,
@@ -215,10 +232,29 @@ describe("runBrowserProxyCommand", () => {
   });
 
   it("stages upload envelopes before dispatch and retains successful copies", async () => {
-    const staged = { ...stagedReportUpload, body: { ...stagedReportUpload.body, ref: "e12" } };
+    const upload = {
+      envelope: "browser-upload-v1",
+      files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
+    };
+    const staged = {
+      body: { ref: "e12", paths: ["/tmp/openclaw/uploads/.proxy-upload-1/0/report.txt"] },
+      directory: "/tmp/openclaw/uploads/.proxy-upload-1",
+    };
     uploads.stageBrowserProxyUploadRequest.mockResolvedValueOnce(staged);
-    routes.dispatch.mockResolvedValueOnce(okResponse);
-    await expect(uploadRequest(undefined, { ref: "e12" })).resolves.toBe(okPayload);
+    routes.dispatch.mockResolvedValueOnce({ status: 200, body: { ok: true } });
+
+    await expect(
+      runBrowserProxyCommand(
+        JSON.stringify({
+          method: "POST",
+          path: "/hooks/file-chooser",
+          body: { ref: "e12" },
+          upload,
+        }),
+        "browser.proxy.upload.v1",
+      ),
+    ).resolves.toBe(JSON.stringify({ result: { ok: true } }));
+
     expect(uploads.stageBrowserProxyUploadRequest).toHaveBeenCalledWith({
       method: "POST",
       path: "/hooks/file-chooser",
@@ -231,24 +267,30 @@ describe("runBrowserProxyCommand", () => {
   });
 
   it("discards staged copies when the route rejects the upload", async () => {
-    uploads.stageBrowserProxyUploadRequest.mockResolvedValueOnce(stagedReportUpload);
+    const staged = stagedReportUpload;
+    uploads.stageBrowserProxyUploadRequest.mockResolvedValueOnce(staged);
     dispatchResult({ error: "upload rejected" }, 400);
+
     await expect(uploadRequest()).rejects.toThrow("400: upload rejected");
-    expect(uploads.discardStagedBrowserProxyUpload).toHaveBeenCalledWith(stagedReportUpload);
+
+    expect(uploads.discardStagedBrowserProxyUpload).toHaveBeenCalledWith(staged);
   });
 
   it("retains staged copies when dispatch fails after Browser ownership is uncertain", async () => {
-    uploads.stageBrowserProxyUploadRequest.mockResolvedValueOnce(stagedReportUpload);
+    const staged = stagedReportUpload;
+    uploads.stageBrowserProxyUploadRequest.mockResolvedValueOnce(staged);
     routes.dispatch.mockRejectedValueOnce(new Error("dispatch failed"));
+
     await expect(uploadRequest()).rejects.toThrow("dispatch failed");
+
     expect(uploads.discardStagedBrowserProxyUpload).not.toHaveBeenCalled();
   });
 
   it("retains staged copies when the timeout wins before dispatch settles", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(0);
-    uploads.stageBrowserProxyUploadRequest.mockResolvedValueOnce(stagedReportUpload);
-    routes.dispatch.mockImplementationOnce(() => new Promise(() => {}));
-    dispatchResult({ running: true, cdpReady: true, cdpHttp: true });
+    const staged = stagedReportUpload;
+    uploads.stageBrowserProxyUploadRequest.mockResolvedValueOnce(staged);
+    timeoutStatus({ running: true, cdpReady: true, cdpHttp: true });
 
     await expect(uploadRequest(5))
       .rejects.toThrow("browser proxy timed out")
@@ -274,11 +316,12 @@ describe("runBrowserProxyCommand", () => {
   });
 
   it("does not dispatch after upload staging exhausts the proxy deadline", async () => {
+    const staged = stagedReportUpload;
     let nowMs = 1_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     uploads.stageBrowserProxyUploadRequest.mockImplementationOnce(async () => {
       nowMs += 10;
-      return stagedReportUpload;
+      return staged;
     });
 
     try {
@@ -288,7 +331,7 @@ describe("runBrowserProxyCommand", () => {
     }
 
     expect(routes.dispatch).not.toHaveBeenCalled();
-    expect(uploads.discardStagedBrowserProxyUpload).toHaveBeenCalledWith(stagedReportUpload);
+    expect(uploads.discardStagedBrowserProxyUpload).toHaveBeenCalledWith(staged);
   });
 
   it("aborts upload staging when it reaches the proxy deadline", async () => {
@@ -407,7 +450,12 @@ describe("runBrowserProxyCommand", () => {
     cdp.redactCdpUrl.mockReturnValue("https://example.com/chrome?token=supers…7890");
     await expectSnapshotTimeout(
       "remote",
-      { running: true, cdpHttp: true, cdpReady: false, cdpUrl },
+      {
+        running: true,
+        cdpHttp: true,
+        cdpReady: false,
+        cdpUrl,
+      },
       /browser proxy timed out for GET \/snapshot after 5ms; ws-backed browser action; profile=remote; status\(running=true, cdpHttp=true, cdpReady=false, cdpUrl=https:\/\/example\.com\/chrome\?token=supers…7890\)/,
     );
     expect(cdp.redactCdpUrl).toHaveBeenCalledWith(cdpUrl);
@@ -488,114 +536,5 @@ describe("runBrowserProxyCommand", () => {
       }),
     ).rejects.toThrow("INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles");
     expect(routes.dispatch).not.toHaveBeenCalled();
-  });
-
-  describe("admission", () => {
-    const ownership = {
-      status: "durable",
-      nativeTargetId: "synthetic-target",
-      profileFingerprint: "sha256:profile",
-      browserInstanceFingerprint: "sha256:browser",
-    };
-    const disable = () => {
-      config.current.nodeHost = { browserProxy: { enabled: false } };
-    };
-    beforeEach(() => routes.dispatch.mockResolvedValue(okResponse));
-
-    it("checks current policy inside the admitted route before its write", async () => {
-      const write = vi.fn();
-      routes.dispatch.mockImplementationOnce(async (request) => {
-        disable();
-        await request.assertCurrent?.();
-        write();
-        return okResponse;
-      });
-      await expect(invoke("/stop")).rejects.toThrow("node browser proxy disabled");
-      expect(write).not.toHaveBeenCalled();
-    });
-
-    it("rechecks policy after native ownership discovery before closing a target", async () => {
-      const fixture = createCdpFixture({});
-      try {
-        const { cdpUrl, messages } = await fixture.start((message) => {
-          if (message.method === "Target.getTargets") {
-            disable();
-          }
-          return {
-            result:
-              message.method === "Target.getTargets"
-                ? { targetInfos: [{ targetId: ownership.nativeTargetId }] }
-                : { success: true },
-          };
-        });
-        config.current.browser = { profiles: { openclaw: { cdpUrl, attachOnly: true } } };
-        const native = await vi.importActual<typeof import("../browser/cdp.helpers.js")>(
-          "../browser/cdp.helpers.js",
-        );
-        const nativeOwnership = await native.resolveCdpTabOwnership({
-          profileName: "openclaw",
-          cdpUrl,
-          nativeTargetId: ownership.nativeTargetId,
-        });
-        expect(nativeOwnership.status).toBe("durable");
-        cdp.closeTrackedCdpTarget.mockImplementationOnce(native.closeTrackedCdpTarget);
-        await invoke(BROWSER_PROXY_OWNED_TAB_CLOSE_PATH, { body: { ownership: nativeOwnership } });
-        expect(messages.map(({ method }) => method)).not.toContain("Target.closeTarget");
-      } finally {
-        await fixture.close();
-      }
-    });
-
-    it("keeps the admitted default profile while staging awaits", async () => {
-      uploads.stageBrowserProxyUploadRequest.mockImplementationOnce(async ({ body }) => {
-        config.current.browser = { defaultProfile: "user" };
-        return { body };
-      });
-      await invoke("/stop");
-      expect(routes.dispatch).toHaveBeenCalledWith(
-        expect.objectContaining({ query: { profile: "openclaw" } }),
-      );
-    });
-
-    it.each([
-      { method: "PUT", path: "/system-profiles", error: /method must be GET, POST, or DELETE/ },
-      { method: "DELETE", path: BROWSER_PROXY_OWNED_TAB_CLOSE_PATH, error: /requires POST/ },
-    ])("rejects $method on $path before dispatch", async ({ method, path, error }) => {
-      await expect(invoke(path, { method, body: { ownership } })).rejects.toThrow(error);
-      expect(cdp.closeTrackedCdpTarget).not.toHaveBeenCalled();
-      expect(routes.dispatch).not.toHaveBeenCalled();
-    });
-
-    it.each([
-      { phase: "startup", policy: { enabled: false }, error: "node browser proxy disabled" },
-      {
-        phase: "staging",
-        policy: { enabled: true, allowProfiles: ["user"] },
-        error: "browser profile not allowed",
-      },
-    ])("rechecks admission after awaited $phase", async ({ phase, policy, error }) => {
-      const entered = createDeferred<void>();
-      const released = createDeferred<void>();
-      async function pause<T>(value: T) {
-        entered.resolve();
-        await released.promise;
-        return value;
-      }
-      if (phase === "startup") {
-        control.startBrowserControlServiceFromConfig.mockImplementationOnce(() =>
-          pause(browserState),
-        );
-      } else {
-        uploads.stageBrowserProxyUploadRequest.mockImplementationOnce(({ body }) =>
-          pause({ body }),
-        );
-      }
-      const rejected = expect(invoke("/stop", { profile: "openclaw" })).rejects.toThrow(error);
-      await entered.promise;
-      config.current.nodeHost = { browserProxy: policy };
-      released.resolve();
-      await rejected;
-      expect(routes.dispatch).not.toHaveBeenCalled();
-    });
   });
 });

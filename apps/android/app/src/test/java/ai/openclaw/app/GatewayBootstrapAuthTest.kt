@@ -534,7 +534,6 @@ class GatewayBootstrapAuthTest {
       neutralizeColdStartAutoConnect(runtime)
       prefs.setManualTls(false)
       val endpoint = gatewayEndpoint()
-      prefs.saveGatewayTlsFingerprint(endpoint.stableId, "ab".repeat(32))
       installControlPageGateway(authMethod = "device-token")
       assertTrue(runtime.connectSwitchingGateway(endpoint, auth(token = "setup-shared-secret")))
       val page =
@@ -543,8 +542,6 @@ class GatewayBootstrapAuthTest {
             page?.connectAuth?.let { runCatching { it("browser-challenge", 1700000000123) }.isSuccess } == true
           }
         }!!
-      // Manual local cleartext ignores a saved pin; the page must reflect the admitted transport.
-      assertNull(page.tlsFingerprintSha256)
       val identityStore = DeviceIdentityStore.withPrefs(app, prefs)
       val identity = identityStore.loadOrCreate()
       val tokens = DeviceAuthStore(prefs)

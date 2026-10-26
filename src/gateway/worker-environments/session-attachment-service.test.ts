@@ -4,7 +4,6 @@ import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import { awaitGateBeforeSettlement as awaitBlocked } from "../../../test/helpers/promise.js";
 import { createEnteredGate as barrier } from "../../agents/entered-gate.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import {
@@ -56,6 +55,13 @@ const outcome = <T>(operation: Promise<T>) =>
     (value) => ({ value }),
     (error: unknown) => ({ error }),
   );
+const awaitBlocked = (entered: Promise<void>, operation: Promise<unknown>, message: string) =>
+  Promise.race([
+    entered,
+    operation.then((cause) => {
+      throw new Error(message, { cause });
+    }),
+  ]);
 const runAsCaller = <T>(
   run: () => Promise<T> | T,
   overrides: Partial<NonNullable<Parameters<typeof withGatewayToolCallerIdentity>[0]>> = {},
@@ -113,6 +119,7 @@ function expectReply(
   payload: Record<string, unknown>,
   ok = true,
 ) {
+  expect(respond.mock.calls[0]).toHaveLength(ok ? 2 : 3);
   expect(respond.mock.calls[0]).toMatchObject(ok ? [true, payload] : [false, undefined, payload]);
 }
 
@@ -223,14 +230,19 @@ it.each([
 
 it("cancels its exact fresh reservation if screen policy narrows before presentation", async () => {
   const reserve = state.store.createSessionAttachmentIntent.bind(state.store);
-  using reserveSpy = vi.spyOn(state.store, "createSessionAttachmentIntent");
-  reserveSpy.mockImplementation(async (...args) => {
-    const reserved = await reserve(...args);
-    state.config.tools = { deny: ["screen"] };
-    return reserved;
-  });
+  const reserveSpy = vi
+    .spyOn(state.store, "createSessionAttachmentIntent")
+    .mockImplementation(async (...args) => {
+      const reserved = await reserve(...args);
+      state.config.tools = { deny: ["screen"] };
+      return reserved;
+    });
   const { respond, context, invoke } = createRpc({ presentation: "portal" });
-  await runAsCaller(invoke, { assertToolAllowed: () => {} });
+  try {
+    await runAsCaller(invoke, { assertToolAllowed: () => {} });
+  } finally {
+    reserveSpy.mockRestore();
+  }
   expectReply(respond, { message: "Conversation policy denies screen" }, false);
   const result = service.getSessionAttachmentStatus(identity.sessionId)!;
   expect(result.attachment.closedAtMs).not.toBeNull();
@@ -244,6 +256,7 @@ it("reuses concurrent and changed-key retries without moving the conversation or
     create({ os: "linux", machineClass: "tiny" }),
     create({ idempotencyKey: "retried-tool-call" }),
   ]);
+  expect(provision).toHaveBeenCalledOnce();
   expect(retry.attachment).toEqual(first.attachment);
   expect(retry.reused).toBe(true);
   const snapshot = state.store.get(first.attachment.environmentId)?.profileSnapshot;
@@ -266,13 +279,15 @@ it("cancels creations registered while Stop is awaiting the inventory", async ()
   const closingGate = barrier();
   const creationGate = barrier();
   const ready = state.store.ready.bind(state.store);
-  const readySpy = vi.spyOn(state.store, "ready");
-  for (const gate of [closingGate, creationGate]) {
-    readySpy.mockImplementationOnce(async () => {
+  vi.spyOn(state.store, "ready")
+    .mockImplementationOnce(async () => {
       await ready();
-      await gate.wait();
+      await closingGate.wait();
+    })
+    .mockImplementationOnce(async () => {
+      await ready();
+      await creationGate.wait();
     });
-  }
   const closing = outcome(stop());
   let creation: Promise<unknown> | undefined;
   try {
@@ -378,15 +393,18 @@ it.each([
 it("presents the actual reserved machine before allocation and keeps recovery behind required presentation", async () => {
   const reserved = createDeferredCore<string>();
   const presented = createDeferredCore();
-  const creation = create({}, async ({ environmentId, reused }) => {
-    expect(reused).toBe(false);
-    expect(service.get(environmentId)?.state).toBe("requested");
-    expect(service.getSessionAttachmentStatus(identity.sessionId)?.attachment.environmentId).toBe(
-      environmentId,
-    );
-    reserved.resolve(environmentId);
-    await presented.promise;
-  });
+  const onReserved = vi.fn(
+    async ({ environmentId, reused }: { environmentId: string; reused: boolean }) => {
+      expect(reused).toBe(false);
+      expect(service.get(environmentId)?.state).toBe("requested");
+      expect(service.getSessionAttachmentStatus(identity.sessionId)?.attachment.environmentId).toBe(
+        environmentId,
+      );
+      reserved.resolve(environmentId);
+      await presented.promise;
+    },
+  );
+  const creation = create({}, onReserved);
   const environmentId = await reserved.promise;
   const recovery = service.reconcileOnce(environmentId);
   await Promise.resolve();
@@ -394,6 +412,7 @@ it("presents the actual reserved machine before allocation and keeps recovery be
   presented.resolve();
   const [{ attachment }] = await Promise.all([creation, recovery]);
   expect(attachment.environmentId).toBe(environmentId);
+  expect(provision).toHaveBeenCalledOnce();
   const showExisting = vi.fn(async () => {});
   await create({ idempotencyKey: "show-again" }, showExisting);
   expect(showExisting).toHaveBeenCalledWith({ environmentId, reused: true });

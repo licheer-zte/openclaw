@@ -1,32 +1,36 @@
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createZalouserSendReceipt } from "./send-receipt.js";
+import { sendImageZalouser, sendMessageZalouser } from "./send.js";
 import { createZalouserTool } from "./tool.js";
-
-const { send, image, link, auth, me, friends, groups } = vi.hoisted(() => ({
-  send: vi.fn<typeof import("./send.js").sendMessageZalouser>(),
-  image: vi.fn<typeof import("./send.js").sendImageZalouser>(),
-  link: vi.fn<typeof import("./zalo-js.js").sendZaloLink>(),
-  auth: vi.fn<typeof import("./zalo-js.js").checkZaloAuthenticated>(),
-  me: vi.fn<typeof import("./zalo-js.js").getZaloUserInfo>(),
-  friends: vi.fn<typeof import("./zalo-js.js").listZaloFriendsMatching>(),
-  groups: vi.fn<typeof import("./zalo-js.js").listZaloGroupsMatching>(),
-}));
+import {
+  checkZaloAuthenticated,
+  getZaloUserInfo,
+  listZaloFriendsMatching,
+  listZaloGroupsMatching,
+  sendZaloLink,
+} from "./zalo-js.js";
 
 vi.mock("./send.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./send.js")>()),
-  sendMessageZalouser: send,
-  sendImageZalouser: image,
+  sendMessageZalouser: vi.fn(),
+  sendImageZalouser: vi.fn(),
 }));
-// mock-isolation: Keep account lookup, login, and message transport inside the test fixture.
 vi.mock("./zalo-js.js", () => ({
-  checkZaloAuthenticated: auth,
-  getZaloUserInfo: me,
-  listZaloFriendsMatching: friends,
-  listZaloGroupsMatching: groups,
-  sendZaloLink: link,
+  checkZaloAuthenticated: vi.fn(),
+  getZaloUserInfo: vi.fn(),
+  listZaloFriendsMatching: vi.fn(),
+  listZaloGroupsMatching: vi.fn(),
+  sendZaloLink: vi.fn(),
 }));
 
+const send = vi.mocked(sendMessageZalouser);
+const image = vi.mocked(sendImageZalouser);
+const link = vi.mocked(sendZaloLink);
+const auth = vi.mocked(checkZaloAuthenticated);
+const me = vi.mocked(getZaloUserInfo);
+const friends = vi.mocked(listZaloFriendsMatching);
+const groups = vi.mocked(listZaloGroupsMatching);
 const ambient = { deliveryContext: { channel: "zalouser", to: "zalouser:g-ambient" } };
 const textMessage = { action: "send", message: "hello" };
 const sent = (messageId: string) => ({
@@ -48,24 +52,15 @@ beforeEach(() => {
 });
 
 it.each([
-  ["send", send, {}, "g-ambient", true],
-  ["send", send, { threadId: "u-explicit", isGroup: false }, "u-explicit", false],
-  ["image", image, { threadId: "g-1", isGroup: true }, "g-1", true],
-  ["link", link, { threadId: "t-2" }, "t-2", undefined],
-] as const)("routes %s to its sender", async (action, mock, overrides, target, isGroup) => {
-  mock.mockResolvedValueOnce(sent("m-1"));
-  expect(
-    await execute(
-      { action, message: "hello", url: "https://example.com", ...overrides },
-      action === "send" ? ambient : undefined,
-    ),
-  ).toEqual({ success: true, messageId: "m-1" });
-  expect(mock).toHaveBeenCalledWith(target, action === "send" ? "hello" : "https://example.com", {
-    profile: undefined,
-    isGroup,
-    ...(action === "send" ? {} : { caption: "hello" }),
-    ...(action === "image" ? { mediaMaxBytes: undefined } : {}),
+  ["ambient", {}, "g-ambient", true],
+  ["explicit", { threadId: "u-explicit", isGroup: false }, "u-explicit", false],
+] as const)("sends to the %s target", async (_name, overrides, target, isGroup) => {
+  send.mockResolvedValueOnce(sent("m-1"));
+  expect(await execute({ ...textMessage, ...overrides }, ambient)).toEqual({
+    success: true,
+    messageId: "m-1",
   });
+  expect(send).toHaveBeenCalledWith(target, "hello", { profile: undefined, isGroup });
 });
 
 it("does not route send actions from foreign ambient thread defaults", async () => {
@@ -101,23 +96,41 @@ it("reports accepted receipts when a later send chunk fails", async () => {
 });
 
 it.each([
+  ["image", image, "g-1", "https://example.com/image.jpg", true],
+  ["link", link, "t-2", "https://openclaw.ai", undefined],
+] as const)("routes %s to its sender", async (action, mock, threadId, url, isGroup) => {
+  mock.mockResolvedValueOnce(sent("media-1"));
+  expect(await execute({ action, threadId, url, message: "caption", isGroup })).toEqual({
+    success: true,
+    messageId: "media-1",
+  });
+  expect(mock).toHaveBeenCalledWith(threadId, url, {
+    profile: undefined,
+    caption: "caption",
+    isGroup,
+    ...(action === "image" ? { mediaMaxBytes: undefined } : {}),
+  });
+});
+
+it.each([
   ["matching credential profile with different case", " WORK ", 2048],
   ["native default profile", undefined, 1024],
 ] as const)("uses the authoritative media account: %s", async (_name, profile, bytes) => {
   image.mockResolvedValueOnce(sent("cap"));
-  const zalouser = {
-    mediaMaxMb: 1 / 1024,
-    accounts: {
-      support: { profile: "work", mediaMaxMb: 2 / 1024 },
-      duplicate: { profile: "work", mediaMaxMb: 1 / 1048576 },
+  const runtimeConfig = {
+    channels: {
+      zalouser: {
+        mediaMaxMb: 1 / 1024,
+        accounts: {
+          support: { profile: "work", mediaMaxMb: 2 / 1024 },
+          duplicate: { profile: "work", mediaMaxMb: 1 / 1048576 },
+        },
+      },
     },
   };
   await execute(
     { action: "image", threadId: "123", url: "https://example.com/image.png", profile },
-    {
-      runtimeConfig: { channels: { zalouser } },
-      deliveryContext: { channel: "zalouser", accountId: "support" },
-    },
+    { runtimeConfig, deliveryContext: { channel: "zalouser", accountId: "support" } },
   );
   expect(image).toHaveBeenCalledWith(
     "123",
@@ -128,15 +141,26 @@ it.each([
 
 const friendRows = [{ userId: "1", displayName: "Alice" }];
 const groupRows = [{ groupId: "2", name: "Work" }];
-const userInfo = { userId: "7", displayName: "Me" };
-const authenticated = { authenticated: true, output: "authenticated" };
 it.each([
   ["friends", "ali", friends, friendRows, () => friends.mockResolvedValueOnce(friendRows)],
   ["groups", "wrk", groups, groupRows, () => groups.mockResolvedValueOnce(groupRows)],
-  ["me", undefined, me, userInfo, () => me.mockResolvedValueOnce(userInfo)],
-  ["status", undefined, auth, authenticated, () => auth.mockResolvedValueOnce(true)],
-] as const)("returns %s", async (action, query, mock, expected, setup) => {
+] as const)("returns matching %s", async (action, query, mock, expected, setup) => {
   setup();
   expect(await execute({ action, profile: "work", query })).toEqual(expected);
-  expect(mock).toHaveBeenCalledWith(...(query === undefined ? ["work"] : ["work", query]));
+  expect(mock).toHaveBeenCalledWith("work", query);
+});
+
+const userInfo = { userId: "7", displayName: "Me" };
+it.each([
+  ["me", me, userInfo, () => me.mockResolvedValueOnce(userInfo)],
+  [
+    "status",
+    auth,
+    { authenticated: true, output: "authenticated" },
+    () => auth.mockResolvedValueOnce(true),
+  ],
+] as const)("reports %s", async (action, mock, expected, setup) => {
+  setup();
+  expect(await execute({ action, profile: "work" })).toEqual(expected);
+  expect(mock).toHaveBeenCalledWith("work");
 });

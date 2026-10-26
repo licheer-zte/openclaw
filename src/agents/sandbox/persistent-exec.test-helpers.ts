@@ -1,3 +1,4 @@
+import { expect } from "vitest";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
 import { upsertCronJobRow } from "../../cron/store/row-codec.js";
 import { makeCronStreamSandboxTarget } from "../../cron/stream-sandbox.test-support.js";
@@ -52,6 +53,7 @@ export const receipt: DockerPersistentExecReceipt = {
 };
 
 export function retained(result: SandboxPersistentExecMutationResult): SandboxPersistentExecRecord {
+  expect(result.ok).toBe(true);
   if (!result.ok || !result.current) {
     throw new Error("Expected retained custody");
   }

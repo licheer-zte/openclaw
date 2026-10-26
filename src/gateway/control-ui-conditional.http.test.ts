@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { createServer, request, type IncomingMessage, type Server } from "node:http";
@@ -5,7 +6,6 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { brotliCompressSync, brotliDecompressSync, gunzipSync, gzipSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import * as httpFixtures from "../../test/helpers/gateway-integration-fixtures.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import type { ControlUiFileRead } from "./control-ui-file.js";
@@ -104,7 +104,13 @@ describe.each([
         res.end(error instanceof Error ? error.message : String(error));
       });
     });
-    baseUrl = `${await httpFixtures.listenLoopback(server)}${basePath}`;
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Expected a TCP listener for the static asset fixture");
+    }
+    baseUrl = `http://127.0.0.1:${address.port}${basePath}`;
     assetUrl = `${baseUrl}/assets/app-fixture.js`;
   });
 

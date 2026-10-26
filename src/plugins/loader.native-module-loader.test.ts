@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createCompiledSdkHost } from "./compiled-sdk-host.test-support.js";
-import { pluginFixtureConfig, writeFixtureJson } from "./loader-fixture-builders.test-support.js";
+import { writeFixtureJson } from "./loader-fixture-builders.test-support.js";
 import { publishedSdkBridgeEntrypoints } from "./loader-sdk-bridge-artifacts.test-support.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { resetPluginCache } from "./plugin-cache.js";
@@ -40,19 +40,21 @@ function writePreSplitSdkBridgeConsumerFixture() {
   };
   write(
     "dist/index.js",
-    `import assert from "node:assert/strict";
-import { createRequire } from "node:module";
-import dependency from "../dependency.cjs";
-${Object.entries(imports)
-  .map(([subpath, names]) => `import { ${names} } from "openclaw/plugin-sdk/${subpath}";`)
-  .join("\n")}
-export default { id: "sdk-bridge-consumer", register() {
-  assert.equal(dependency, createRequire(import.meta.url)("../dependency.cjs"));
-  assert.equal(dependency.answer, 42);
-  assert.equal(dependency.default.answer, 17);
-  const bridged = [${Object.values(imports).join(", ")}];
-  if (bridged.some((entry) => typeof entry !== "function")) throw new Error("missing bridge");
-} };`,
+    [
+      'import assert from "node:assert/strict";',
+      'import { createRequire } from "node:module";',
+      'import dependency from "../dependency.cjs";',
+      ...Object.entries(imports).map(
+        ([subpath, names]) => `import { ${names} } from "openclaw/plugin-sdk/${subpath}";`,
+      ),
+      'export default { id: "sdk-bridge-consumer", register() {',
+      '  assert.equal(dependency, createRequire(import.meta.url)("../dependency.cjs"));',
+      "  assert.equal(dependency.answer, 42);",
+      "  assert.equal(dependency.default.answer, 17);",
+      `  const bridged = [${Object.values(imports).join(", ")}];`,
+      '  if (bridged.some((entry) => typeof entry !== "function")) throw new Error("missing bridge");',
+      "} };",
+    ].join("\n"),
   );
   return pluginRoot;
 }
@@ -70,26 +72,34 @@ it("loads published pre-split SDK bridge imports (doctor repair, WhatsApp ack, S
     (prefix) => tempDirs.make(prefix),
     { mode: "link" },
   );
-  if (hostRoot) {
+  const hasCompiledSdk = hostRoot !== undefined;
+  if (hasCompiledSdk) {
     vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", hostRoot);
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(hostRoot, "extensions"));
+  } else {
+    // Standalone and watch-mode Vitest deliberately retain source declarations.
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", tempDirs.make("openclaw-plugin-loader-"));
   }
-  vi.stubEnv(
-    "OPENCLAW_BUNDLED_PLUGINS_DIR",
-    hostRoot ? path.join(hostRoot, "extensions") : tempDirs.make("openclaw-plugin-loader-"),
-  );
   const before = getPluginModuleLoaderStats();
 
   const registry = loadOpenClawPlugins({
     cache: false,
-    pluginSdkResolution: hostRoot ? "dist" : "auto",
+    pluginSdkResolution: hasCompiledSdk ? "dist" : "auto",
     onlyPluginIds: ["sdk-bridge-consumer"],
-    config: pluginFixtureConfig({ id: "sdk-bridge-consumer", file: pluginRoot }, { enabled: true }),
+    config: {
+      plugins: {
+        enabled: true,
+        load: { paths: [pluginRoot] },
+        allow: ["sdk-bridge-consumer"],
+        entries: { "sdk-bridge-consumer": { enabled: true } },
+      },
+    },
   });
 
   const entry = registry.plugins.find((plugin) => plugin.id === "sdk-bridge-consumer");
   expect(entry?.error ?? null).toBeNull();
   expect(entry?.status).toBe("loaded");
-  if (hostRoot) {
+  if (hasCompiledSdk) {
     const after = getPluginModuleLoaderStats();
     expect(after.sourceTransformForced).toBe(before.sourceTransformForced);
     expect(after.sourceTransformFallbacks).toBe(before.sourceTransformFallbacks);

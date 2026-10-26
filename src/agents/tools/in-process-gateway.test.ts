@@ -336,6 +336,11 @@ describe("trusted in-process Gateway session creation", () => {
 });
 
 describe("request-shaped in-process Gateway dispatch", () => {
+  beforeEach(() => {
+    mocks.dispatch.mockResolvedValue({ runId: "run-1" });
+    mocks.callGateway.mockResolvedValue({ runId: "run-1" });
+  });
+
   it("marks only an owner-bound plugin approval request for host admission", async () => {
     const identity = {
       ...runtimeIdentity,
@@ -389,20 +394,21 @@ describe("request-shaped in-process Gateway dispatch", () => {
   it.each([false, true])(
     "allows closed-caller abort cleanup only on the original Gateway (replaced=%s)",
     async (replaced) => {
-      const gateway = gatewayBinding();
+      const context = {} as GatewayRequestContext;
+      let currentGateway = context;
       let currentCaller = true;
       let cancelled = false;
       const controller = new AbortController();
       const params = { turnId: replaced ? "turn-1" : "owned-turn" };
       mocks.dispatch.mockImplementation(async (method, _params, options) => {
         if (method === "conversations.turn.cancel") {
-          expect(options.resolveGatewayContext()).toBe(gateway.admitted);
+          expect(options.resolveGatewayContext()).toBe(context);
           expect(readInProcessAgentRuntimeIdentity(options)).toBeUndefined();
           cancelled = true;
           return { ok: true };
         }
         if (replaced) {
-          gateway.replace();
+          currentGateway = {} as GatewayRequestContext;
         } else {
           currentCaller = false;
           controller.abort();
@@ -416,7 +422,7 @@ describe("request-shaped in-process Gateway dispatch", () => {
           ...(!replaced
             ? { receiptAuthority: () => currentCaller, approvalSignals: [controller.signal] }
             : {}),
-          gatewayContextResolver: gateway.resolve,
+          gatewayContextResolver: () => currentGateway,
         },
         () =>
           callRequest("conversations.turn", params, {

@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { SESSION_VIEWER_PRESENCE_MAX_KEYS } from "../../../packages/gateway-protocol/src/schema/sessions-viewer-presence.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -11,24 +11,26 @@ const sessionsListHandler = vi.hoisted(() =>
 
 vi.mock("./sessions-read.js", () => ({ sessionsListHandler }));
 
-import { callAgentHandler } from "./agents-mutate.test-support.js";
 import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
-const subscribeSessionEvents = vi.fn();
-beforeEach(() => vi.clearAllMocks());
-
-function request(
+async function request(
   method: "sessions.viewers.set" | "sessions.subscribe",
   params: Record<string, unknown>,
-  context: Partial<GatewayRequestContext> = { subscribeSessionEvents },
-  connId: string | null = "control-ui-1",
+  context: GatewayRequestContext,
+  connId?: string,
 ) {
+  const respond = vi.fn();
   const handler = expectDefined(sessionSubscriptionHandlers[method], method);
-  return callAgentHandler(handler, method, params, {
-    context: context as GatewayRequestContext,
-    client: connId === null ? null : ({ connId } as never),
-  });
+  await handler({
+    req: { type: "req", id: "req-viewers", method, params },
+    params,
+    respond,
+    context,
+    client: connId === undefined ? null : ({ connId } as never),
+    isWebchatConnect: () => false,
+  } satisfies GatewayRequestHandlerOptions);
+  return respond;
 }
 
 function expectError(respond: ReturnType<typeof vi.fn>, code: string) {
@@ -54,6 +56,18 @@ function createContext(cfg?: OpenClawConfig) {
   };
 }
 
+async function subscribe(params: Record<string, unknown>) {
+  const subscribeSessionEvents = vi.fn();
+  sessionsListHandler.mockClear();
+  const respond = await request(
+    "sessions.subscribe",
+    params,
+    { subscribeSessionEvents } as unknown as GatewayRequestContext,
+    "control-ui-1",
+  );
+  return { respond, subscribeSessionEvents };
+}
+
 describe("sessions.viewers.set", () => {
   it("canonicalizes and atomically replaces the connection set", async () => {
     const { declare, replace } = createContext();
@@ -62,7 +76,11 @@ describe("sessions.viewers.set", () => {
       " conn-viewer ",
     );
 
-    expect(replace.mock.calls[0]?.[0]).toBe("conn-viewer");
+    expect(replace).toHaveBeenCalledWith("conn-viewer", [
+      "agent:work:home",
+      "agent:work:other",
+      "agent:work:home",
+    ]);
     expectReply(respond, true, { sessionKeys: ["agent:work:home", "agent:work:other"] }, undefined);
   });
 
@@ -83,10 +101,8 @@ describe("sessions.viewers.set", () => {
   });
 
   it("requires a live connection and declaration owner", async () => {
-    expectError(
-      await request("sessions.viewers.set", { sessionKeys: [] }, {}, null),
-      "UNAVAILABLE",
-    );
+    const context = { getRuntimeConfig: () => ({}) } as unknown as GatewayRequestContext;
+    expectError(await request("sessions.viewers.set", { sessionKeys: [] }, context), "UNAVAILABLE");
   });
 
   it("scopes bare viewer identities by explicit owner and rejects ambiguity", async () => {
@@ -95,6 +111,7 @@ describe("sessions.viewers.set", () => {
     });
 
     const selected = await declare({ sessionKeys: ["global"], agentId: "work" });
+    expect(replace).toHaveBeenCalledWith("conn-viewer", ["agent:work:global"]);
     expectReply(selected, true, { sessionKeys: ["agent:work:global"] }, undefined);
 
     replace.mockClear();
@@ -106,7 +123,7 @@ describe("sessions.viewers.set", () => {
 
 describe("sessions.subscribe", () => {
   it("registers events before projecting an atomic bootstrap roster", async () => {
-    const respond = await request("sessions.subscribe", { limit: 1, ownerFirst: true });
+    const { respond, subscribeSessionEvents } = await subscribe({ limit: 1, ownerFirst: true });
 
     expect(subscribeSessionEvents).toHaveBeenCalledWith("control-ui-1");
     expect(subscribeSessionEvents.mock.invocationCallOrder[0]).toBeLessThan(
@@ -116,12 +133,20 @@ describe("sessions.subscribe", () => {
   });
 
   it("rejects invalid list params before registering events", async () => {
-    const respond = await request("sessions.subscribe", {
+    const { respond, subscribeSessionEvents } = await subscribe({
       activityPulseBoundaries: [1, 1],
     });
 
     expect(subscribeSessionEvents).not.toHaveBeenCalled();
     expect(sessionsListHandler).not.toHaveBeenCalled();
-    expectError(respond, "INVALID_REQUEST");
+    expectReply(
+      respond,
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("activityPulseBoundaries: must be strictly ascending"),
+      }),
+    );
   });
 });

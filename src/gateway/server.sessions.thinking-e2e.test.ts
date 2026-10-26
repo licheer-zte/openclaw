@@ -1,7 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, test } from "vitest";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import type { SessionsListResult } from "./session-utils.types.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -11,6 +10,18 @@ import {
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
+type ThinkingSession = {
+  key: string;
+  modelProvider?: string;
+  model?: string;
+  agentRuntime?: { id?: string };
+  thinkingLevel?: string;
+  thinkingOptions?: string[];
+};
+
+type SessionsListResult = {
+  sessions?: ThinkingSession[];
+};
 const reasoningModel = (provider: string, id: string, efforts: string[]) => ({
   provider,
   id,
@@ -87,8 +98,8 @@ test("active Codex sessions patch and list catalog-advertised Ultra", async () =
     modelProvider: "openai",
     model: "gpt-5.6-sol",
     thinkingLevel: "ultra",
-    thinkingOptions: expect.arrayContaining(["ultra"]),
   });
+  expect(listedSession?.thinkingOptions).toContain("ultra");
 });
 
 test("generic models retain stored Ultra as a native harness mode", async () => {
@@ -106,8 +117,6 @@ test("generic models retain stored Ultra as a native harness mode", async () => 
     }),
   );
 
-  expect(session).toMatchObject({
-    thinkingOptions: expect.arrayContaining(["ultra"]),
-    thinkingLevel: "ultra",
-  });
+  expect(session?.thinkingOptions).toContain("ultra");
+  expect(session?.thinkingLevel).toBe("ultra");
 });

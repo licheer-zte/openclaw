@@ -54,6 +54,10 @@ function logMediaMaterializationFailure(params: {
   });
 }
 
+export type WhatsAppEnrichedInboundMessage = NonNullable<
+  Awaited<ReturnType<typeof enrichWhatsAppInboundMessage>>
+>;
+
 export async function enrichWhatsAppInboundMessage(params: {
   msg: WAMessage;
   sock: WASocket;

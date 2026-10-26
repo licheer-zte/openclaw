@@ -1,16 +1,34 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import {
-  createDefaults,
-  createSettledExecution,
-  createTurn,
-} from "./followup-delivery.test-helpers.js";
+import type { FollowupExecutionResult } from "./followup-turn-execution.js";
+import { createQueueTestRun } from "./queue.test-helpers.js";
+import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
 
 const mocks = vi.hoisted(() => ({ refreshQueuedFollowupSession: vi.fn() }));
 
 // mock-isolation: Queue accounting uses a fixed context limit without the process-wide model cache.
 vi.mock("../../agents/context.js", () => ({
   resolveContextTokensForModel: () => 200_000,
+}));
+
+vi.mock("../../agents/fast-mode.js", () => ({
+  resolveFastModeState: () => ({ enabled: false }),
+}));
+
+vi.mock("../fallback-state.js", () => ({
+  resolveFallbackTransition: () => ({
+    stateChanged: true,
+    nextState: {
+      selectedModel: "anthropic/claude",
+      activeModel: "openai/gpt-4o",
+      reason: "rate limit",
+    },
+  }),
+}));
+
+vi.mock("./agent-runner-core.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-runner-core.js")>()),
+  resolveFallbackOriginModel: () => ({ provider: "anthropic", model: "claude" }),
 }));
 
 vi.mock("./queue.js", () => ({
@@ -28,33 +46,71 @@ function createParams(
   authProfileOverrideCompactionCount?: number,
 ): Parameters<typeof accountFollowupTurn>[0] {
   const entry: SessionEntry = {
-    sessionId: "session",
+    sessionId: "session-1",
     updatedAt: 1,
     authProfileOverride: "openai:work",
     authProfileOverrideCompactionCount,
   };
-  const turn = createTurn({
+  const sessionStore = { main: entry };
+  const turn = {
+    runId: "run-1",
+    queued: createQueueTestRun(
+      { prompt: "queued prompt", enqueuedAt: 1 },
+      {
+        sessionId: "session-1",
+        sessionKey: "main",
+        provider: "anthropic",
+        model: "claude",
+      },
+    ),
+    operation: {},
+    config: {},
     session: {
       kind: "session",
       key: "main",
-      current: () => entry,
-      publish: () => {},
+      current: () => sessionStore.main,
+      publish: (next: SessionEntry | undefined) =>
+        next && Object.assign(sessionStore, { main: next }),
     },
-  });
-  const execution = createSettledExecution();
-  execution.outcome.resolved = { provider: "openai", model: "gpt-4o" };
-  return {
-    turn,
-    defaults: createDefaults(async () => {}),
+    sessionStore,
+    sendPolicy: "allow",
+    preflightCompactionApplied: false,
+  } as unknown as AdmittedFollowupTurn;
+  const defaults = {
+    typing: {} as FollowupRunnerParams["typing"],
+    typingMode: "never",
+    defaultModel: "claude",
+    sessionKey: "main",
+  } satisfies FollowupRunnerParams;
+  const execution = {
+    commentaryPayloadsEnabled: false,
     execution: {
-      commentaryPayloadsEnabled: false,
-      execution,
-      runStartedAt: 1,
-      sessionCtx: {},
-      pendingToolTasks: new Set(),
-      progress: { drain: async () => {} },
+      runId: "run-1",
+      outcome: {
+        kind: "settled",
+        status: "ok",
+        result: { payloads: [], meta: { durationMs: 0 } },
+        resolved: { provider: "openai", model: "gpt-4o" },
+        fallback: {
+          exhausted: false,
+          attempts: [
+            {
+              provider: "anthropic",
+              model: "claude",
+              error: "rate limited",
+              reason: "rate_limit",
+            },
+          ],
+        },
+        autoCompactionCount: 0,
+      },
     },
-  };
+    runStartedAt: 1,
+    sessionCtx: {},
+    pendingToolTasks: new Set(),
+    progress: { drain: async () => {} },
+  } as FollowupExecutionResult;
+  return { turn, defaults, execution };
 }
 
 beforeEach(() => vi.clearAllMocks());

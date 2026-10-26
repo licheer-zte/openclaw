@@ -8,7 +8,6 @@ import {
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import * as schedule from "../schedule.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
@@ -70,23 +69,14 @@ function outcomeFixture(
   });
   const deferredNotifications: DeferredCronNotifications = [];
   const apply = (
-    result: Omit<Parameters<typeof applyJobResult>[2], "startedAt" | "endedAt" | "errorReason"> &
+    result: Omit<Parameters<typeof applyJobResult>[2], "startedAt" | "endedAt"> &
       Partial<Pick<Parameters<typeof applyJobResult>[2], "startedAt" | "endedAt">>,
     options: Partial<Parameters<typeof applyJobResult>[3]> = {},
   ) =>
     applyJobResult(
       state,
       job,
-      {
-        startedAt: runAt,
-        endedAt: runAt + 10,
-        ...result,
-        errorReason: resolveCronRunErrorReason(
-          result.error,
-          result.provider,
-          result.errorClassification,
-        ),
-      },
+      { startedAt: runAt, endedAt: runAt + 10, ...result },
       { deferredNotifications, ...options },
     );
   return { state, job, apply, deferredNotifications };

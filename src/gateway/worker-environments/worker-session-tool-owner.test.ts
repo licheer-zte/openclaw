@@ -1,5 +1,5 @@
 import "./worker-session-tool-executor.test-support.js";
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import * as sendTool from "../../agents/tools/sessions-send-tool.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -15,16 +15,15 @@ const realSendTool = await vi.importActual<typeof sendTool>(
   "../../agents/tools/sessions-send-tool.js",
 );
 
-it.each([false, true])(
-  "sends to the global parent and sibling (shared store=%s)",
-  async (shared) => {
-    const source = {
-      ...SOURCE,
-      agentId: shared ? "worker" : "ops",
-      sessionKey: `agent:${shared ? "worker" : "ops"}:dashboard:child`,
-    };
-    const mocks = workerSessionToolTestMocks();
+describe.each([false, true])("worker family ownership (shared store=%s)", (shared) => {
+  const source = {
+    ...SOURCE,
+    agentId: shared ? "worker" : "ops",
+    sessionKey: `agent:${shared ? "worker" : "ops"}:dashboard:child`,
+  };
+  const mocks = workerSessionToolTestMocks();
 
+  it("sends to the non-default global parent and sibling through the core tool", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const fixture = await createWorkerSessionToolTestFixture(mocks, { sourceSession: source });
       const lookupSpy = vi
@@ -48,26 +47,34 @@ it.each([false, true])(
         setRuntimeConfigSnapshot(cfg);
         const parent = { sessionKey: "global", sessionId: "ops-parent" };
         const sibling = { sessionKey: "agent:ops:dashboard:sibling", sessionId: "ops-sibling" };
-        const setSession = (agentId: string, target: typeof parent, child = false) =>
-          replaceSessionEntry(
-            { agentId, sessionKey: target.sessionKey, storePath: cfg.session?.store },
+        const { setEntry, send } = fixture;
+        setEntry(source.sessionKey, source.sessionId, parent);
+        for (const target of [source, sibling]) {
+          await replaceSessionEntry(
+            {
+              agentId: target === source ? source.agentId : "ops",
+              sessionKey: target.sessionKey,
+              storePath: cfg.session?.store,
+            },
             {
               sessionId: target.sessionId,
               updatedAt: 1,
-              ...(child
-                ? { parentSessionKey: parent.sessionKey, parentSessionId: parent.sessionId }
-                : {}),
+              parentSessionKey: "global",
+              parentSessionId: parent.sessionId,
             },
           );
-        const { setEntry, send } = fixture;
-        setEntry(source.sessionKey, source.sessionId, parent);
-        await setSession(source.agentId, source, true);
-        await setSession("ops", sibling, true);
-        await setSession("ops", parent);
-        if (!shared) {
-          await setSession("main", { sessionKey: "global", sessionId: "unrelated-main-parent" });
         }
-        const delivered: Array<[string, string]> = [];
+        await replaceSessionEntry(
+          { agentId: "ops", sessionKey: "global", storePath: cfg.session?.store },
+          { sessionId: parent.sessionId, updatedAt: 1 },
+        );
+        if (!shared) {
+          await replaceSessionEntry(
+            { agentId: "main", sessionKey: "global" },
+            { sessionId: "unrelated-main-parent", updatedAt: 1 },
+          );
+        }
+        const delivered: Array<{ agentId: string; sessionKey: string }> = [];
         mocks.gatewayRequest.mockImplementation(async (request) => {
           if (request.method === "sessions.resolve") {
             const target = await realLookup.resolveGatewaySessionStoreTargetInWorker({
@@ -79,7 +86,10 @@ it.each([false, true])(
           }
           if (request.method === "agent") {
             request.sessionMutationCommitGuard?.();
-            delivered.push([request.params.agentId, request.params.sessionKey]);
+            delivered.push({
+              agentId: request.params.agentId,
+              sessionKey: request.params.sessionKey,
+            });
             return { runId: request.params.idempotencyKey, status: "accepted" };
           }
           throw new Error(`Unexpected Gateway method: ${request.method}`);
@@ -91,8 +101,8 @@ it.each([false, true])(
           });
         }
         expect(delivered).toEqual([
-          ["ops", "global"],
-          ["ops", sibling.sessionKey],
+          { agentId: "ops", sessionKey: "global" },
+          { agentId: "ops", sessionKey: sibling.sessionKey },
         ]);
       } finally {
         lookupSpy.mockRestore();
@@ -100,5 +110,5 @@ it.each([false, true])(
         await fixture.dispose();
       }
     });
-  },
-);
+  });
+});

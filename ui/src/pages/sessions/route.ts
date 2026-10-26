@@ -30,12 +30,9 @@ export const page = defineSolidPage<"sessions", ApplicationContext, SessionsRout
     },
     loader: (context: ApplicationContext, { location, cause }): SessionsRouteData => {
       const options = routeOptions(location);
-      // Entering navigation fills the managed window while the view imports.
-      // Same-route search and filter changes stay with the mounted page.
-      if (
-        cause === "preload" ||
-        (cause === "navigation" && context.router.getState().matches[0]?.routeId !== "sessions")
-      ) {
+      // Intent fills the same managed window the page subscribes to. Ordinary
+      // navigation still leaves issuance to the page's current search/filter intent.
+      if (cause === "preload") {
         void context.sessions.refreshList(
           buildSessionsListQuery(
             context.agentSelection.state.scopeId,

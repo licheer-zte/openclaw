@@ -1,8 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import {
-  createSqliteWorkerOperationAdmission,
-  type SqliteWorkerAdmissionFactory,
-} from "../infra/sqlite-worker-operation-admission.js";
+import type { SqliteWorkerAdmissionFactory } from "../infra/sqlite-worker-operation-admission.js";
 import {
   getSqliteWorkerActorIdentity,
   runSqliteWorkerStoreOperation,
@@ -84,38 +81,15 @@ export function assertOpenClawStateWorkerSchemaContext(context: OpenClawStateWor
 /** Native opening retains its physical admission, not an individual command's authority. */
 export function captureOpenClawStateWorkerOpeningGuard(context: OpenClawStateWorkerContext) {
   const databaseAdmission = context.admission;
-  const identity = databaseAdmission.identity;
   let captured: (() => void) | undefined = AsyncLocalStorage.bind(() =>
     databaseAdmission.assertCurrent(),
   );
-  const assertCurrent = () => {
-    if (!captured) {
-      throw new Error("Shared-state worker opening admission is closed");
-    }
-    captured();
-  };
   return {
-    assertCurrent,
-    createAdmission: (): ReturnType<SqliteWorkerAdmissionFactory> => {
-      let granted = false;
-      return {
-        nativeLocations: [databaseAdmission.databasePath],
-        databaseIdentity: {
-          databasePath: databaseAdmission.databasePath,
-          key: identity.key,
-          birthtime: identity.birthtime,
-        },
-        admission: createSqliteWorkerOperationAdmission((request, grant) => {
-          if (granted || request.stage !== "open") {
-            throw new Error("Shared-state worker open admission requested out of order");
-          }
-          assertCurrent();
-          if (!grant()) {
-            throw new Error("Shared-state worker open admission expired");
-          }
-          granted = true;
-        }),
-      };
+    assertCurrent: () => {
+      if (!captured) {
+        throw new Error("Shared-state worker opening admission is closed");
+      }
+      captured();
     },
     async run<T>(open: () => Promise<T>): Promise<T> {
       try {

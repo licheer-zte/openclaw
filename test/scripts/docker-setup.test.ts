@@ -129,7 +129,6 @@ async function createDockerSetupSandbox() {
     "docker-e2e-logs.sh",
     "docker-e2e-container.sh",
     "docker-e2e-watchdog.mjs",
-    "direct-run.mjs",
     "docker-e2e-resource-diagnostics.sh",
     "host-timeout.sh",
   ]) {

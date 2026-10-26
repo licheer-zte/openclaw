@@ -25,7 +25,6 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import {
   captureTargetDatabaseSchemaContext,
   checkTargetDatabaseSchemasForContexts,
@@ -476,13 +475,16 @@ describe("planned migration managed profile isolation", () => {
             ? callerPath
             : path.join(path.dirname(callerPath), "service.json");
         if (servicePath !== callerPath) {
-          writeFixtureJsonSync(servicePath, {
-            gateway: {
-              mode: "local",
-              bind: scenario === "other legacy source" ? "localhost" : "lan",
-              ...(scenario === "other invalid source" ? { port: "invalid" } : {}),
-            },
-          });
+          fs.writeFileSync(
+            servicePath,
+            JSON.stringify({
+              gateway: {
+                mode: "local",
+                bind: scenario === "other legacy source" ? "localhost" : "lan",
+                ...(scenario === "other invalid source" ? { port: "invalid" } : {}),
+              },
+            }),
+          );
         }
         const before = fs.readFileSync(servicePath);
         const serviceEnv = { ...callerEnv, OPENCLAW_CONFIG_PATH: servicePath };

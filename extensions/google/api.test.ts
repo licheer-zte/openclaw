@@ -3,12 +3,12 @@ import {
   isGoogleVertexBaseUrl,
   isGoogleVertexHostname,
   normalizeGoogleApiBaseUrl,
-  normalizeGoogleGenerativeAiBaseUrl as normalizeBaseUrl,
+  normalizeGoogleGenerativeAiBaseUrl,
   normalizeGoogleProviderConfig,
-  resolveGoogleGenerativeAiHttpRequestConfig as requestConfig,
+  resolveGoogleGenerativeAiHttpRequestConfig,
   resolveGoogleGenerativeAiApiOrigin,
-  resolveGoogleGenerativeAiTransport as resolveTransport,
-  shouldNormalizeGoogleGenerativeAiProviderConfig as shouldNormalize,
+  resolveGoogleGenerativeAiTransport,
+  shouldNormalizeGoogleGenerativeAiProviderConfig,
 } from "./api.js";
 
 const origin = "https://generativelanguage.googleapis.com";
@@ -17,24 +17,27 @@ const vertexOpenAi =
 
 describe("google generative ai helpers", () => {
   it("normalizes only explicit Google Generative AI baseUrls", () => {
-    expect(normalizeBaseUrl(origin)).toBe(`${origin}/v1beta`);
+    expect(normalizeGoogleGenerativeAiBaseUrl(origin)).toBe(`${origin}/v1beta`);
     for (const url of [
       "https://proxy.example.com/google/v1beta",
       "https://aiplatform.googleapis.com",
       "proxy/generativelanguage.googleapis.com",
+      "generativelanguage.googleapis.com",
       "https://xgenerativelanguage.googleapis.com",
     ]) {
-      expect(normalizeBaseUrl(url)).toBe(url);
+      expect(normalizeGoogleGenerativeAiBaseUrl(url)).toBe(url);
     }
-    for (const url of ["   ", undefined]) {
-      expect(normalizeBaseUrl(url)).toBeUndefined();
+    for (const url of ["", "   ", undefined]) {
+      expect(normalizeGoogleGenerativeAiBaseUrl(url)).toBeUndefined();
     }
   });
 
-  it.each(["v1beta", "v1alpha"])("strips /openai only for native %s callers", (version) => {
-    const baseUrl = `${origin}/${version}`;
-    expect(normalizeGoogleApiBaseUrl(`${baseUrl}/openai/`)).toBe(`${baseUrl}/openai`);
-    expect(normalizeBaseUrl(`${baseUrl}/openai/`)).toBe(baseUrl);
+  it("keeps /openai on generic Google base URL normalization and strips it only for native Gemini callers", () => {
+    expect(normalizeGoogleApiBaseUrl(`${origin}/v1beta/openai`)).toBe(`${origin}/v1beta/openai`);
+    expect(normalizeGoogleGenerativeAiBaseUrl(`${origin}/v1beta/openai`)).toBe(`${origin}/v1beta`);
+    expect(normalizeGoogleGenerativeAiBaseUrl(`${origin}/v1alpha/openai/`)).toBe(
+      `${origin}/v1alpha`,
+    );
   });
 
   it("normalizes Google provider configs by provider key, provider api, or model api", () => {
@@ -48,18 +51,19 @@ describe("google generative ai helpers", () => {
       ["google-vertex", { baseUrl: "https://aiplatform.googleapis.com" }, false],
     ] as const;
     for (const [provider, config, expected] of cases) {
-      expect(shouldNormalize(provider, config)).toBe(expected);
+      expect(shouldNormalizeGoogleGenerativeAiProviderConfig(provider, config)).toBe(expected);
     }
   });
 
   it("detects native Google Vertex hosts by hostname only", () => {
-    for (const [host, expected] of [
-      ["aiplatform.googleapis.com", true],
-      ["us-central1-aiplatform.googleapis.com", true],
-      ["generativelanguage.googleapis.com", false],
-      ["evil-aiplatform.googleapis.com.attacker.com", false],
-    ] as const) {
-      expect(isGoogleVertexHostname(host)).toBe(expected);
+    for (const host of ["aiplatform.googleapis.com", "us-central1-aiplatform.googleapis.com"]) {
+      expect(isGoogleVertexHostname(host)).toBe(true);
+    }
+    for (const host of [
+      "generativelanguage.googleapis.com",
+      "evil-aiplatform.googleapis.com.attacker.com",
+    ]) {
+      expect(isGoogleVertexHostname(host)).toBe(false);
     }
     expect(isGoogleVertexBaseUrl(`${origin}/v1beta/proxy/aiplatform.googleapis.com`)).toBe(false);
   });
@@ -74,7 +78,7 @@ describe("google generative ai helpers", () => {
       ["google-vertex", "openai-completions", vertexOpenAi, "openai-completions", vertexOpenAi],
     ] as const;
     for (const [provider, api, baseUrl, expectedApi, expectedUrl] of cases) {
-      expect(resolveTransport({ provider, api, baseUrl })).toEqual({
+      expect(resolveGoogleGenerativeAiTransport({ provider, api, baseUrl })).toEqual({
         api: expectedApi,
         baseUrl: expectedUrl,
       });
@@ -107,15 +111,28 @@ describe("google generative ai helpers", () => {
     }
   });
 
-  it.each([
-    [JSON.stringify({ token: "oauth-token" }), { authorization: "Bearer oauth-token" }],
-    ["api-key-123", { "x-goog-api-key": "api-key-123" }],
-  ] as const)("builds shared HTTP auth for %s", (apiKey, auth) => {
-    const config = requestConfig({ apiKey, capability: "image", transport: "http" });
-    expect(config).toMatchObject({ baseUrl: `${origin}/v1beta`, allowPrivateNetwork: false });
-    expect(Object.fromEntries(new Headers(config.headers).entries())).toMatchObject({
-      ...auth,
+  it("builds shared Google Generative AI HTTP request config", () => {
+    const oauthConfig = resolveGoogleGenerativeAiHttpRequestConfig({
+      apiKey: JSON.stringify({ token: "oauth-token" }),
+      baseUrl: origin,
+      capability: "audio",
+      transport: "media-understanding",
+    });
+    expect(oauthConfig).toMatchObject({ baseUrl: `${origin}/v1beta`, allowPrivateNetwork: false });
+    expect(Object.fromEntries(new Headers(oauthConfig.headers).entries())).toMatchObject({
+      authorization: "Bearer oauth-token",
       "content-type": "application/json",
+      "x-goog-api-client": expect.stringMatching(/^openclaw\//u),
+    });
+    const apiKeyConfig = resolveGoogleGenerativeAiHttpRequestConfig({
+      apiKey: "api-key-123",
+      capability: "image",
+      transport: "http",
+    });
+    expect(apiKeyConfig).toMatchObject({ baseUrl: `${origin}/v1beta`, allowPrivateNetwork: false });
+    expect(Object.fromEntries(new Headers(apiKeyConfig.headers).entries())).toMatchObject({
+      "content-type": "application/json",
+      "x-goog-api-key": "api-key-123",
       "x-goog-api-client": expect.stringMatching(/^openclaw\//u),
     });
   });
@@ -134,12 +151,16 @@ describe("google generative ai helpers", () => {
       "https://proxy.example.com/v1beta",
       "http://generativelanguage.googleapis.com/v1beta",
     ]) {
-      expect(() => requestConfig({ ...request, baseUrl })).toThrow(
+      expect(() => resolveGoogleGenerativeAiHttpRequestConfig({ ...request, baseUrl })).toThrow(
         "Google Generative AI baseUrl must use https://generativelanguage.googleapis.com",
       );
     }
     expect(
-      requestConfig({ ...request, request: { allowPrivateNetwork: true } }).allowPrivateNetwork,
+      resolveGoogleGenerativeAiHttpRequestConfig({
+        ...request,
+        baseUrl: `${origin}/v1beta`,
+        request: { allowPrivateNetwork: true },
+      }).allowPrivateNetwork,
     ).toBe(true);
   });
 });

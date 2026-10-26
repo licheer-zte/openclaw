@@ -70,14 +70,7 @@ export function createContext(
       get: () => ({ agentId: "research", name: "Research" }),
       subscribe,
     },
-    sessions: {
-      state: { result: null, loading: false },
-      presentation: {
-        result: null,
-        agentId: null,
-        resultCached: false,
-      } satisfies ApplicationContext["sessions"]["presentation"],
-    },
+    sessions: { state: { result: null, loading: false } },
     runtimeConfig: options?.runtimeConfig ?? createRuntimeConfigStub(),
     chatSubmissions: { retain: vi.fn() },
     navigate: vi.fn(),

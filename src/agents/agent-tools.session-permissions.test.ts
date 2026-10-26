@@ -103,10 +103,7 @@ it("logs required-root containment without exposing policy advice in full mode",
     expect(result.details).toEqual({
       status: "error",
       tool: "apply_patch",
-      error:
-        `Path escapes sandbox root (${root}): ${outside}. Keep patch paths within the bound root. ` +
-        "For an authorized task in another repository, ask the parent to respawn the worker with " +
-        "sessions_spawn and cwd set to that repository. Changing exec workdir does not rebind file tools.",
+      error: `Path escapes sandbox root (${root}): ${outside}`,
     });
     await expectFile(outside);
   } finally {

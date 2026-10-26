@@ -22,10 +22,6 @@ const eligibleMac = {
 };
 const localUrl = "openclaw://widget/local";
 
-function execute(args: Record<string, unknown>, agentSessionKey?: string) {
-  return createCanvasTool({ agentSessionKey }).execute("tool-call", args);
-}
-
 function expectInvoke(params: Record<string, unknown>, opts: unknown = expect.any(Object)) {
   expect(mocks.callGatewayTool).toHaveBeenCalledWith(
     "node.invoke",
@@ -46,34 +42,34 @@ describe("Canvas presenter tool", () => {
     [{ action: "navigate", url: "/widget" }, "canvas.navigate", "/widget"],
     [{ action: "navigate", target: localUrl }, "canvas.navigate", localUrl],
   ] as const)("invokes %j with the default deadline", async (args, command, url) => {
-    const result = await execute(args);
+    const result = await createCanvasTool().execute("tool-call", args);
 
     expect(mocks.listNodes).toHaveBeenCalledWith({ timeoutMs: undefined });
     expectInvoke(
-      {
-        nodeId: "mac-1",
-        command,
-        params: url ? { url } : {},
-        timeoutMs: 30_000,
-        idempotencyKey: expect.any(String),
-      },
+      { nodeId: "mac-1", command, timeoutMs: 30_000, idempotencyKey: expect.any(String) },
       { timeoutMs: 40_000 },
     );
     expect(result.details).toEqual({ ok: true, node: "mac-1", ...(url ? { url } : {}) });
+    if (url) {
+      expectInvoke({ command, params: { url } });
+    }
   });
 
   it("preserves present placement and hosted target parameters", async () => {
     const url = "/__openclaw__/canvas/documents/cv_1/index.html";
     const placement = { x: "10.5", y: "-2", width: "640", height: "480" };
-    const result = await execute(
+    const result = await createCanvasTool({ agentSessionKey: "agent:main:panel" }).execute(
+      "tool-call",
       { action: "present", target: url, ...placement, timeoutMs: "1500" },
-      "agent:main:panel",
     );
 
     expectInvoke(
       {
         command: "canvas.present",
-        params: { url, placement: { x: 10.5, y: -2, width: 640, height: 480 } },
+        params: {
+          url,
+          placement: { x: 10.5, y: -2, width: 640, height: 480 },
+        },
         timeoutMs: 1500,
         sessionKey: "agent:main:panel",
       },
@@ -83,12 +79,21 @@ describe("Canvas presenter tool", () => {
   });
 
   it("forwards gateway and node selection options", async () => {
-    const gatewayOpts = { gatewayUrl: "ws://test", gatewayToken: "token", timeoutMs: 120_000 };
-    await execute({ action: "hide", node: "Studio", ...gatewayOpts });
+    await createCanvasTool().execute("tool-call", {
+      action: "hide",
+      gatewayUrl: "ws://gateway.test",
+      gatewayToken: "token",
+      node: "Studio",
+      timeoutMs: 120_000,
+    });
 
     expectInvoke(
       { command: "canvas.hide", timeoutMs: 120_000 },
-      { ...gatewayOpts, timeoutMs: 130_000 },
+      {
+        gatewayUrl: "ws://gateway.test",
+        gatewayToken: "token",
+        timeoutMs: 130_000,
+      },
     );
   });
 
@@ -98,7 +103,9 @@ describe("Canvas presenter tool", () => {
       eligibleMac,
     ]);
 
-    await expect(execute({ action: "present", node: "legacy-android" })).rejects.toThrow(
+    await expect(
+      createCanvasTool().execute("tool-call", { action: "present", node: "legacy-android" }),
+    ).rejects.toThrow(
       'node "legacy-android" is not an eligible Canvas panel (requires a connected macOS node advertising canvas.present; eligible node ids: mac-1)',
     );
     expect(mocks.callGatewayTool).not.toHaveBeenCalled();
@@ -109,7 +116,7 @@ describe("Canvas presenter tool", () => {
     [{ action: "navigate" }, "url required"],
     [{ action: "removed" }, "Unknown action: removed"],
   ] as const)("rejects %j before invoking a node", async (args, error) => {
-    await expect(execute(args)).rejects.toThrow(error);
+    await expect(createCanvasTool().execute("tool-call", args)).rejects.toThrow(error);
     expect(mocks.callGatewayTool).not.toHaveBeenCalled();
   });
 });

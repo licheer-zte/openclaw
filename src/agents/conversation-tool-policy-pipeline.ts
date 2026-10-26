@@ -22,7 +22,7 @@ function mergePolicyAllowlist<TPolicy extends ToolPolicyLike>(
  * diverge on profile `alsoAllow`, sender, sandbox, delegation, or runtime-cap semantics.
  */
 export function resolveConversationToolPolicies(params: {
-  capabilityProfile: Pick<ResolvedConversationCapabilityProfile, "policy">;
+  capabilityProfile: ResolvedConversationCapabilityProfile;
   additionalProfileAllow?: readonly string[];
   additionalPolicyAllow?: readonly string[];
   additionalInheritedAllow?: readonly string[];

@@ -5,11 +5,17 @@ import type {
 } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
-export type WorkshopSnapshot = Awaited<ReturnType<typeof loadWorkshopSnapshot>>;
+export type WorkshopSnapshot = {
+  list: SkillsWorkshopListResult;
+  changes: SkillWorkshopChange[];
+};
 
 const CHANGE_FEED_LIMIT = 50;
 
-export async function loadWorkshopSnapshot(client: GatewayBrowserClient, agentId: string) {
+export async function loadWorkshopSnapshot(
+  client: GatewayBrowserClient,
+  agentId: string,
+): Promise<WorkshopSnapshot> {
   const [list, { changes }] = await Promise.all([
     client.request<SkillsWorkshopListResult>("skills.workshop.list", { agentId }),
     client.request<SkillsWorkshopChangesResult>("skills.workshop.changes", {
@@ -20,15 +26,9 @@ export async function loadWorkshopSnapshot(client: GatewayBrowserClient, agentId
   return { list, changes };
 }
 
-/** `name` is the skill the mutation affects; a draft mutation also names the reviewed draft. */
 export type WorkshopMutation =
   | { method: "skills.workshop.archive"; name: string }
-  | { method: "skills.workshop.restore"; name: string; versionId?: string }
-  | {
-      method: "skills.workshop.applyDraft" | "skills.workshop.discardDraft";
-      name: string;
-      draftId: string;
-    };
+  | { method: "skills.workshop.restore"; name: string; versionId?: string };
 
 /**
  * Undo reverts to the version saved before the change. A creation, or a restore of an archived

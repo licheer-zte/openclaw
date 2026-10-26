@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../../auto-reply/types.js";
 import * as presentationPayload from "../../../interactive/payload.js";
 import type { MessagePresentation } from "../../../interactive/payload.js";
@@ -12,21 +12,24 @@ function createHandler(capabilities: ChannelPresentationCapabilities) {
   };
 }
 
-const tableBlock = {
-  type: "table" as const,
-  caption: "Session status",
-  headers: ["Item", "Value"],
-  rows: [["Model", "anthropic/claude-haiku-4-5"]],
+const tablePresentation: MessagePresentation = {
+  title: "Status",
+  blocks: [
+    {
+      type: "table",
+      caption: "Session status",
+      headers: ["Item", "Value"],
+      rows: [["Model", "anthropic/claude-haiku-4-5"]],
+    },
+  ],
 };
 const fallbackPayload = {
   text: "Model: anthropic/claude-haiku-4-5\nUptime: 42s\nReference UTC: 12:00",
-  presentation: { title: "Status", blocks: [tableBlock] },
+  presentation: tablePresentation,
   presentationTextMode: "fallback" as const,
 };
 
 describe("renderPresentationForDelivery", () => {
-  afterEach(() => vi.restoreAllMocks());
-
   it.each([
     ["one button", 1, 25, 5, 5, true],
     ["Discord-sized controls", 25, 25, 5, 5, true],
@@ -42,10 +45,12 @@ describe("renderPresentationForDelivery", () => {
         title: "Choose",
         blocks: [{ type: "buttons", buttons }],
       };
+      const payload = { text: "Body", presentation };
       const expectedHeading = { title: "Choose", tone: undefined };
       const expectedInput = structuredClone(presentation);
-      const normalizedButtons = buttons.map((button) => ({ ...button, style: undefined }));
-      const adaptedButtons = styles ? normalizedButtons : buttons;
+      const expectedButtons = structuredClone(buttons);
+      const normalizedButtons = expectedButtons.map((button) => ({ ...button, style: undefined }));
+      const adaptedButtons = styles ? normalizedButtons : expectedButtons;
       const blocks = Array.from({ length: Math.ceil(count / perRow) }, (_, index) => ({
         type: "buttons",
         buttons: adaptedButtons.slice(index * perRow, (index + 1) * perRow),
@@ -57,9 +62,14 @@ describe("renderPresentationForDelivery", () => {
         },
       });
       const resolveAction = vi.spyOn(presentationPayload, "resolveMessagePresentationButtonAction");
-      const rendered = await renderPresentationForDelivery(handler, { text: "Body", presentation });
-      expect(rendered).toStrictEqual({ text: "Body" });
-      expect(resolveAction).toHaveBeenCalledTimes(count);
+      try {
+        const rendered = await renderPresentationForDelivery(handler, payload);
+        expect(rendered).toStrictEqual({ text: "Body" });
+        expect(resolveAction).toHaveBeenCalledTimes(count);
+      } finally {
+        resolveAction.mockRestore();
+      }
+
       expect(presentation).toStrictEqual(expectedInput);
       expect(handler.renderPresentation.mock.calls).toStrictEqual([
         [
@@ -69,33 +79,50 @@ describe("renderPresentationForDelivery", () => {
       ]);
     },
   );
-  it.each([false, true])("preserves authored fallback (native context: %s)", async (context) => {
+  it.each([
+    ["a table", tablePresentation],
+    [
+      "a table with native context",
+      {
+        ...tablePresentation,
+        blocks: [...tablePresentation.blocks, { type: "context", text: "Uptime: 42s" }],
+      } satisfies MessagePresentation,
+    ],
+  ] as const)("preserves authored fallback for %s", async (_name, presentation) => {
     const handler = createHandler({ tables: false, context: true });
-    const presentation: MessagePresentation = { title: "Status", blocks: [tableBlock] };
-    if (context) {
-      presentation.blocks.push({ type: "context", text: "Uptime: 42s" });
-    }
     const rendered = await renderPresentationForDelivery(handler, {
       ...fallbackPayload,
       presentation,
     });
+
     expect(rendered).toStrictEqual({ text: fallbackPayload.text });
     expect(handler.renderPresentation).not.toHaveBeenCalled();
   });
 
-  it.each([true, false])("renders natively with table support: %s", async (tables) => {
-    const handler = createHandler({ tables, buttons: true });
+  it("renders natively when the channel keeps table blocks", async () => {
+    const handler = createHandler({ tables: true });
     handler.renderPresentation.mockImplementation(async (payload) => ({
       ...payload,
-      text: "native rendering",
+      text: "native table rendering",
     }));
-    const presentation: MessagePresentation = { title: "Status", blocks: [tableBlock] };
-    if (!tables) {
-      presentation.blocks.push({ type: "buttons", buttons: [{ label: "Retry", value: "retry" }] });
-    }
-    expect(
-      await renderPresentationForDelivery(handler, { ...fallbackPayload, presentation }),
-    ).toStrictEqual({ text: "native rendering" });
+    const rendered = await renderPresentationForDelivery(handler, fallbackPayload);
+
+    expect(handler.renderPresentation).toHaveBeenCalledTimes(1);
+    expect(rendered).toStrictEqual({ text: "native table rendering" });
+  });
+
+  it("still renders interactive presentations through the channel renderer", async () => {
+    const handler = createHandler({ buttons: true, tables: false });
+    await renderPresentationForDelivery(handler, {
+      ...fallbackPayload,
+      presentation: {
+        blocks: [
+          ...tablePresentation.blocks,
+          { type: "buttons", buttons: [{ label: "Retry", value: "retry" }] },
+        ],
+      },
+    });
+
     expect(handler.renderPresentation).toHaveBeenCalledTimes(1);
   });
 });

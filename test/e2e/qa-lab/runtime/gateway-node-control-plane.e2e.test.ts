@@ -100,8 +100,7 @@ describe("Gateway node control plane", () => {
         executablePath: process.execPath,
         argsPrefix: ["dist/entry.js"],
         cwd: process.cwd(),
-        // The local protocol fixture needs no packaged-install repair.
-        usePackagedPlugins: false,
+        usePackagedPlugins: true,
       },
       transportBaseUrl: "http://127.0.0.1",
       controlUiEnabled: false,

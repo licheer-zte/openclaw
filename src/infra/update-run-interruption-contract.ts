@@ -1,4 +1,3 @@
-import type { UpdateResultPayload } from "./update-result-payload.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 
 export type InterruptedUpdateSettlement = {
@@ -8,8 +7,4 @@ export type InterruptedUpdateSettlement = {
   cleanup?: "pending" | "unknown" | "confirmed";
 };
 
-export type InterruptedUpdateSettlementResult = {
-  accepted: boolean;
-  run?: UpdateRunRecord;
-  updateResult?: UpdateResultPayload;
-};
+export type InterruptedUpdateSettlementResult = { accepted: boolean; run?: UpdateRunRecord };

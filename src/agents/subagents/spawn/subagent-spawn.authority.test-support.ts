@@ -315,7 +315,6 @@ export function installSpawnAuthorityFixture() {
       getSessionEventSubscriberConnIds: () => new Set(),
       broadcastToConnIds: vi.fn(),
       recoveryRuntime: {
-        prepareFailedWorkerPlacement: async () => undefined,
         prepareRestartRecovery: () => undefined,
         waitForAgent: async () => await new Promise<never>(() => {}),
         dispatchAgent: unexpectedRecovery,

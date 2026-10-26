@@ -20,7 +20,6 @@ import {
   runQaGatewayCliCommand,
   type QaGatewayChildCommand,
 } from "./gateway-child-command.js";
-import { initializeQaGatewayChildState } from "./gateway-child-initializer.js";
 import type { QaGatewayChildLifecycle } from "./gateway-child-lifecycle.js";
 import { createQaGatewayChildLogCollector } from "./gateway-child-process.js";
 import { createQaGatewayCliError, redactQaGatewayDebugText } from "./gateway-log-redaction.js";
@@ -72,8 +71,6 @@ export type QaGatewayChildParams = {
   repoRoot: string;
   command?: QaGatewayChildCommand;
   useRepoCli?: boolean;
-  /** Fresh current-repository fixture; released-package upgrade tests keep repair. */
-  initializeCurrentRuntimeState?: boolean;
   providerBaseUrl?: string;
   mockSessionObserverUrl?: string;
   transport?: Pick<QaTransportAdapter, "requiredPluginIds" | "createGatewayConfig">;
@@ -565,17 +562,7 @@ export async function prepareQaGatewayChild(
       await closeQaRuntimeStores(tempRoot);
       lifetime.assertOpen();
 
-      if (params.initializeCurrentRuntimeState) {
-        const bootstrapEnv = createQaPackagedBootstrapEnv(env);
-        await runQaPackagedBootstrap("QA state initialization failed", () =>
-          initializeQaGatewayChildState({
-            repoRoot: params.repoRoot,
-            tempRoot,
-            env: bootstrapEnv,
-            lifetime,
-          }),
-        );
-      } else if (usesPackagedCandidate && gatewayCommand) {
+      if (usesPackagedCandidate && gatewayCommand) {
         const command = {
           lifetime,
           executablePath: gatewayCommand.executablePath,

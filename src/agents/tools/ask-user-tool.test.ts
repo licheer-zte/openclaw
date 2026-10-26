@@ -14,7 +14,6 @@ import {
   settleAskUserPromptDelivery,
   waitForAskUserPromptReady,
 } from "./ask-user-tool.js";
-import { createDeploymentQuestion } from "./ask-user-tool.test-support.js";
 
 type SentPrompt = Parameters<
   NonNullable<Parameters<typeof createAskUserTool>[0]["questionPrompt"]>["send"]
@@ -30,7 +29,17 @@ const TOOL_CALL_ID = "call";
 const IMAGE_REPLY = [{ type: "image" as const, data: "pixels", mimeType: "image/png" }];
 
 const validArgs = {
-  questions: [createDeploymentQuestion("Deployment target")],
+  questions: [
+    {
+      id: "deploy_target",
+      header: "Deployment target",
+      question: "Where should this deploy?",
+      options: [
+        { label: "Staging (Recommended)", description: "Safer default" },
+        { label: "Production" },
+      ],
+    },
+  ],
 };
 
 type RpcHandlers = Record<

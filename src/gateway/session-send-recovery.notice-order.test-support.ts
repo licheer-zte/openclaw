@@ -5,7 +5,13 @@ import { delivery, input, sourceSnapshot } from "./session-send-recovery.test-su
 
 /** Real notice storage and native keyed adoption under controlled recovery acknowledgments. */
 export async function verifyRecoveryNoticeTurnOrdering(
-  fixture: {
+  {
+    io,
+    sourceEntry,
+    resumeChat,
+    warn,
+    recover,
+  }: {
     io: { discover: Mock; pending: Mock; source: Mock; report: Mock };
     sourceEntry: { lifecycleRevision: string };
     resumeChat: Mock;
@@ -14,7 +20,6 @@ export async function verifyRecoveryNoticeTurnOrdering(
   },
   signal: AbortSignal,
 ) {
-  const { io, sourceEntry, resumeChat, warn, recover } = fixture;
   vi.useRealTimers();
   const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
   const { upsertSessionEntryCore } =
@@ -51,9 +56,12 @@ export async function verifyRecoveryNoticeTurnOrdering(
       Promise.resolve(sourceSnapshot(key === chat.message.idempotencyKey ? chat : input)),
     );
     sourceEntry.lifecycleRevision = "source-after-reset";
-    const [admitted, blocked] = [createDeferred(), createDeferred()];
-    const [resume, noticeWritten] = [createDeferred(), createDeferred()];
-    let execution: Promise<unknown> | undefined;
+    const admitted = createDeferred();
+    const blocked = createDeferred();
+    const resume = createDeferred();
+    const noticeWritten = createDeferred();
+    let execution: Promise<void> | undefined;
+    let nativeFailure: unknown;
     let reportStarted = false;
     warn.mockImplementation((message: string) => {
       if (message.startsWith("Session delivery recovery blocked after")) {
@@ -80,7 +88,9 @@ export async function verifyRecoveryNoticeTurnOrdering(
         await resume.promise;
         // The native runtime re-adopts the exact admitted user before its first provider request.
         await manager.appendMessageAsync(chat.message);
-      }).catch((error: unknown) => error);
+      }).catch((error: unknown) => {
+        nativeFailure = error;
+      });
       await withinTest(admitted.promise, signal);
     });
     const recovering = recover();
@@ -93,8 +103,9 @@ export async function verifyRecoveryNoticeTurnOrdering(
         await withinTest(noticeWritten.promise, signal);
       }
       resume.resolve();
-      expect(await withinTest(execution!, signal)).toBeUndefined();
+      await withinTest(execution!, signal);
       await withinTest(recovering, signal);
+      expect(nativeFailure).toBeUndefined();
       expect(
         await reports.readLatestSessionTranscriptReport(scope, ["session-send-recovery-blocked"]),
       ).toMatchObject({

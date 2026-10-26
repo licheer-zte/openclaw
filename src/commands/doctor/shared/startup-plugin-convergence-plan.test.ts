@@ -72,17 +72,4 @@ describe("startup plugin convergence planning", () => {
       }),
     ).toBe(true);
   });
-  it.each([
-    ["CLICKCLACK_BOT_TOKEN", "token"],
-    ["QQBOT_APP_ID", "app-id"],
-    ["MATTERMOST_BOT_TOKEN", "token"],
-  ])("detects potential channel repair from %s", (name, value) => {
-    expect(configMayRequireStartupPluginConvergence({ config: {}, env: { [name]: value } })).toBe(
-      true,
-    );
-  });
-
-  it("does not infer plugin work from empty config and environment", () => {
-    expect(configMayRequireStartupPluginConvergence({ config: {}, env: {} })).toBe(false);
-  });
 });

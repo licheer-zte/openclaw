@@ -7,7 +7,6 @@ import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
-  nextEventLoopTurn,
 } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
@@ -4124,7 +4123,9 @@ describe("gateway Gmail hot reload handlers", () => {
         if (phase === "watcher") {
           expect(restartSignal?.aborted).toBe(true);
         } else {
-          await nextEventLoopTurn();
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
           expectCalls(0, hoisted.stopGmailWatcher, hoisted.startGmailWatcherWithLogs);
         }
       } finally {

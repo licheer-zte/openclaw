@@ -1,7 +1,6 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
-import { sessionRow } from "./chat-flow-fixtures.test-support.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -44,7 +43,12 @@ suite.define(() => {
       });
       const sessionList = {
         ...chatSessionListResponse([
-          sessionRow(selectedSessionKey, "Selected session", now - 5 * 60_000),
+          {
+            key: selectedSessionKey,
+            kind: "direct",
+            label: "Selected session",
+            updatedAt: now - 5 * 60_000,
+          },
           {
             key: sessionKey,
             kind: "direct",

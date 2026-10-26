@@ -4,7 +4,6 @@ import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   type ControlUiSessionPullRequestsChanged,
 } from "../../../src/gateway/control-ui-contract.js";
-import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.ts";
 import {
   defaultControlUiFeatureMethods,
   type ControlUiMockGatewayScenario,
@@ -85,8 +84,21 @@ export function activityPolishFixture(now = Date.now()) {
   return { list, scenario, pullRequests };
 }
 
-export async function activityPolishImages(_page: Page) {
+export async function activityPolishImages(page: Page) {
   const titles = ["Reconnect check", "Delivery timeline", "Keyboard review", "Preview cache"];
+  const urls = await page.evaluate((captions) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 800;
+    canvas.height = 450;
+    const context = canvas.getContext("2d")!;
+    return captions.map((title, index) => {
+      context.fillStyle = `hsl(${index * 90} 40% 95%)`;
+      context.fillRect(0, 0, 800, 450);
+      context.fillStyle = "#172033";
+      context.fillText(title, 40, 65);
+      return canvas.toDataURL("image/png");
+    });
+  }, titles);
   return {
     artifacts: titles.map((title, index) => ({
       id: `screenshot-${index + 1}`,
@@ -94,9 +106,7 @@ export async function activityPolishImages(_page: Page) {
       title,
       mimeType: "image/png",
       sessionKey: activityPolishKeys.current,
-      image: {
-        url: `data:image/png;base64,${createSolidPngBuffer(800, 450, { r: 237 + index, g: 247, b: 247 }).toString("base64")}`,
-      },
+      image: { url: urls[index]! },
       download: { mode: "url" },
     })),
   };

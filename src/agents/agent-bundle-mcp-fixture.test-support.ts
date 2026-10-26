@@ -6,30 +6,33 @@ import type {
 
 type Tool = Pick<McpCatalogTool, "toolName"> & Partial<McpCatalogTool>;
 
-export const catalogTool = (
+export function catalogTool(
   serverName: string,
   toolName: string,
   overrides: Partial<McpCatalogTool> = {},
-): McpCatalogTool => ({
-  serverName,
-  safeServerName: serverName,
-  toolName,
-  inputSchema: { type: "object", properties: {} },
-  fallbackDescription: toolName,
-  ...overrides,
-});
+): McpCatalogTool {
+  return {
+    serverName,
+    safeServerName: serverName,
+    toolName,
+    inputSchema: { type: "object", properties: {} },
+    fallbackDescription: toolName,
+    ...overrides,
+  };
+}
 
 export function fixtureCatalog(serverName: string, tools: Tool[], generatedAt = 0): McpToolCatalog {
   return {
     version: 1,
     generatedAt,
     servers: { [serverName]: { serverName, launchSummary: serverName, toolCount: tools.length } },
-    tools: tools.map((tool) =>
-      catalogTool(serverName, tool.toolName, {
-        fallbackDescription: tool.description ?? tool.toolName,
-        ...tool,
-      }),
-    ),
+    tools: tools.map((tool) => ({
+      serverName,
+      safeServerName: serverName,
+      inputSchema: { type: "object", properties: {} },
+      fallbackDescription: tool.description ?? tool.toolName,
+      ...tool,
+    })),
   };
 }
 
@@ -98,13 +101,15 @@ export function bindFixtureIdentity(
   };
 }
 
-export const staticRuntime = (
+export function staticRuntime(
   fields: Omit<SessionMcpRuntime, "createdAt" | "lastUsedAt" | "markUsed" | "dispose"> &
     Partial<SessionMcpRuntime>,
-): SessionMcpRuntime => ({
-  createdAt: 0,
-  lastUsedAt: 0,
-  markUsed: () => {},
-  dispose: async () => {},
-  ...fields,
-});
+): SessionMcpRuntime {
+  return {
+    createdAt: 0,
+    lastUsedAt: 0,
+    markUsed: () => {},
+    dispose: async () => {},
+    ...fields,
+  };
+}

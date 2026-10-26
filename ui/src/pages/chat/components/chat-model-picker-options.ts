@@ -44,14 +44,11 @@ export function isModelPickerOptionSelected(
   );
 }
 
-export function formatModelContextMeta(
-  option: ChatModelPickerOption,
-  translate: typeof t = t,
-): string {
+export function formatModelContextMeta(option: ChatModelPickerOption): string {
   const active = option.contextTokens;
   const maximum = option.contextWindow;
   if (active && maximum && active < maximum) {
-    return translate("chat.modelControls.contextActiveAndMax", {
+    return t("chat.modelControls.contextActiveAndMax", {
       active: formatContextTokenCapacity(active),
       maximum: formatContextTokenCapacity(maximum),
     });

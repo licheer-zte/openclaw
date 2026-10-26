@@ -18,7 +18,11 @@ async function mountOutputs() {
     currentAgentId: "main",
     messages: [],
     selectedSession: { key: "agent:main:details", sessionId: "session-1", kind: "direct" },
-    desktopPresentation: { peopleLabel: "", outputsLabel: "Outputs", subagentsWorkingLabel: "" },
+    desktopPresentation: {
+      peopleLabel: "People",
+      outputsLabel: "Outputs",
+      subagentsWorkingLabel: "Working",
+    },
     desktopDisclosures: { expanded: { outputs: true }, onExpandedChange: vi.fn() },
     outputs: {
       artifacts,
@@ -33,6 +37,7 @@ async function mountOutputs() {
   };
   const view = mountSolid(() => <ChatDetailsSession props={value} presented desktop />);
   const element = view.container.querySelector("openclaw-chat-details-session")!;
+  await element.updateComplete;
   await waitForSolid(() => expect(element.querySelector(".chat-outputs__view-all")).not.toBeNull());
   const button = element.querySelector<HTMLButtonElement>(".chat-outputs__view-all")!;
   return { element, button, value, navigate, artifacts };
@@ -71,15 +76,23 @@ it.each(["session", "agent", "incarnation", "visibility"] as const)(
   "rejects a visible View all callback after its %s changes",
   async (retirement) => {
     const { element, button, value, navigate } = await mountOutputs();
-    if (retirement === "visibility") {
-      element.presented = false;
-    } else {
-      const patch = {
-        session: { sessionKey: "agent:main:other" },
-        agent: { currentAgentId: "other" },
-        incarnation: { selectedSession: { ...value.selectedSession!, sessionId: "session-2" } },
-      }[retirement];
-      element.props = { ...value, outputs: { ...value.outputs! }, ...patch };
+    const retired = { ...value, outputs: { ...value.outputs! } };
+    switch (retirement) {
+      case "session":
+        element.props = { ...retired, sessionKey: "agent:main:other" };
+        break;
+      case "agent":
+        element.props = { ...retired, currentAgentId: "other" };
+        break;
+      case "incarnation":
+        element.props = {
+          ...retired,
+          selectedSession: { ...value.selectedSession!, sessionId: "session-2" },
+        };
+        break;
+      case "visibility":
+        element.presented = false;
+        break;
     }
     button.click();
     expect(navigate).not.toHaveBeenCalled();

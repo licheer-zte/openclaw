@@ -12,8 +12,7 @@ export function createActiveSession(messages: AgentMessage[] = []) {
       state: { messages },
       convertToLlm,
     },
-    subscribe: () => () => {},
-  } as unknown as Pick<AgentSession, "agent" | "subscribe">;
+  } as unknown as Pick<AgentSession, "agent">;
   return { activeSession, convertToLlm, reset };
 }
 

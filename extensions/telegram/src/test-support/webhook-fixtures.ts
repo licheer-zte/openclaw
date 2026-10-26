@@ -7,10 +7,12 @@ export type TestTelegramMessageUpdate = Update & {
   message: NonNullable<Update["message"]> & { text: string };
 };
 
-export const waitForWebhookState = <T>(
+export async function waitForWebhookState<T>(
   assertion: () => T | Promise<T>,
   options: { timeout?: number; interval?: number } = {},
-) => vi.waitFor(assertion, { interval: 1, ...options });
+): Promise<T> {
+  return await vi.waitFor(assertion, { interval: 1, ...options });
+}
 
 export function telegramMessageUpdate(updateId: number, text: string): TestTelegramMessageUpdate {
   return {
@@ -26,9 +28,11 @@ export function telegramMessageUpdate(updateId: number, text: string): TestTeleg
 }
 
 export function createNearLimitTelegramPayload(): { payload: string; sizeBytes: number } {
-  // Just under 1 MiB, including the message envelope.
-  const text = "the quick brown fox jumps over the lazy dog ".repeat(23_730);
-  const payload = JSON.stringify(telegramMessageUpdate(77_777, text));
+  const update = telegramMessageUpdate(77_777, "");
+  const textBytes = 1_024 * 1_024 - 4_096 - Buffer.byteLength(JSON.stringify(update));
+  const pattern = "the quick brown fox jumps over the lazy dog ";
+  update.message.text = pattern.repeat(Math.ceil(textBytes / pattern.length)).slice(0, textBytes);
+  const payload = JSON.stringify(update);
   return { payload, sizeBytes: Buffer.byteLength(payload, "utf-8") };
 }
 
@@ -51,7 +55,17 @@ export function requireMockCall(mock: unknown, index: number, label: string): un
   return call;
 }
 
-export function expectStatusCall(mock: unknown, expected: Record<string, unknown>) {
+export function expectMockMessageContains(mock: unknown, expected: string): void {
+  const messages = (mock as MockCallReader).mock.calls.map(([message]) =>
+    typeof message === "string" ? message : "",
+  );
+  expect(messages.join("\n")).toContain(expected);
+}
+
+export function expectStatusCall(
+  mock: unknown,
+  expected: Record<string, unknown>,
+): Record<string, unknown> {
   const match = (mock as MockCallReader).mock.calls
     .map((call) => requireRecord(call[0], "status call"))
     .find((status) => Object.entries(expected).every(([key, value]) => status[key] === value));
@@ -76,8 +90,10 @@ export function createTelegramPrivateTopicCallback(updateId: number, botId: numb
 }
 
 export function expectWebhookBotScopesAborted(createTelegramBotSpy: unknown): void {
-  const call = requireMockCall(createTelegramBotSpy, 0, "createTelegramBot")[0];
-  const botParams = requireRecord(call, "createTelegramBot params");
+  const botParams = requireRecord(
+    requireMockCall(createTelegramBotSpy, 0, "createTelegramBot")[0],
+    "createTelegramBot params",
+  );
   for (const signal of [botParams.fetchAbortSignal, botParams.accountAbortSignal]) {
     assert(signal instanceof AbortSignal && signal.aborted, "expected an aborted AbortSignal");
   }

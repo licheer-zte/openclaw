@@ -2,12 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { markReplyOperationExecutionStarted } from "../../sessions/session-controller.state.js";
-import { expectNoCalls } from "../../test-utils/mock-call-assertions.js";
 import type { ReplyPayload } from "../types.js";
 import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-execution.types.js";
 import {
-  createFollowupTurnTestTurn as createTurn,
-  executeFollowupTurnForTest as executeFollowupTurn,
+  createFollowupTurnTestTurn,
+  executeFollowupTurnForTest,
   getFollowupTurnTestState,
   resetFollowupTurnTestState,
 } from "./followup-turn-execution.test-support.js";
@@ -20,6 +19,8 @@ import { resolveReplyOperationAgentTurn } from "./reply-operation-run-state.test
 import { createMockReplyOperation, createMockTypingController } from "./test-helpers.js";
 
 const state = getFollowupTurnTestState();
+const createTurn = createFollowupTurnTestTurn;
+const executeFollowupTurn = executeFollowupTurnForTest;
 function mockExecution(run: (params: AgentTurnParams) => void | Promise<void>) {
   state.execute.mockImplementation(async (params: AgentTurnParams) => {
     await run(params);
@@ -309,12 +310,14 @@ describe("executeFollowupTurn", () => {
     });
     await result.progress.drain();
 
-    expectNoCalls(
+    for (const callback of [
       typing.startTypingLoop,
       typing.startTypingOnText,
       onToolResult,
       ...Object.values(callbacks),
-    );
+    ]) {
+      expect(callback).not.toHaveBeenCalled();
+    }
   });
 
   it.each([
@@ -404,7 +407,11 @@ describe("executeFollowupTurn", () => {
     await result.progress.drain();
 
     expect(onToolStart).toHaveBeenCalledOnce();
-    expectNoCalls(...Object.values(hiddenCallbacks), onChannelToolResult, onDurableToolResult);
+    for (const callback of Object.values(hiddenCallbacks)) {
+      expect(callback).not.toHaveBeenCalled();
+    }
+    expect(onChannelToolResult).not.toHaveBeenCalled();
+    expect(onDurableToolResult).not.toHaveBeenCalled();
   });
 });
 
@@ -505,17 +512,25 @@ describe("executeFollowupTurn lifecycle", () => {
   });
 
   it.each([
-    ["required", "item", undefined, true, true],
-    ["required", "none", false, false, false],
-    ["result-required", "none", false, false, false],
-    ["optional", "none", false, false, false],
-    ["optional", "item", false, false, false],
-    ["optional", "item", true, true, false],
-    ["optional", "item", undefined, true, false],
-    ["optional", "compaction", undefined, true, false],
+    {
+      expectation: "required",
+      progress: "item",
+      accepted: undefined,
+      visible: true,
+      beforeStart: true,
+    },
+    { expectation: "required", progress: "none", accepted: false, visible: false },
+    { expectation: "result-required", progress: "none", accepted: false, visible: false },
+    { expectation: "optional", progress: "none", accepted: false, visible: false },
+    { expectation: "optional", progress: "item", accepted: false, visible: false },
+    { expectation: "optional", progress: "item", accepted: true, visible: true },
+    { expectation: "optional", progress: "item", accepted: undefined, visible: true },
+    { expectation: "optional", progress: "compaction", accepted: undefined, visible: true },
   ] as const)(
-    "settles %s failure after %s progress accepts %s (visible: %s, before start: %s)",
-    async (expectation, progress, accepted, visible, beforeStart) => {
+    "settles $expectation failure after $progress progress accepts $accepted (before start: $beforeStart)",
+    async (testCase) => {
+      const { expectation, progress, accepted, visible } = testCase;
+      const beforeStart = "beforeStart" in testCase && testCase.beforeStart;
       const receipt: ReplyOperationRunState = {};
       const failure = new Error("execution failed after start");
       const { promise: progressBarrier, resolve: releaseProgress } = createDeferred();

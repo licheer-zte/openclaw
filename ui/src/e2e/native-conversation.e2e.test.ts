@@ -7,7 +7,6 @@ import {
   defaultControlUiFeatureMethods,
 } from "../test-helpers/control-ui-e2e.ts";
 import {
-  textContent,
   captureUiProofEnabled,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
@@ -148,9 +147,12 @@ suite.define(() => {
         historyMessages: [
           {
             role: "assistant",
-            content: textContent(
-              `Conversation ready. [Linked conversation](${linkedUrl}) · [Settings](/settings?section=general) · [Notes](notes.txt)`,
-            ),
+            content: [
+              {
+                type: "text",
+                text: `Conversation ready. [Linked conversation](${linkedUrl}) · [Settings](/settings?section=general) · [Notes](notes.txt)`,
+              },
+            ],
           },
         ],
         methodResponses: {

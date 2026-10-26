@@ -9,7 +9,6 @@ import { createTestWizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtim
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { isRecoverableOAuthRefreshFailure } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createAsyncGate } from "../test-support/async-gate.test-support.js";
 import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 
 const ssrfMocks = vi.hoisted(() => ({ fetchWithSsrFGuard: vi.fn() }));
@@ -335,7 +334,12 @@ describe("OpenAI Codex OAuth flow", () => {
   it.each(["callback", "manual input", "transport preparation"] as const)(
     "revalidates live authority after held %s before exchanging the code",
     async (boundary) => {
-      const gate = createAsyncGate();
+      const held = createDeferred<void>();
+      const release = createDeferred<void>();
+      const hold = async () => {
+        held.resolve();
+        await release.promise;
+      };
       const controller = new AbortController();
       const agent = new Agent();
       let current = true;
@@ -343,7 +347,7 @@ describe("OpenAI Codex OAuth flow", () => {
       ssrfMocks.fetchWithSsrFGuard.mockImplementation(
         async ({ beforeRequest }: { beforeRequest?: () => void }) => {
           if (boundary === "transport preparation") {
-            await gate.wait();
+            await hold();
           }
           beforeRequest?.();
           return await sendToken();
@@ -359,28 +363,28 @@ describe("OpenAI Codex OAuth flow", () => {
         onAuth: async ({ url }) => {
           if (boundary === "callback") {
             await requestCallback(buildCallbackUrl(url, "synthetic-code"), agent);
-            await gate.wait();
+            await hold();
           }
         },
         onPrompt: async () => "synthetic-code",
         onManualCodeInput: async () => {
           if (boundary === "manual input") {
-            await gate.wait();
+            await hold();
           }
           return "synthetic-code";
         },
       }).catch((error: unknown) => error);
       try {
-        await gate.entered;
+        await held.promise;
         current = false;
-        gate.release();
+        release.resolve();
         const result = await outcome;
         expect(sendToken).not.toHaveBeenCalled();
         expect(result).toMatchObject({ message: expect.stringContaining("owner retired") });
         expect(controller.signal.aborted).toBe(false);
       } finally {
         controller.abort();
-        gate.release();
+        release.resolve();
         await outcome;
         agent.destroy();
       }
@@ -389,13 +393,13 @@ describe("OpenAI Codex OAuth flow", () => {
 
   it("closes the callback listener when cancellation outlives a pending browser presentation", async () => {
     const ready = createDeferred<string>();
-    const gate = createAsyncGate();
+    const release = createDeferred<void>();
     const controller = new AbortController();
     const rejected = vi.fn();
     const login = loginOpenAICodex({
       onAuth: async ({ url }) => {
         ready.resolve(url);
-        await gate.wait();
+        await release.promise;
       },
       onPrompt: vi.fn(async () => "unused-code"),
       onManualCodeInput: () => createDeferred<string>().promise,
@@ -430,20 +434,24 @@ describe("OpenAI Codex OAuth flow", () => {
       expect(ssrfMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
     } finally {
       controller.abort();
-      gate.release();
+      release.resolve();
       await login;
       socket?.destroy();
     }
   });
 
   it("restarts browser login while a cancelled token exchange still releases its transport", async () => {
-    const transportRelease = createAsyncGate();
+    const releasing = createDeferred<void>();
+    const released = createDeferred<void>();
     const firstController = new AbortController();
     const nextController = new AbortController();
     const agent = new Agent();
     ssrfMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
       ...tokenResponse(JSON.stringify(tokenPayload("old-account"))),
-      release: transportRelease.wait,
+      release: async () => {
+        releasing.resolve();
+        await released.promise;
+      },
     });
     mockTokenResponse(tokenPayload("new-account"));
     const onAuth = async ({ url }: { url: string }) => {
@@ -461,7 +469,7 @@ describe("OpenAI Codex OAuth flow", () => {
       signal: firstController.signal,
     }).catch(() => undefined);
     try {
-      await transportRelease.entered;
+      await releasing.promise;
       firstController.abort();
       await expect(
         loginOpenAICodex({ onAuth, onPrompt, onManualCodeInput, signal: nextController.signal }),
@@ -471,7 +479,7 @@ describe("OpenAI Codex OAuth flow", () => {
     } finally {
       firstController.abort();
       nextController.abort();
-      transportRelease.release();
+      released.resolve();
       await first;
       agent.destroy();
     }
@@ -516,7 +524,9 @@ describe("OpenAI Codex OAuth flow", () => {
     let idleSocket: Socket | undefined;
     let manualPromptAborted = false;
     let manualPrompt: Promise<string> | undefined;
-    const prompter = createTestWizardPrompter({
+    const prompter = {
+      note: vi.fn(async () => undefined),
+      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
       text: vi.fn(
         (params: { signal?: AbortSignal }) =>
           new Promise<string>((_resolve, reject) => {
@@ -530,7 +540,7 @@ describe("OpenAI Codex OAuth flow", () => {
             );
           }),
       ),
-    });
+    } as unknown as ProviderAuthContext["prompter"];
     const oauth: ProviderAuthContext["oauth"] = {
       createVpsAwareHandlers: (params) => ({
         onAuth: async ({ url }: { url: string }) => {
@@ -693,6 +703,15 @@ describe("OpenAI Codex OAuth flow", () => {
     );
   });
 
+  it("cancels token exchange requests with the caller signal", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await exchange({ signal: controller.signal, timeoutMs: 5 });
+    expect(ssrfMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+    expectTokenFailure(result, "exchange", "Login cancelled", { cancelled: true });
+  });
+
   it.each([
     ["exchange", "1e309"],
     ["refresh", "0"],
@@ -719,6 +738,16 @@ describe("OpenAI Codex OAuth flow", () => {
       );
     },
   );
+
+  it("preserves the shared 30-second token-refresh deadline", async () => {
+    mockTokenResponse(tokenPayload());
+
+    await refreshOpenAIAccessToken("existing-refresh-token");
+
+    expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 30_000 }),
+    );
+  });
 });
 
 describe("OpenAI model-account credential ownership", () => {
@@ -791,13 +820,6 @@ describe("OpenAI Codex OAuth bounded token response reads", () => {
       () => refreshOpenAIAccessToken("loopback-existing-refresh"),
     );
     expectTokenSuccess(result, "loopback-renewed-access", "loopback-existing-refresh");
-    expect(result).toHaveProperty("expires", expect.any(Number));
-    if (result.type === "success") {
-      expect(result.expires).toBeGreaterThan(0);
-    }
-    expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: 30_000 }),
-    );
   });
 
   it.each([
@@ -817,6 +839,15 @@ describe("OpenAI Codex OAuth bounded token response reads", () => {
       );
     },
   );
+
+  it("reads under-cap token exchange responses from a real loopback HTTP server", async () => {
+    const result = await withLoopbackTokenResponse(JSON.stringify(tokenPayload()));
+    expectTokenSuccess(result);
+    expect(result).toHaveProperty("expires", expect.any(Number));
+    if (result.type === "success") {
+      expect(result.expires).toBeGreaterThan(0);
+    }
+  });
 
   it("rejects oversized token exchange responses from a real loopback HTTP server", async () => {
     const oversizedPayload = "o".repeat(2 * 1024 * 1024); // 2 MiB > 1 MiB cap

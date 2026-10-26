@@ -104,19 +104,13 @@ function fingerprintSerializedPrompt(
     return undefined;
   }
   const parameters = new Map(payload.members());
-  const system = createHash("sha256").update("{");
-  let separator = "";
-  for (const key of ["instructions", "system"]) {
-    const field = parameters.get(key);
-    parameters.delete(key);
-    if (field) {
-      system
-        .update(separator)
-        .update(`${JSON.stringify(key)}:`)
-        .update(field.json);
-      separator = ",";
-    }
-  }
+  const system = ["instructions", "system"]
+    .flatMap((key) => {
+      const field = parameters.get(key);
+      parameters.delete(key);
+      return field ? [`${JSON.stringify(key)}:${field.json}`] : [];
+    })
+    .join(",");
   const tools = parameters.get("tools");
   parameters.delete("tools");
   let messageField: "input" | "messages" | undefined;
@@ -155,10 +149,8 @@ function fingerprintSerializedPrompt(
   }
   const previousResponse = parameters.get("previous_response_id")?.json;
   return {
-    system: system.update("}").digest("hex"),
-    tools: tools
-      ? createHash("sha256").update('{"tools":').update(tools.json).update("}").digest("hex")
-      : sha256Hex("{}"),
+    system: sha256Hex(`{${system}}`),
+    tools: sha256Hex(tools ? `{"tools":${tools.json}}` : "{}"),
     messageDigests,
     messageFields,
     messageField,

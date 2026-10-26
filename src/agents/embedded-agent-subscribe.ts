@@ -1,3 +1,4 @@
+import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -10,6 +11,7 @@ import { hasCommittedMessagingToolDeliveryEvidence } from "./embedded-agent-runn
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import { installToolAuthoredSourceReplyTerminalHook } from "./embedded-agent-runner/run/message-tool-terminal.js";
 import { consumeEmbeddedToolReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
+import type { EmbeddedRunLivenessState } from "./embedded-agent-runner/types.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { createEmbeddedAgentSessionEventHandler } from "./embedded-agent-subscribe.handlers.js";
 import { readPendingToolMediaReply } from "./embedded-agent-subscribe.handlers.messages.replies.js";
@@ -436,7 +438,37 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
       state.latestMcpConnectAction ? { ...state.latestMcpConnectAction } : undefined,
     runToolLifecycle: createEmbeddedToolLifecycleRunner(ctx),
     unsubscribe,
-    setTerminalLifecycleMeta: state.setTerminalLifecycleMeta.bind(state),
+    setTerminalLifecycleMeta: (meta: {
+      replayInvalid?: boolean;
+      livenessState?: EmbeddedRunLivenessState;
+      stopReason?: string;
+      yielded?: boolean;
+      timeoutPhase?: AgentRunTimeoutPhase;
+      providerStarted?: boolean;
+      aborted?: boolean;
+    }) => {
+      if (meta.replayInvalid !== undefined) {
+        state.replayState = { ...state.replayState, replayInvalid: meta.replayInvalid };
+      }
+      if (meta.livenessState) {
+        state.livenessState = meta.livenessState;
+      }
+      if (meta.stopReason !== undefined) {
+        state.terminalStopReason = meta.stopReason;
+      }
+      if (meta.yielded !== undefined) {
+        state.yielded = meta.yielded;
+      }
+      if (meta.timeoutPhase) {
+        state.timeoutPhase = meta.timeoutPhase;
+      }
+      if (meta.providerStarted !== undefined) {
+        state.providerStarted = meta.providerStarted;
+      }
+      if (meta.aborted !== undefined) {
+        state.terminalAborted = meta.aborted;
+      }
+    },
     isCompacting: () => state.compactionInFlight || state.pendingCompactionRetry > 0,
     isCompactionInFlight: () => state.compactionInFlight,
     getMessagingToolSentTexts: () => messagingToolSentTexts.slice(),

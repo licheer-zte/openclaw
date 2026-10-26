@@ -46,10 +46,10 @@ import {
   retainGatewayRequestMutationAuthority,
 } from "./session-mutation-guards.js";
 import {
+  createAdmittedWizardSession,
   runExclusiveSystemAgentSetupActivation,
   respondSetupAdmissionBusy,
   SetupAdmissionBusyError,
-  startGatewayWizard,
 } from "./setup-admission.js";
 import type { GatewaySystemAgentSession as SystemAgentChatSession } from "./shared-types.js";
 import { prepareDelegatedSystemAgentApproval } from "./system-agent-approval.js";
@@ -68,9 +68,13 @@ import {
   verifyGatewaySetupInference,
 } from "./system-agent-execution.js";
 import { resolveSystemAgentSessionOwnerKey } from "./system-agent-session-owner.js";
-import { startSetupActivationWizard } from "./system-agent-setup-wizard.js";
+import {
+  rejectExistingSetupWizardSession,
+  startSetupActivationWizard,
+} from "./system-agent-setup-wizard.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
+import { startWizardLogin } from "./wizard-login.js";
 
 export type { SystemAgentChatSession };
 
@@ -190,25 +194,39 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
   "openclaw.setup.runtime.start": defineValidatedGatewayHandler(
     "openclaw.setup.runtime.start",
     validateSystemAgentSetupRuntimeStartParams,
-    async (request) => {
-      const { params } = request;
-      await startGatewayWizard({
-        request,
+    async (options) => {
+      const { params, context, respond, client } = options;
+      if (rejectExistingSetupWizardSession({ sessionId: params.sessionId, context, respond })) {
+        return;
+      }
+      if (!client) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "Client required"));
+        return;
+      }
+      await startWizardLogin({
+        client,
+        context,
         sessionId: params.sessionId,
-        connectionBound: true,
-        createSession: (assertCurrent) =>
+        respond,
+        assertCurrent: readGatewayRequestMutationAuthority(options).assertCurrent,
+        createSession: () =>
           new WizardSession(
             async (prompter, signal, runnerSession) => {
-              // Keep installed plugin runtime loading off Gateway startup.
-              const { setupNativeRuntime } =
-                await import("../../system-agent/setup-native-runtime.js");
-              await setupNativeRuntime({
-                ...params,
-                prompter,
-                signal,
-                assertCurrent,
-                onCommitStarted: () => runnerSession.lockCancellation(),
-              });
+              const authority = retainGatewayRequestMutationAuthority(options);
+              try {
+                // Keep installed plugin runtime loading off Gateway startup.
+                const { setupNativeRuntime } =
+                  await import("../../system-agent/setup-native-runtime.js");
+                await setupNativeRuntime({
+                  ...params,
+                  prompter,
+                  signal,
+                  assertCurrent: authority.assertCurrent,
+                  onCommitStarted: () => runnerSession.lockCancellation(),
+                });
+              } finally {
+                authority.release();
+              }
             },
             { timeoutMs: PROVIDER_AUTH_SESSION_TIMEOUT_MS },
           ),
@@ -218,40 +236,45 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
   "openclaw.setup.auth.start": defineValidatedGatewayHandler(
     "openclaw.setup.auth.start",
     validateSystemAgentSetupAuthStartParams,
-    async (request) => {
-      const { sessionId, ...activation } = request.params;
+    async (options) => {
+      const { params, respond, context, client } = options;
+      const { sessionId, ...activation } = params;
       await startSetupActivationWizard({
-        request,
         sessionId,
-        ownerKey: resolveSystemAgentSessionOwnerKey({ client: request.client }),
-        isLocalClient: request.client?.internal?.isLocalClient === true,
+        ownerKey: resolveSystemAgentSessionOwnerKey({ client }),
+        assertCurrent: readGatewayRequestMutationAuthority(options).assertCurrent,
         activation: { ...activation, kind: "provider-auth" },
         timeoutMs: PROVIDER_AUTH_SESSION_TIMEOUT_MS,
+        context,
+        respond,
+        isLocalClient: client?.internal?.isLocalClient === true,
       });
     },
   ),
   "openclaw.setup.activate.start": defineValidatedGatewayHandler(
     "openclaw.setup.activate.start",
     validateSystemAgentSetupActivateStartParams,
-    async (request) => {
-      const { sessionId, ...activation } = request.params;
+    async ({ params, respond, context }) => {
+      const { sessionId, ...activation } = params;
       await startSetupActivationWizard({
-        request,
         sessionId,
         activation,
         timeoutMs: PROVIDER_AUTH_SESSION_TIMEOUT_MS,
+        context,
+        respond,
       });
     },
   ),
   "openclaw.setup.prepare.start": defineValidatedGatewayHandler(
     "openclaw.setup.prepare.start",
     validateSystemAgentSetupAuthStartParams,
-    async (request) => {
-      const { params } = request;
-      await startGatewayWizard({
-        request,
-        sessionId: params.sessionId,
-        createSession: (assertCurrent) =>
+    async ({ params, respond, context }) => {
+      const sessionId = params.sessionId;
+      if (rejectExistingSetupWizardSession({ sessionId, context, respond })) {
+        return;
+      }
+      const session = await createAdmittedWizardSession(
+        () =>
           new WizardSession(
             async (prompter, signal, runnerSession) => {
               await runSystemAgentGatewayTask(async () => {
@@ -287,7 +310,6 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
                     isRemote: true,
                     beforePersistentEffect: () => {
                       signal.throwIfAborted();
-                      assertCurrent();
                       runnerSession.lockCancellationForPreparation();
                     },
                   },
@@ -299,7 +321,6 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
                   );
                 }
                 signal.throwIfAborted();
-                assertCurrent();
                 runnerSession.lockCancellation();
                 await prepared.persistAuthProfiles();
                 await authConfig.writeProviderAuthConfig({
@@ -310,7 +331,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
                     prepared.config,
                   ),
                   credentialsSaved: prepared.authProfiles.length > 0,
-                  writeOptions: { allowConfigSizeDrop: false, assertCurrent },
+                  writeOptions: { allowConfigSizeDrop: false },
                 });
                 if (prepared.agentModelOverride) {
                   runnerSession.setPreparedModelRef(prepared.agentModelOverride);
@@ -319,7 +340,13 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             },
             { timeoutMs: PROVIDER_PREPARE_SESSION_TIMEOUT_MS },
           ),
-      });
+      );
+      if (!session) {
+        respondSetupAdmissionBusy(respond);
+        return;
+      }
+      context.wizardSessions.set(sessionId, session);
+      respond(true, { sessionId, done: false, status: "running" }, undefined);
     },
   ),
   /**

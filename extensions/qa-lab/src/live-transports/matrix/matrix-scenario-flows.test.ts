@@ -1,11 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { readQaBootstrapScenarioCatalog, readQaScenarioById } from "../../scenario-catalog.js";
+import {
+  readQaBootstrapScenarioCatalog,
+  readQaScenarioById,
+  readQaScenarioExecutionConfig,
+} from "../../scenario-catalog.js";
 import { requireFlowScenario } from "../../scenario-catalog.test-utils.js";
+import { collectQaSuitePluginIds } from "../../suite-planning.js";
 
 describe("Matrix QA Lab scenario flows", () => {
-  const scenarios = readQaBootstrapScenarioCatalog().scenarios.filter(
-    ({ execution }) => execution.channel === "matrix" && execution.flowKind === "module",
-  );
+  const catalog = readQaBootstrapScenarioCatalog();
+  const scenarios = catalog.scenarios.filter((scenario) => {
+    if (scenario.execution.kind !== "flow" || scenario.execution.channel !== "matrix") {
+      return false;
+    }
+    return scenario.execution.flow?.steps.some((step) =>
+      step.actions.some(
+        (action) =>
+          typeof action === "object" &&
+          action !== null &&
+          "set" in action &&
+          action.set === "scenarioModule",
+      ),
+    );
+  });
 
   it("prepares the shared canary only for canary-dependent scenarios", () => {
     const canaryScenarioIds = new Set([
@@ -21,15 +38,18 @@ describe("Matrix QA Lab scenario flows", () => {
         canaryScenarioIds.has(scenario.id),
       );
       const actions = flow?.steps.flatMap((step) => step.actions);
-      expect(actions, scenario.id).toMatchObject([
-        {
-          set: "scenarioModule",
-          value: {
-            expr: expect.stringContaining("./live-transports/matrix/scenarios/scenario-runtime-"),
-          },
-        },
-        { call: expect.stringMatching(/^scenarioModule\./), args: [{ expr: "scenarioContext" }] },
-      ]);
+      const moduleImport = expect.objectContaining({
+        set: "scenarioModule",
+        value: expect.objectContaining({
+          expr: expect.stringContaining("./live-transports/matrix/scenarios/scenario-runtime-"),
+        }),
+      });
+      expect(actions, scenario.id).toEqual(expect.arrayContaining([moduleImport]));
+      const call = expect.objectContaining({ call: expect.stringMatching(/^scenarioModule\./) });
+      expect(
+        actions?.find((action) => call.asymmetricMatch(action)),
+        scenario.id,
+      ).toEqual(expect.objectContaining({ args: [{ expr: "scenarioContext" }] }));
     }
   });
 
@@ -62,19 +82,20 @@ describe("Matrix QA Lab scenario flows", () => {
       providerMode: "mock-openai",
       retryCount: 0,
       timeoutMs: 90_000,
-      config: {
-        matrixRequireCanary: true,
-        matrixConfigOverrides: {
-          mediaModels: models,
-          audio,
-          groupMentionPatterns: mentionPatterns,
-        },
-      },
     });
     expect(scenario.plugins).toEqual(["openai"]);
+    expect(collectQaSuitePluginIds([scenario])).toEqual(["openai"]);
     expect(scenario.gatewayConfigPatch).toMatchObject({
       tools: { media: { models, audio } },
       messages: { groupChat: { mentionPatterns } },
+    });
+    expect(readQaScenarioExecutionConfig("matrix-voice-preflight-mention")).toMatchObject({
+      matrixRequireCanary: true,
+      matrixConfigOverrides: {
+        mediaModels: models,
+        audio,
+        groupMentionPatterns: mentionPatterns,
+      },
     });
   });
 });

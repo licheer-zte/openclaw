@@ -162,7 +162,6 @@ openclaw gateway diagnostics export --json
 
 <ParamField path="--output <path>" type="string">
   Output zip path. Defaults to a support export under the state directory.
-  Existing directories receive an automatically named archive. Quoted non-home paths preserve surrounding whitespace; blank values use the default.
 </ParamField>
 <a id="param-log-lines"></a>
 

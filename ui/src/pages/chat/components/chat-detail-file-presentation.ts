@@ -445,8 +445,6 @@ export function renderFilePanelPresentation(context: {
           ? {
               content: context.actions.currentFileText(),
               options: {
-                mode: "document",
-                remoteImages: false,
                 codeBlockInteraction: "interactive",
                 fileLinks: true,
                 sessionLinks: true,

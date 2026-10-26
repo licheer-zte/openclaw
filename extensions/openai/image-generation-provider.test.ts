@@ -2,7 +2,6 @@
 // cannot outlive a test and resume against the next test's reset mocks.
 import "openclaw/plugin-sdk/image-generation";
 import "openclaw/plugin-sdk/media-generation-runtime";
-import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -42,9 +41,9 @@ const {
         .map(([profileId]) => profileId),
   ),
   resolveApiKeyForProviderMock: vi.fn(
-    async (
-      _params?: AuthResolutionCall,
-    ): Promise<{ apiKey?: string; source?: string; mode?: string }> => ({
+    async (_params?: {
+      provider?: string;
+    }): Promise<{ apiKey?: string; source?: string; mode?: string }> => ({
       apiKey: "openai-key",
     }),
   ),
@@ -112,7 +111,7 @@ function mockCodexRawStream(body: string) {
   }));
 }
 
-function mockCodexEvents(events: readonly unknown[]) {
+function mockCodexEvents(events: unknown[]) {
   mockCodexRawStream(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));
 }
 
@@ -143,31 +142,74 @@ function mockCodexAuthOnly() {
   );
 }
 
-type ProviderHttp = typeof import("openclaw/plugin-sdk/provider-http");
-type RequestCall = Parameters<ProviderHttp["postJsonRequest"]>[0];
-type AuthResolutionCall = Parameters<
-  typeof import("openclaw/plugin-sdk/provider-auth-runtime").resolveApiKeyForProvider
->[0];
+type MockWithCalls = {
+  mock: {
+    calls: readonly (readonly unknown[])[];
+  };
+};
+
+type HttpConfigCall = {
+  allowPrivateNetwork?: boolean;
+  api?: string;
+  baseUrl?: string;
+  capability?: string;
+  defaultBaseUrl?: string;
+  defaultHeaders?: Record<string, string>;
+  provider?: string;
+  request?: unknown;
+};
+
+type RequestCall = {
+  allowPrivateNetwork?: boolean;
+  body?: unknown;
+  dispatcherPolicy?: unknown;
+  fetchFn?: typeof fetch;
+  headers?: Headers;
+  ssrfPolicy?: unknown;
+  timeoutMs?: number;
+  url?: string;
+};
+
+type AuthResolutionCall = {
+  cfg?: {
+    models?: {
+      providers?: {
+        openai?: {
+          auth?: string;
+        };
+      };
+    };
+  };
+  credentialPrecedence?: string;
+  provider?: string;
+  store?: unknown;
+};
+
+function mockCallArg(mock: MockWithCalls, callIndex = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  if (call.length <= argIndex) {
+    throw new Error(`Expected mock call ${callIndex} argument ${argIndex}`);
+  }
+  return call[argIndex];
+}
 
 function jsonRequestCall(callIndex = 0): RequestCall {
-  return expectDefined(
-    postJsonRequestMock.mock.calls[callIndex],
-    "JSON request call",
-  )[0] as RequestCall;
+  return mockCallArg(postJsonRequestMock, callIndex) as RequestCall;
 }
 
 function multipartRequestCall(callIndex = 0): RequestCall {
-  return expectDefined(
-    postMultipartRequestMock.mock.calls[callIndex],
-    "multipart request call",
-  )[0] as RequestCall;
+  return mockCallArg(postMultipartRequestMock, callIndex) as RequestCall;
 }
 
-function httpConfigCall(callIndex = 0) {
-  return expectDefined(
-    resolveProviderHttpRequestConfigMock.mock.calls[callIndex],
-    "HTTP config call",
-  )[0];
+function httpConfigCall(callIndex = 0): HttpConfigCall {
+  return mockCallArg(resolveProviderHttpRequestConfigMock, callIndex) as HttpConfigCall;
+}
+
+function authResolutionCall(callIndex = 0): AuthResolutionCall {
+  return mockCallArg(resolveApiKeyForProviderMock, callIndex) as AuthResolutionCall;
 }
 
 describe("openai image generation provider", () => {
@@ -237,7 +279,9 @@ describe("openai image generation provider", () => {
       resolveApiKeyForProviderMock.mockImplementation((params) =>
         realAuth.resolveApiKeyForProvider({ ...params, provider: "openai", store }),
       );
-      if (additional !== "api-key") {
+      if (additional === "api-key") {
+        mockGeneratedPngResponse();
+      } else {
         mockCodexImageStream();
       }
       const request = generateOpenAIImage("Draw an avatar", {
@@ -300,6 +344,7 @@ describe("openai image generation provider", () => {
   });
 
   it("uses a model-specific QA image endpoint without changing the text provider route", async () => {
+    mockGeneratedPngResponse();
     vi.stubEnv("OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER", "1");
 
     await generateOpenAIImage("Draw a QA lighthouse", {
@@ -379,12 +424,11 @@ describe("openai image generation provider", () => {
         },
       },
     };
-    beforeEach(() => {
-      mockCodexAuthOnly();
-      mockCodexImageStream();
-    });
 
     it("keeps the default Codex OAuth image model while the account accepts it", async () => {
+      mockCodexAuthOnly();
+      mockCodexImageStream();
+
       const result = await generateOpenAIImage("Draw with the default model", {
         authStore: { version: 1, profiles: {} },
         cfg: configuredOpenAIFallback,
@@ -396,6 +440,8 @@ describe("openai image generation provider", () => {
     });
 
     it.each(["", "x-request-id", "request-id"])("retries rejection (%s)", async (header) => {
+      mockCodexAuthOnly();
+      mockCodexImageStream();
       const { assertOkOrThrowHttpError } = await vi.importActual<
         typeof import("openclaw/plugin-sdk/provider-http")
       >("openclaw/plugin-sdk/provider-http");
@@ -437,6 +483,8 @@ describe("openai image generation provider", () => {
       "Unknown model",
       "The 'gpt-6-astra' model does not support image generation.",
     ])("does not retry an unrelated HTTP 400: %s", async (detail) => {
+      mockCodexAuthOnly();
+      mockCodexImageStream();
       const error = new Error(`OpenAI Codex image generation failed (HTTP 400): ${detail}`);
       assertOkOrThrowHttpErrorMock.mockRejectedValueOnce(error);
       await expect(
@@ -499,6 +547,8 @@ describe("openai image generation provider", () => {
   });
 
   it("falls back to the provider baseUrl when the model catalog is omitted", async () => {
+    mockGeneratedPngResponse();
+
     // Plugin-scoped runtime snapshots can carry a built-in provider overlay
     // before its model catalog is present.
     const cfg = {
@@ -619,9 +669,7 @@ describe("openai image generation provider", () => {
       authStore,
     });
     expect(resolveApiKeyForProviderMock).toHaveBeenCalledOnce();
-    expect(
-      expectDefined(resolveApiKeyForProviderMock.mock.calls[0], "auth resolution call")[0],
-    ).toMatchObject({
+    expect(authResolutionCall()).toMatchObject({
       provider: "openai",
       store: authStore,
       credentialPrecedence: "env-first",
@@ -912,29 +960,33 @@ describe("openai image generation provider", () => {
     });
 
     it.each([
-      [
-        "authoritative failure after malformed interim data",
-        [
+      {
+        name: "authoritative failure after malformed interim data",
+        events: [
           done(imageItem("invalid base64")),
           {
             type: "response.failed",
             response: { error: { code: "rate_limit_exceeded", message: "quota was exhausted" } },
           },
         ],
-        /quota was exhausted/,
-      ],
-      [
-        "incomplete turn",
-        [
+        error: /quota was exhausted/,
+      },
+      {
+        name: "incomplete turn",
+        events: [
           {
             type: "response.incomplete",
             response: { status: "incomplete", incomplete_details: { reason: "max_output_tokens" } },
           },
         ],
-        /incomplete.*max_output_tokens/i,
-      ],
-      ["stream closed before completion", [done()], /closed before response\.completed/i],
-    ] as const)("rejects %s", async (_name, events, error) => {
+        error: /incomplete.*max_output_tokens/i,
+      },
+      {
+        name: "stream closed before completion",
+        events: [done()],
+        error: /closed before response\.completed/i,
+      },
+    ])("rejects $name", async ({ events, error }) => {
       mockCodexEvents(events);
       await expect(generateOpenAIImage("Rejected turn")).rejects.toThrow(error);
     });
@@ -958,9 +1010,15 @@ describe("openai image generation provider", () => {
     );
 
     it.each([
-      ["invalid alphabet in completed output", [completed([imageItem("aGVs!bG8=")])]],
-      ["noncanonical trailing bits in interim output", [done(imageItem("Zh==")), completed()]],
-    ] as const)("rejects %s", async (_name, events) => {
+      {
+        name: "invalid alphabet in completed output",
+        events: [completed([imageItem("aGVs!bG8=")])],
+      },
+      {
+        name: "noncanonical trailing bits in interim output",
+        events: [done(imageItem("Zh==")), completed()],
+      },
+    ])("rejects $name", async ({ events }) => {
       mockCodexEvents(events);
       await expect(generateOpenAIImage("Malformed image")).rejects.toThrow(
         "OpenAI Codex image generation returned malformed base64 image data",

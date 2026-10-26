@@ -2,7 +2,6 @@ import { calculateUsageCost, type ModelCostConfig } from "@openclaw/llm-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { isUnbilledStoredFailedTurn } from "../../packages/ai/src/utils/usage.js";
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { hasRecordedUsageCost, normalizeUsage } from "../agents/usage.js";
 import { isToolCallContentType } from "../chat/tool-content.js";
@@ -68,11 +67,7 @@ export const parseUsageCostTranscriptRecord = (
 
   const usageRaw =
     (message.usage as UsageLike | undefined) ?? (entry.usage as UsageLike | undefined);
-  // Transports record unbilled failures as zero usage; older transcripts still say unavailable.
-  const usage =
-    usageRaw && !isUnbilledStoredFailedTurn({ ...message, usage: usageRaw })
-      ? (normalizeUsage(usageRaw) ?? undefined)
-      : undefined;
+  const usage = usageRaw ? (normalizeUsage(usageRaw) ?? undefined) : undefined;
 
   const provider =
     (typeof message.provider === "string" ? message.provider : undefined) ??

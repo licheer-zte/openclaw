@@ -1,6 +1,5 @@
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import type { SessionAdmissionTransition } from "../../../config/sessions/session-admission-transition.types.js";
-import type { PreparedSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import type { SessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { Model } from "../../../llm/types.js";
@@ -113,7 +112,7 @@ export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
     /** The dispatch owner already selected this target, including any compaction successor. */
     preparedSessionTarget?: {
       readonly target: Readonly<BoundAgentRunSessionTarget & SessionTranscriptTargetBinding>;
-      assertCurrent: PreparedSessionSourceAssertion;
+      assertCurrent(): void;
     };
     compactionCountOwner?: "subscription" | "caller";
     /** Current-run committed plan facts; retained across attempts, never loaded from history. */

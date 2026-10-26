@@ -7,6 +7,8 @@ import { firstLine } from "./command-output.js";
 import type { FaceTimeConfig } from "./config.js";
 import { agentIdFromSessionKey, resolveFaceTimeRealtimeProvider } from "./talk-driver-config.js";
 
+type RunCommandWithTimeout = PluginRuntime["system"]["runCommandWithTimeout"];
+
 type AudioDeviceDescription = {
   isAggregate: boolean;
   name: string;
@@ -109,6 +111,21 @@ function findPhysicalOutputProblem(
   return undefined;
 }
 
+async function checkCallApp(params: {
+  runCommandWithTimeout: RunCommandWithTimeout;
+  checks: FaceTimePreflightCheck[];
+}) {
+  const result = await params.runCommandWithTimeout(["/usr/bin/pgrep", "-x", "FaceTime"], {
+    timeoutMs: 5_000,
+  });
+  pushCheck(params.checks, {
+    id: "call-app-running",
+    label: "FaceTime process",
+    ok: result.code === 0,
+    message: result.code === 0 ? "FaceTime" : "open FaceTime for audio or video calls",
+  });
+}
+
 export async function runFaceTimePreflight(params: {
   config: FaceTimeConfig;
   fullConfig: OpenClawConfig;
@@ -140,15 +157,7 @@ export async function runFaceTimePreflight(params: {
         : "capture helper is missing; reinstall with brew install openclaw/tap/openclaw-facetime",
   });
 
-  const result = await runCommandWithTimeout(["/usr/bin/pgrep", "-x", "FaceTime"], {
-    timeoutMs: 5_000,
-  });
-  pushCheck(checks, {
-    id: "call-app-running",
-    label: "FaceTime process",
-    ok: result.code === 0,
-    message: result.code === 0 ? "FaceTime" : "open FaceTime for audio or video calls",
-  });
+  await checkCallApp({ runCommandWithTimeout, checks });
 
   const profiler = await runCommandWithTimeout(
     ["/usr/sbin/system_profiler", "SPAudioDataType", "-json"],

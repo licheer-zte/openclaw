@@ -29,17 +29,14 @@ import {
   setStandaloneMemoryManagerActive,
   setStandaloneMemoryOwner,
 } from "./memory-state.js";
-import { getPluginMetadataSnapshotCache } from "./plugin-cache.js";
 import { getPluginValueInstance, runPluginCleanup } from "./plugin-instance-scope.js";
 import { runPluginCleanupScope } from "./plugin-invocation-scope.js";
-import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import type {
   MemoryPluginRuntime,
   MemoryProviderRuntime,
   RegisteredMemorySearchManager,
 } from "./registry-contribution-types.js";
-import { listPluginCacheRetiringRegistries } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 
 type MemorySearchAuthorization = Parameters<
@@ -497,19 +494,11 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
 
 type MemoryRuntimeRegistry = Pick<PluginRegistry, "memoryCapabilities" | "embeddingProviders">;
 
-/**
- * Prepare memory consumers before any changed plugin loses ordinary call admission.
- * `retiringMetadata` is the published metadata snapshot whose plugin cache this reload
- * retires; its lazily loaded registries' adapters retire even when no plugin changes.
- */
+/** Prepare memory consumers before any changed plugin loses ordinary call admission. */
 export function prepareMemoryRuntimeReload(
   previousRegistry: MemoryRuntimeRegistry,
   nextRegistry: MemoryRuntimeRegistry,
-  retiringMetadata?: PluginMetadataSnapshot,
 ) {
-  const retiringCacheRegistries = retiringMetadata
-    ? listPluginCacheRetiringRegistries(getPluginMetadataSnapshotCache(retiringMetadata))
-    : [];
   const runtimes = (registry: MemoryRuntimeRegistry) =>
     new Set(
       registry.memoryCapabilities.flatMap(({ capability }) =>
@@ -520,13 +509,9 @@ export function prepareMemoryRuntimeReload(
     );
   const nextRuntimes = runtimes(nextRegistry);
   const nextAdapters = new Set(nextRegistry.embeddingProviders.map(({ provider }) => provider));
-  const retiringEmbeddingProviders = [
-    ...new Set(
-      [previousRegistry, ...retiringCacheRegistries].flatMap((registry) =>
-        registry.embeddingProviders.map(({ provider }) => provider),
-      ),
-    ),
-  ].filter((provider) => !nextAdapters.has(provider));
+  const retiringEmbeddingProviders = previousRegistry.embeddingProviders
+    .map(({ provider }) => provider)
+    .filter((provider) => !nextAdapters.has(provider));
   const prepared: Array<{
     runtime: AnyMemoryRuntime;
     handle: ReturnType<NonNullable<MemoryPluginRuntime["prepareReload"]>>;
@@ -616,21 +601,18 @@ export function prepareMemoryRuntimeReload(
     }
     return cleanup;
   };
-  // Carried-over managers may hold retiring adapters, including cached ones absent from this
-  // registry; their services restart to rebind. Without retiring adapters they keep running.
-  const restartPluginIds = new Set(
-    retiringEmbeddingProviders.length === 0
-      ? []
-      : previousRegistry.memoryCapabilities.flatMap(({ pluginId, capability }) =>
-          [capability.runtime, capability.providerRuntime].some(
-            (runtime) => runtime !== undefined && nextRuntimes.has(runtime),
-          )
-            ? [pluginId]
-            : [],
-        ),
+  // Reload retires capability caches too; managers can hold adapters absent from this registry.
+  const retainedPluginIds = new Set(
+    previousRegistry.memoryCapabilities.flatMap(({ pluginId, capability }) =>
+      [capability.runtime, capability.providerRuntime].some(
+        (runtime) => runtime !== undefined && nextRuntimes.has(runtime),
+      )
+        ? [pluginId]
+        : [],
+    ),
   );
   return {
-    restartPluginIds,
+    retainedPluginIds,
     drain: () => withPluginHostCleanupTimeout("memory managers", close),
     close,
     commit: (retained = nextRegistry) => resume(true, retained),

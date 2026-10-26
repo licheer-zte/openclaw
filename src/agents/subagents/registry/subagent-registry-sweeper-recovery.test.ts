@@ -11,7 +11,6 @@ import {
   replaceSessionEntrySync,
   resetSessionEntryLifecycle,
 } from "../../../config/sessions/session-accessor.js";
-import { setGatewayDedupeEntry } from "../../../gateway/agent-turn/agent-job.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import { createMockGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime.test-support.js";
 import {
@@ -250,51 +249,29 @@ describe("subagent registry recovery scheduling", () => {
         ...run(),
         runId: "sibling-run",
         childSessionKey: "agent:main:subagent:sibling",
-        childSessionIdentity: {
-          sessionId: "sibling-session",
-          lifecycleRevision: "sibling-revision",
-        },
       };
       runs.set(sibling.runId, sibling);
-      const recordTerminal = (finished: SubagentRunRecord) => {
-        const session = {
-          ...finished.childSessionIdentity!,
-          startedAt: finished.execution.startedAt,
-          endedAt: Date.now(),
-          updatedAt: Date.now(),
-          status: "done" as const,
-        };
-        replaceSessionEntrySync({ sessionKey: finished.childSessionKey, env: state.env }, session);
-        setGatewayDedupeEntry({
-          dedupe: new Map(),
-          key: `agent:${finished.runId}`,
-          entry: {
-            ts: Date.now(),
-            ok: true,
-            payload: {
-              status: "completed",
-              startedAt: session.startedAt,
-              endedAt: session.endedAt,
-            },
-          },
-          session: {
-            sessionKey: finished.childSessionKey,
-            sessionId: session.sessionId,
-            agentId: "main",
-            lifecycleGeneration: getAgentEventLifecycleGeneration(),
-          },
-        });
+      const sessionEntry = {
+        sessionId: "child-session",
+        startedAt: entry.execution.startedAt,
+        updatedAt: Date.now(),
       };
-      recordTerminal(entry);
+      replaceSessionEntrySync(
+        { sessionKey: entry.childSessionKey, env: state.env },
+        { ...sessionEntry, status: "done", endedAt: Date.now() },
+      );
       replaceSessionEntrySync(
         { sessionKey: sibling.childSessionKey, env: state.env },
-        { ...sibling.childSessionIdentity, updatedAt: Date.now() },
+        { ...sessionEntry, sessionId: "sibling-session", status: undefined },
       );
       const gate = createSweepGate();
       completeSubagentRunWithRecovery.mockImplementationOnce(gate.wait);
       await gate.check(sweeper, async (finish) => {
         expect(completeSubagentRunWithRecovery).toHaveBeenCalledOnce();
-        recordTerminal(sibling);
+        replaceSessionEntrySync(
+          { sessionKey: sibling.childSessionKey, env: state.env },
+          { ...sessionEntry, sessionId: "sibling-session", status: "done", endedAt: Date.now() },
+        );
         await finish();
         expect(completeSubagentRunWithRecovery).toHaveBeenLastCalledWith(
           expect.objectContaining({ runId: sibling.runId, outcome: { status: "ok" } }),

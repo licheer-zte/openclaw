@@ -5,10 +5,7 @@ import type { Browser, Locator, Page } from "playwright";
 import { expect, it, onTestFinished } from "vitest";
 import { WORKBOARD_STATUSES as statuses } from "../../../../packages/workboard-contract/src/index.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
-import {
-  createControlUiE2eContextOptions,
-  createControlUiE2eSuite,
-} from "../../e2e/control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import {
   installMockGateway,
   type MockGatewayControls,
@@ -64,7 +61,9 @@ function configSnapshot(hash: string) {
 
 async function newPage(options?: Parameters<Browser["newContext"]>[0]) {
   const context = await suite.browser.newContext({
-    ...createControlUiE2eContextOptions(),
+    locale: "en-US",
+    serviceWorkers: "block",
+    viewport: { height: 900, width: 1280 },
     ...options,
   });
   onTestFinished(() => context.close());

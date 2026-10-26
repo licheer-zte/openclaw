@@ -11,7 +11,10 @@ import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as agentDatabaseDisposal from "../../state/openclaw-agent-db-disposal.js";
 import * as agentDatabase from "../../state/openclaw-agent-db.js";
-import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { runAuthProbes, withAuthProbeStateOwnership } from "./list.probe.js";
 
 const runner = vi.hoisted(() =>
@@ -22,13 +25,19 @@ vi.mock("../../agents/isolated-completion.js", () => ({ runIsolatedCompletion: r
 
 const createNativeBridge = embeddedStateLock.createEmbeddedStateSignalBridge;
 const acquireNativeStateLock = embeddedStateLock.acquireEmbeddedStateLock;
-let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
+let state: OpenClawTestState;
 let signals: ReturnType<typeof captureNativeSignalBridge>;
-const provider = { apiKey: "config-key", baseUrl: "https://probe.invalid", models: [] };
+const provider = {
+  apiKey: "config-key",
+  baseUrl: "https://fixture.invalid/v1",
+  models: [],
+};
 const lockPath = () => state.path("locks", "gateway.state.lock");
 function expectOwnership(held: boolean) {
-  expect(fs.existsSync(lockPath())).toBe(held);
-  expect(signals.listenerCount("SIGTERM")).toBe(Number(held));
+  expect({
+    locked: fs.existsSync(lockPath()),
+    listeners: signals.listenerCount("SIGTERM"),
+  }).toEqual({ locked: held, listeners: held ? 1 : 0 });
 }
 beforeEach(async () => {
   state = await createOpenClawTestState({
@@ -38,7 +47,9 @@ beforeEach(async () => {
   vi.spyOn(embeddedStateLock, "createEmbeddedStateSignalBridge").mockImplementationOnce(
     signals.create,
   );
-  vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockReturnValue(123456);
+  vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockImplementation(
+    () => 123456,
+  );
   const options = {
     allowInTests: true,
     env: state.env,
@@ -50,10 +61,13 @@ beforeEach(async () => {
   );
 });
 afterEach(async () => {
-  signals.dispose();
-  vi.restoreAllMocks();
-  runner.mockReset();
-  await state.cleanup();
+  try {
+    signals.dispose();
+  } finally {
+    vi.restoreAllMocks();
+    runner.mockReset();
+    await state.cleanup();
+  }
 });
 
 async function probeParams(concurrency: number) {
@@ -97,6 +111,7 @@ it("holds state ownership for an in-flight sibling after progress rejects the pr
       runAuthProbes({
         ...params,
         onProgress(update) {
+          expect(update.total).toBe(2);
           if (update.label && ++starts === 2) {
             throw original;
           }
@@ -142,6 +157,7 @@ it("retains the staged directory and releases state ownership when database disp
     await expect(cleanup.run(() => runAuthProbes(params))).rejects.toMatchObject({
       cause: original,
     });
+    expect(stagedDir).toContain("openclaw-auth-probe-");
     expect(fs.existsSync(stagedDir!)).toBe(true);
     expect(
       agentDatabase

@@ -554,11 +554,6 @@ function PluginOverview(props: DetailProps): JSX.Element {
         (name) => ({ name }),
       ),
   );
-  const signInServer = createMemo(() =>
-    props.canMcpLogin && props.onMcpLogin
-      ? props.inspection?.mcpAuth?.find((entry) => entry.state !== "authorized")?.serverName
-      : undefined,
-  );
   return (
     <SettingsPage wide={true} carapace={true}>
       <PluginDetailShell
@@ -592,7 +587,6 @@ function PluginOverview(props: DetailProps): JSX.Element {
             fallback={
               <PluginLifecycle
                 {...props}
-                signInServer={signInServer()}
                 settingsHref={props.settingsHref ?? "#configuration"}
                 onSettings={() => props.onTabChange("configuration")}
                 plugin={plugin()}

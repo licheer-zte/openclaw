@@ -39,6 +39,12 @@ const pendingApproval = (id: string, timestamp: number, ship = "~bus"): PendingA
 });
 
 describe("tlon settings store", () => {
+  it("loads autoDiscoverChannels from the settings-store scry response", async () => {
+    const { manager } = createMockSettingsApi({ autoDiscoverChannels: true });
+    // Regression: the parser previously read the dead `autoDiscover` key.
+    expect((await manager.load()).autoDiscoverChannels).toBe(true);
+  });
+
   it("preserves oversized pending approvals loaded from persisted settings", async () => {
     const pendingApprovals = Array.from({ length: TLON_PENDING_APPROVAL_LIMIT + 1 }, (_, index) =>
       pendingApproval(`dm-${index}`, index, `~ship-${index}`),
@@ -64,10 +70,9 @@ describe("tlon settings store", () => {
     expect((await manager.load()).pendingApprovals).toEqual(stored.slice(0, 3));
   });
 
-  it("loads autoDiscoverChannels and applies live subscription updates", async () => {
-    const { manager, emit } = createMockSettingsApi({ autoDiscoverChannels: true });
-    // Regression: the parser previously read the dead `autoDiscover` key.
-    expect((await manager.load()).autoDiscoverChannels).toBe(true);
+  it("applies live autoDiscoverChannels updates delivered over the subscription", async () => {
+    const { manager, emit } = createMockSettingsApi({});
+    expect((await manager.load()).autoDiscoverChannels).toBeUndefined();
     const updates: TlonSettingsStore[] = [];
     await manager.startSubscription((settings) => updates.push(settings));
     await emit("autoDiscoverChannels", false);
@@ -88,15 +93,14 @@ describe("tlon settings store", () => {
     };
     const logs: string[] = [];
     const { manager, emit } = createMockSettingsApi({ pendingApprovals: [approval] }, logs);
-    const loaded = await manager.load();
-    expect(loaded.pendingApprovals).toEqual([approval]);
-    expect(loaded.autoDiscoverChannels).toBeUndefined();
+    expect((await manager.load()).pendingApprovals).toEqual([approval]);
     const updates: TlonSettingsStore[] = [];
     await manager.startSubscription((settings) => updates.push(settings));
     await emit("pendingApprovals", JSON.stringify([approval]));
 
     expect(updates[0]?.pendingApprovals).toEqual([approval]);
-    expect(logs.length).toBeGreaterThan(0);
+    expect(logs).toContain("[settings] Loaded");
+    expect(logs).toContain("[settings] Update: pendingApprovals");
     expect(logs.join("\n")).not.toContain("private-tlon-");
   });
 });

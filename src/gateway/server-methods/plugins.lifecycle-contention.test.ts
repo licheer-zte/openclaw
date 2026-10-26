@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { PluginLifecycleRuntimeApply } from "../../plugins/lifecycle.js";
@@ -17,12 +18,11 @@ import { createGatewayActiveWorkTracker } from "../server-reload-active-work.js"
 import { beginGatewayReloadLifecycle } from "../server-reload-generation.js";
 import { pluginMutationHandlers } from "./plugins-mutations.js";
 import { coldPlugin, readPluginState, pluginRequest } from "./plugins.test-support.js";
-import { expectRpcError, expectRpcResult } from "./rpc-response.test-support.js";
 
 it.each(["direct", "nested"] as const)(
   "rejects %s lifecycle contention before writes so the owning channel reload can finish",
-  (invocation) =>
-    withOpenClawTestState({ label: "plugin-lifecycle-contention" }, async (state) => {
+  async (invocation) => {
+    await withOpenClawTestState({ label: "plugin-lifecycle-contention" }, async (state) => {
       resetGatewayWorkAdmission();
       const pluginId = "lifecycle-contention";
       const { plugins } = await coldPlugin(state, pluginId);
@@ -39,8 +39,9 @@ it.each(["direct", "nested"] as const)(
         getRuntimeConfig: () => config,
         applyPluginLifecycleChange: applyRuntime,
       });
+      const handler = expectDefined(pluginMutationHandlers["plugins.setEnabled"], "enable handler");
       const methodRegistry = createGatewayMethodRegistry(
-        createCoreGatewayMethodDescriptors(pluginMutationHandlers),
+        createCoreGatewayMethodDescriptors({ "plugins.setEnabled": handler }),
       );
       const dispatch = (signal: AbortSignal) => {
         const options = pluginRequest("plugins.setEnabled", { pluginId, enabled: false }, context);
@@ -60,8 +61,9 @@ it.each(["direct", "nested"] as const)(
       const held = createDeferred();
       const beginDrain = createDeferred();
       let current = true;
+      const logReload = { warn: vi.fn(), info: vi.fn() };
       const tracker = createGatewayActiveWorkTracker({
-        params: { logReload: { warn: vi.fn(), info: vi.fn() } },
+        params: { logReload },
         reloadSignal: beginGatewayReloadLifecycle(),
       });
       const reload = withPluginLifecycleLease({ env: state.env }, () =>
@@ -76,22 +78,33 @@ it.each(["direct", "nested"] as const)(
       const { request, respond } = dispatch(controller.signal);
       try {
         await vi.waitFor(() => expect(respond).toHaveBeenCalledOnce(), { timeout: 1_000 });
-        expectRpcError(respond, {
-          code: "UNAVAILABLE",
-          retryable: true,
-          retryAfterMs: 1_000,
-          details: { mutationAccepted: false },
-          message: expect.stringContaining("retry"),
-        });
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "UNAVAILABLE",
+            retryable: true,
+            retryAfterMs: 1_000,
+            details: { mutationAccepted: false },
+            message: expect.stringContaining("retry"),
+          }),
+        );
         await request;
         expect(applyRuntime).not.toHaveBeenCalled();
         expect(await readPluginState(state)).toEqual(before);
         await reload;
+        expect(logReload.warn).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining("deferring until 1 gateway request(s) complete"),
+        );
         expect(getActiveGatewayRootWorkCount()).toBe(0);
 
         const retry = dispatch(new AbortController().signal);
         await retry.request;
-        expectRpcResult(retry.respond, expect.objectContaining({ ok: true, runtime }));
+        expect(retry.respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ ok: true, runtime }),
+          undefined,
+        );
         expect(applyRuntime).toHaveBeenCalledOnce();
         expect(
           JSON.parse(await fs.readFile(state.configPath, "utf8")).plugins.entries[pluginId].enabled,
@@ -104,5 +117,6 @@ it.each(["direct", "nested"] as const)(
         await Promise.allSettled([request, reload]);
         resetGatewayWorkAdmission();
       }
-    }),
+    });
+  },
 );

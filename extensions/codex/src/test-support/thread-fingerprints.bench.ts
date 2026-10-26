@@ -1,7 +1,7 @@
 /** Owner-only: node --expose-gc --import ./scripts/tsx.mjs extensions/codex/src/test-support/thread-fingerprints.bench.ts */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
@@ -24,33 +24,49 @@ function baseline(tools: readonly JsonValue[]) {
       .toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
   );
 }
-const algorithms = { baseline, candidate: codexLegacyDynamicToolsFingerprint };
-const fixture = new URL(
-  "../../../../test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.telegram-direct.json",
+const candidate = codexLegacyDynamicToolsFingerprint;
+const fixtureRoot = new URL(
+  "../../../../test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/",
   import.meta.url,
 );
-const catalogTools = JSON.parse(readFileSync(fixture, "utf8")) as CodexDynamicToolSpec[];
-const sourceTools = flattenCodexDynamicToolFunctions(catalogTools);
-const goldenCatalogs = [
-  catalogTools,
-  catalogTools.toReversed(),
-  sourceTools,
+function readCatalog(file: string): CodexDynamicToolSpec[] {
+  const value = JSON.parse(readFileSync(new URL(file, fixtureRoot), "utf8")) as
+    | CodexDynamicToolSpec[]
+    | { base: string; replace: Record<string, CodexDynamicToolSpec> };
+  return Array.isArray(value)
+    ? value
+    : readCatalog(value.base).map((tool) => value.replace[tool.name] ?? tool);
+}
+const catalogs = readdirSync(fixtureRoot)
+  .filter((file) => /^codex-dynamic-tools\..+\.json$/u.test(file))
+  .map((file) => ({ file, tools: readCatalog(file) }));
+assert.ok(catalogs.length > 0);
+let goldenCases = 0;
+for (const { tools } of catalogs) {
+  for (const catalog of [tools, tools.toReversed(), flattenCodexDynamicToolFunctions(tools)]) {
+    const legacy = baseline(catalog);
+    assert.equal(candidate(catalog), legacy);
+    assert.equal(
+      codexDynamicToolsFingerprint(catalog),
+      `sha256:${createHash("sha256").update(legacy).digest("hex")}`,
+    );
+    goldenCases++;
+  }
+}
+for (const catalog of [
+  [],
   [null, true, false, 0, -0, 1.5, "é", "e", "E", [1, null, "x"]],
   [JSON.parse('{"__proto__":{"x":1},"2":"two","10":"ten","a":"\\n\\\""}')],
-];
-for (const catalog of goldenCatalogs) {
-  const legacy = baseline(catalog);
-  assert.equal(algorithms.candidate(catalog), legacy);
-  assert.equal(
-    codexDynamicToolsFingerprint(catalog),
-    `sha256:${createHash("sha256").update(legacy).digest("hex")}`,
-  );
+]) {
+  assert.equal(candidate(catalog), baseline(catalog));
+  goldenCases++;
 }
 
 const samples = 5;
 const iterations = 10;
 const inspector = new Session();
 inspector.connect();
+const sourceTools = flattenCodexDynamicToolFunctions(catalogs[0]!.tools);
 function countWork(run: () => string) {
   const stringify = JSON.stringify;
   let calls = 0;
@@ -78,9 +94,12 @@ try {
       ...sourceTools[(index * 7) % sourceTools.length]!,
       name: `tool_${(index * 137) % size}`,
     }));
-    assert.equal(algorithms.candidate(tools), baseline(tools));
+    assert.equal(candidate(tools), baseline(tools));
     const cold = [];
-    for (const [name, fingerprint] of Object.entries(algorithms)) {
+    for (const [name, fingerprint] of [
+      ["baseline", baseline],
+      ["candidate", candidate],
+    ] as const) {
       const start = performance.now();
       fingerprint(tools);
       cold.push({ name, ms: performance.now() - start, ...countWork(() => fingerprint(tools)) });
@@ -90,7 +109,10 @@ try {
     }
     const measurements = [];
     for (let sample = 0; sample < samples; sample++) {
-      for (const [name, fingerprint] of Object.entries(algorithms)) {
+      for (const [name, fingerprint] of [
+        ["baseline", baseline],
+        ["candidate", candidate],
+      ] as const) {
         globalThis.gc?.();
         await inspector.post("HeapProfiler.startSampling", {
           samplingInterval: 4096,
@@ -112,12 +134,21 @@ try {
 } finally {
   inspector.disconnect();
 }
-const report = {
-  goldenCases: goldenCatalogs.length,
-  fixture: fixture.pathname,
-  samples,
-  iterations,
-  loadavg: loadavg(),
-  results,
-};
-console.log(JSON.stringify(report, null, 2));
+console.log(
+  JSON.stringify(
+    {
+      goldenCases,
+      catalogs: catalogs.map(({ file, tools }) => ({
+        file,
+        specs: tools.length,
+        functions: flattenCodexDynamicToolFunctions(tools).length,
+      })),
+      samples,
+      iterations,
+      loadavg: loadavg(),
+      results,
+    },
+    null,
+    2,
+  ),
+);

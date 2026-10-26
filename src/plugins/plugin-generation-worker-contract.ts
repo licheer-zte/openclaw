@@ -22,13 +22,8 @@ export type GenerationWorkerInput = (
       callbackPort?: MessagePort;
       progressSignal?: Int32Array<SharedArrayBuffer>;
     }
-  | {
-      operation: "call";
-      captureId: number;
-      handle: number;
-      args: GenerationWireValue[];
-      asynchronous: boolean;
-    }
+  | { operation: "call"; handle: number; args: GenerationWireValue[]; asynchronous: boolean }
+  | { operation: "close" }
 ) & { nativeLoads?: string[] };
 export type GenerationWorkerReply = (
   | { value: GenerationWireValue; resources: number; admission?: GenerationWireValue }

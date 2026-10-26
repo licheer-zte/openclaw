@@ -172,8 +172,8 @@ beforeEach(() => {
   params = createFixture();
 });
 
-it("stops admitted session work while preserving a detached producer", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+it("stops admitted session work while preserving a detached producer", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
       session: { store: state.statePath("agents", "{agentId}", "sessions", "sessions.sqlite") },
     };
@@ -225,10 +225,11 @@ it("stops admitted session work while preserving a detached producer", () =>
       admission.release();
       detachActiveEmbeddedRun(entry!.sessionId, handle);
     }
-  }));
+  });
+});
 
-it("stops selected-agent work without cancelling the compatibility owner's run", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+it("stops selected-agent work without cancelling the compatibility owner's run", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
       session: {
         scope: "global",
@@ -313,7 +314,8 @@ it("stops selected-agent work without cancelling the compatibility owner's run",
         registration.cleanup();
       }
     }
-  }));
+  });
+});
 
 it.each(["pending", "active", "accepted", "terminal", "metadata"] as const)(
   "requires accepted custody and rejects changed mention recipients for a %s retry",

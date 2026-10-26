@@ -1,6 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
-import { nextEventLoopTurn } from "../../../test/helpers/promise.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { firstMockArg } from "./adapters/child.test-support.js";
 import { encodeServiceChildMessage } from "./service-child-protocol.js";
@@ -52,7 +51,9 @@ it("joins failed POSIX startup cleanup before returning the original executable 
         errorDetails: { message: "spawn /synthetic-missing-command ENOENT", code: "ENOENT" },
       }),
     );
-    await nextEventLoopTurn();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(settled).toBe(false);
     expect(stub.killMock).not.toHaveBeenCalled();
 

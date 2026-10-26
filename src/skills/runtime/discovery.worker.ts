@@ -126,11 +126,10 @@ serveWorkerTasks<SkillsDiscoveryOutput>((input, channel) => {
         sourceReads.set(environmentKey, batch);
       }
       const sources = readWorkspaceSkillSources(sourceRequest, batch);
-      // Fingerprints need precedence winners, not collision diagnostics.
-      const entries = mergeSkillRecords(sources.entries, key, false);
+      const entries = mergeSkillRecords(sources.entries, key, []);
       appendLowerPrecedenceSkillRecords(
         entries,
-        mergeSkillRecords(sources.executionEntries, key, false),
+        mergeSkillRecords(sources.executionEntries, key, []),
         () => {},
       );
       // Generated plugin links are shared outputs; watch their canonical sources instead.

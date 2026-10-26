@@ -1,4 +1,3 @@
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { OpenClawPluginNodeHostCommand } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -36,13 +35,6 @@ import type {
   CodexSessionTranscriptPage,
 } from "./session-catalog-types.js";
 import { listVisiblePage } from "./session-catalog-visible-page.js";
-
-const loadCatalogTranscript = createLazyRuntimeModule(
-  () => import("./session-catalog-transcript.js"),
-);
-const loadNodeContinue = createLazyRuntimeModule(
-  () => import("./session-catalog-node-continue.js"),
-);
 
 export function createCodexSessionCatalogNodeHostCommands(
   controlFactory: CodexSessionCatalogControlFactory,
@@ -155,7 +147,7 @@ export function createCodexSessionCatalogNodeHostCommands(
       );
     }),
     transcriptCommand(CODEX_CATALOG_TRANSCRIPT_READ_COMMAND, async (control, action) => {
-      const { readCodexCatalogTranscriptPage } = await loadCatalogTranscript();
+      const { readCodexCatalogTranscriptPage } = await import("./session-catalog-transcript.js");
       return readCodexCatalogTranscriptPage(control, action);
     }),
     createCodexTerminalNodeHostCommand(bindRequest),
@@ -213,7 +205,7 @@ export async function readCodexSessionTranscript(params: {
     readCodexCatalogTranscriptPage,
     readLegacyCodexTranscriptPage,
     projectCodexCatalogTranscriptPageForDisplay,
-  } = await loadCatalogTranscript();
+  } = await import("./session-catalog-transcript.js");
   if (params.source || params.hostId === CODEX_LOCAL_SESSION_HOST_ID) {
     const page = await readCodexCatalogTranscriptPage(params.control, {
       threadId: params.threadId,
@@ -267,7 +259,7 @@ export async function readCodexSessionTranscript(params: {
           }),
         { threadId: params.threadId, cursor, limit },
       );
-  const { nodeLabel } = await loadNodeContinue();
+  const { nodeLabel } = await import("./session-catalog-node-continue.js");
   return {
     hostId: params.hostId,
     label: nodeLabel(node),

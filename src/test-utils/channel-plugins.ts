@@ -146,16 +146,3 @@ export const createBindingResolverTestPlugin = (params: {
       }
     : {}),
 });
-
-export function createDiscordNativeCommandRegistry(): PluginRegistry {
-  return createTestRegistry([
-    {
-      pluginId: "discord",
-      plugin: createChannelTestPluginBase({
-        id: "discord",
-        capabilities: { nativeCommands: true, chatTypes: ["direct"] },
-      }),
-      source: "test",
-    },
-  ]);
-}

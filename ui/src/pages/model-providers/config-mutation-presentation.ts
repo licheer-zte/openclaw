@@ -1,18 +1,9 @@
-import {
-  action,
-  affects,
-  createMemo,
-  createOptimisticStore,
-  createSignal,
-  onSettled,
-  refresh,
-} from "solid-js";
+import { action, affects, createMemo, createSignal, onSettled, refresh } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelDefaultsSaveField } from "./config-mutation.ts";
 import type { ModelProvidersData } from "./load.ts";
-import { showProfileActionError } from "./profiles-view.tsx";
 
-type ModelProviderMutationScope = {
+export type ModelProviderMutationScope = {
   client: GatewayBrowserClient | null;
   connectionEpoch: number;
   agentId: string;
@@ -37,12 +28,11 @@ export function createModelProviderMutationPresentation(deps: {
   const configObject = createMemo(deps.readConfigObject);
   const presentation = createMemo(() => {
     const owner = scope();
-    const [saving, setSaving] = createOptimisticStore<Record<string, boolean>>({});
     const [defaultsSaving, setDefaultsSaving] = createSignal<{
       field: ModelDefaultsSaveField;
       retired: Promise<void>;
     } | null>(null);
-    return { owner, defaultsSaving, setDefaultsSaving, saving, setSaving };
+    return { owner, defaultsSaving, setDefaultsSaving };
   });
   const isCurrent = (view: ReturnType<typeof presentation>, retired: Promise<void>) =>
     deps.isCurrent(view.owner) && retired === lifetime.promise;
@@ -105,46 +95,12 @@ export function createModelProviderMutationPresentation(deps: {
     }
   }
 
-  const presentLogout = action(function* (
-    view: ReturnType<typeof presentation>,
-    cardId: string,
-    completion: Promise<void>,
-    retired: Promise<void>,
-  ) {
-    if (isCurrent(view, retired)) {
-      view.setSaving((saving) => {
-        saving[cardId] = true;
-      });
-      affects(authStatus);
-    }
-    yield Promise.race([completion, retired]);
-    if (isCurrent(view, retired)) {
-      // The logout owner already refreshed the accepted authentication facts.
-      yield refresh(authStatus);
-    }
-  });
-
-  async function logoutStarted(receipt: { cardId: string; completion: Promise<void> }) {
-    const view = presentation();
-    const retired = lifetime.promise;
-    // Let confirmation teardown and owner publication settle before joining.
-    await new Promise<void>((resolve) => {
-      onSettled(resolve);
-    });
-    try {
-      await presentLogout(view, receipt.cardId, receipt.completion, retired);
-    } catch (error) {
-      if (isCurrent(view, retired)) {
-        showProfileActionError(error);
-      }
-    }
-  }
-
   return {
-    logoutStarted,
-    logoutSaving: () => presentation().saving,
+    scope,
+    isCurrent: deps.isCurrent,
     authStatus,
     configObject,
+    retirement: () => lifetime.promise,
     retire() {
       presentation().setDefaultsSaving(null);
       lifetime.resolve();

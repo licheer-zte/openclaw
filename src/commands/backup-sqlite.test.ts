@@ -28,8 +28,11 @@ vi.mock("../config/config.js", async (importOriginal) => {
   const { createTestConfigReadMocks } = await import("./test-runtime-config-helpers.js");
   return {
     ...actual,
-    ...createTestConfigReadMocks(configMocks, "getRuntimeConfig"),
+    getRuntimeConfig: configMocks.getRuntimeConfig,
+    loadConfig: configMocks.getRuntimeConfig,
     readConfigFileSnapshot: async () => ({ config: configMocks.getRuntimeConfig() }),
+    captureRuntimeConfigAsyncReader: createTestConfigReadMocks(configMocks, "getRuntimeConfig")
+      .captureRuntimeConfigAsyncReader,
   };
 });
 

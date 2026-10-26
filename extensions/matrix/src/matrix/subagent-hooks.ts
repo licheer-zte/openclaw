@@ -60,7 +60,16 @@ export function handleMatrixSubagentDeliveryTarget(event: {
     threadId?: string | number;
   };
   expectsCompletionMessage: boolean;
-}) {
+}):
+  | {
+      origin: {
+        channel: "matrix";
+        accountId: string;
+        to: string;
+        threadId?: string;
+      };
+    }
+  | undefined {
   if (!event.expectsCompletionMessage) {
     return undefined;
   }
@@ -108,7 +117,7 @@ export function handleMatrixSubagentDeliveryTarget(event: {
 
   return {
     origin: {
-      channel: "matrix" as const,
+      channel: "matrix",
       accountId: binding.accountId,
       to: `room:${roomId}`,
       ...(threadId ? { threadId } : {}),

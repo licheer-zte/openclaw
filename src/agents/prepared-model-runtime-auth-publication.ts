@@ -4,7 +4,6 @@ import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
 import {
-  capturePreparedModelRuntimeRefreshError,
   isPreparedModelRuntimePluginLifecycleFailure,
   PreparedModelRuntimePublicationSupersededError,
 } from "./prepared-model-runtime.errors.js";
@@ -26,7 +25,6 @@ export type PreparedModelRuntimeAuthMutation = {
   agentDir?: string;
   affectsInheritedStores: boolean;
   profileSetChanged: boolean;
-  availabilityOnly?: boolean;
 };
 
 type PreparedModelRuntimeAuthTransaction = {
@@ -421,7 +419,7 @@ export class PreparedModelRuntimeAuthPublicationOwner {
           recordRefreshError &&
           !(error instanceof PreparedModelRuntimePublicationSupersededError)
         ) {
-          owner.refreshError = capturePreparedModelRuntimeRefreshError(error);
+          owner.refreshError = toStringifiedError(error);
           owner.needsRefresh = true;
           if (owner.provenance === "configured") {
             owner.catalogRecovery ??= {
@@ -448,15 +446,8 @@ export function invalidatePreparedModelRuntimeOwnersForAuthMutation(
   invalidatedOwners: PreparedModelRuntimeOwner[];
   invalidatedConfiguredAgentIds: Set<string>;
 } {
-  // Availability reads use the auth snapshot owner's current usage view. Rebuilding here
-  // would retire otherwise-current plugins and supersede concurrent credential publications.
-  if (event.availabilityOnly) {
-    return { invalidatedOwners: [], invalidatedConfiguredAgentIds: new Set() };
-  }
   const agentDir = normalizeOptionalDir(event.agentDir);
-  const staleError = capturePreparedModelRuntimeRefreshError(
-    new Error("prepared model runtime owner is stale after auth mutation"),
-  );
+  const staleError = new Error("prepared model runtime owner is stale after auth mutation");
   const invalidatedOwners: PreparedModelRuntimeOwner[] = [];
   const invalidatedConfiguredAgentIds = new Set<string>();
   for (const owner of owners.values()) {

@@ -3,6 +3,7 @@ import { vi } from "vitest";
 import type { ControlUiGitHubPreviewIdentity } from "./preview-contract.js";
 import { loadControlUiGitHubPreview } from "./preview.js";
 
+// List endpoints such as /pulls/{n}/commits return arrays, not objects.
 export function githubJson(
   body: unknown,
   status = 200,
@@ -27,6 +28,10 @@ export function previewFetch(
   respond: (url: string, init?: RequestInit) => Response | Promise<Response>,
 ) {
   return vi.fn<typeof fetch>(async (input, init) => respond(requestUrl(input), init));
+}
+
+function conditionalJson(body: unknown, etag: string) {
+  return Response.json(body, { headers: { etag } });
 }
 
 export function coauthorTrailers(...authors: [string, number][]) {
@@ -98,7 +103,10 @@ export function conditionalPreviewFixture(
   options: {
     authors?: [string, number][];
     identity?: ControlUiGitHubPreviewIdentity;
+    avatarUrl?: string | null;
+    honorValidators?: boolean;
     repository?: (readCount: number) => Response;
+    avatarResponse?: () => Response;
   } = {},
 ) {
   const state = { item: 1, commits: 1, avatar: 1, login: "steipete", unavailable: false };
@@ -113,7 +121,7 @@ export function conditionalPreviewFixture(
       if (state.avatar === 2) {
         await refreshed.promise;
       }
-      return pngResponse([state.avatar]);
+      return options.avatarResponse?.() ?? pngResponse([state.avatar]);
     }
     if (url.endsWith("/repos/openclaw/openclaw")) {
       return options.repository?.(++repositoryReads) ?? publicRepository();
@@ -125,23 +133,23 @@ export function conditionalPreviewFixture(
     if (state.unavailable) {
       return githubJson({}, 404);
     }
-    if (validator === etag) {
+    if (options.honorValidators !== false && validator === etag) {
       return new Response(null, { status: 304 });
     }
-    return githubJson(
+    const avatarUrl =
+      options.avatarUrl === null
+        ? undefined
+        : (options.avatarUrl ?? "https://avatars.githubusercontent.com/u/58493");
+    return conditionalJson(
       commits
         ? options.authors?.length
           ? coauthorTrailers(...options.authors)
-          : []
+          : [{ commit: { message: "No co-authors" } }]
         : previewPayload({
             title: `Version ${state.item}`,
-            user: {
-              login: state.login,
-              avatar_url: "https://avatars.githubusercontent.com/u/58493",
-            },
+            user: { login: state.login, avatar_url: avatarUrl },
           }),
-      200,
-      { etag },
+      etag,
     );
   });
   const target = previewTarget(number, kind);

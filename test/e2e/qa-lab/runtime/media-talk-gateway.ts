@@ -344,7 +344,6 @@ async function runWebchatAutoTtsProof(options: ProducerOptions): Promise<string>
   try {
     gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
-      initializeCurrentRuntimeState: true,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
       providerMode: "mock-openai",
@@ -679,7 +678,6 @@ async function runActiveTalkAgentRunProof(options: ProducerOptions): Promise<str
   try {
     gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
-      initializeCurrentRuntimeState: true,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
       providerMode: "mock-openai",

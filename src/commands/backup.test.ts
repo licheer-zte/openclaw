@@ -3,7 +3,6 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
-import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import { formatCliOperatorError } from "../cli/failure-output.js";
 import {
   registerSignalExitBarrier,
@@ -67,9 +66,13 @@ describe("backup commands", () => {
   );
 
   async function writeWorkspaceBackupConfig(workspaceDir: string) {
-    await writeFixtureJson(path.join(stateDir, "openclaw.json"), {
-      agents: { ownership: "explicit", entries: { main: { workspace: workspaceDir } } },
-    });
+    await fs.writeFile(
+      path.join(stateDir, "openclaw.json"),
+      JSON.stringify({
+        agents: { ownership: "explicit", entries: { main: { workspace: workspaceDir } } },
+      }),
+      "utf8",
+    );
   }
 
   async function prepareWorkspace() {
@@ -337,7 +340,7 @@ describe("backup commands", () => {
 
     await withTestDir({ prefix: "openclaw-backup-link-" }, async (symlinkDir) => {
       const symlinkPath = path.join(symlinkDir, "linked-state");
-      await writeFixtureJson(path.join(stateDir, "openclaw.json"), {});
+      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
       await fs.symlink(stateDir, symlinkPath);
 
       const runtime = createTestRuntime();

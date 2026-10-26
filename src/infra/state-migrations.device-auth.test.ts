@@ -7,7 +7,7 @@ import { emptyClientCredentialReceipt } from "./client-credential-receipt.js";
 import type { ClientCredentialDatabase } from "./client-credential-schema.js";
 import { runClientCredentialOperation } from "./client-credential-store.js";
 import { withClientCredentialStore } from "./client-credential-store.test-support.js";
-import { loadDeviceAuthToken as readDeviceAuthTokenForTest } from "./device-auth-store.js";
+import { readDeviceAuthTokenForTest } from "./device-auth-store.test-support.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -125,10 +125,10 @@ describe("legacy device-auth Doctor migration", () => {
       expect(result.warnings).toEqual([]);
       if (canonical) {
         expect(result.notices).toContain("Preserved 1 canonical SQLite device-auth token.");
-        expect((await readToken())?.token).toBe("canonical-token");
+        expect(readToken()?.token).toBe("canonical-token");
       } else {
         expect(result.changes).toEqual(["Migrated 1 device-auth token to SQLite."]);
-        expect(await readToken()).toEqual({
+        expect(readToken()).toEqual({
           token: "legacy-token",
           role: "operator",
           scopes: ["operator.read", "operator.write"],
@@ -169,7 +169,7 @@ describe("legacy device-auth Doctor migration", () => {
 
     fs.writeFileSync(sourcePath, original.toString("utf8").replace("legacy-token", "répaired-�"));
     expect((await migrate()).warnings).toEqual([]);
-    expect((await readToken())?.token).toBe("répaired-�");
+    expect(readToken()?.token).toBe("répaired-�");
   });
 
   it.each(
@@ -183,7 +183,7 @@ describe("legacy device-auth Doctor migration", () => {
       const result = await migrate();
       if (token === "legacy-token") {
         expect(result.changes).toEqual(["Migrated 1 device-auth token to SQLite."]);
-        expect((await readToken())?.token).toBe("legacy-token");
+        expect(readToken()?.token).toBe("legacy-token");
         expect((await migrate()).changes).toEqual([]);
       } else {
         expect(result.changes).toEqual([]);
@@ -209,8 +209,7 @@ describe("legacy device-auth Doctor migration", () => {
     expect((await migrate()).warnings).toEqual([]);
     for (const { profile, pathname, raw } of retained) {
       expect(
-        (await readDeviceAuthTokenForTest({ deviceId: `device-${profile}`, role: "node", env }))
-          ?.token,
+        readDeviceAuthTokenForTest({ deviceId: `device-${profile}`, role: "node", env })?.token,
       ).toBe(`token-${profile}`);
       expect(fs.readFileSync(pathname, "utf8")).toBe(raw);
     }
@@ -231,7 +230,7 @@ describe("legacy device-auth Doctor migration", () => {
       ).toEqual({ kind: "changed", changed: true });
       fs.writeFileSync(sourcePath, Buffer.concat([original, Buffer.from("edited-invalid-json")]));
       expect((await migrate()).warnings).toEqual([]);
-      expect(await readToken()).toBeNull();
+      expect(readToken()).toBeNull();
       expect(fs.existsSync(sourcePath)).toBe(true);
     },
   );

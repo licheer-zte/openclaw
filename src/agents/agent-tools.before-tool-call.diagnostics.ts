@@ -244,24 +244,44 @@ export function resolveToolErrorDiagnostic(
   };
 }
 
-export function resolveToolResultTerminalDiagnostic(result: unknown, durationMs: number) {
+type ResolvedToolTerminalDiagnostic =
+  | {
+      type: "tool.execution.blocked";
+      deniedReason: "tool_result_blocked";
+      reason: "tool_result_blocked";
+    }
+  | {
+      type: "tool.execution.completed";
+      durationMs: number;
+    }
+  | {
+      type: "tool.execution.error";
+      durationMs: number;
+      errorCategory: "tool_result_error";
+      terminalReason: DiagnosticToolTerminalReason;
+    };
+
+export function resolveToolResultTerminalDiagnostic(
+  result: unknown,
+  durationMs: number,
+): ResolvedToolTerminalDiagnostic {
   // Tool execution may resolve with a structured failure. Classify that here
   // so every diagnostic consumer sees one canonical terminal outcome.
   const failureKind = resolveToolResultFailureKind(result);
   if (!failureKind) {
-    return { type: "tool.execution.completed" as const, durationMs };
+    return { type: "tool.execution.completed", durationMs };
   }
   if (failureKind === "blocked") {
     return {
-      type: "tool.execution.blocked" as const,
-      deniedReason: "tool_result_blocked" as const,
-      reason: "tool_result_blocked" as const,
+      type: "tool.execution.blocked",
+      deniedReason: "tool_result_blocked",
+      reason: "tool_result_blocked",
     };
   }
   return {
-    type: "tool.execution.error" as const,
+    type: "tool.execution.error",
     durationMs,
-    errorCategory: "tool_result_error" as const,
+    errorCategory: "tool_result_error",
     terminalReason: failureKind,
   };
 }
@@ -299,8 +319,7 @@ function canonicalSkillFile(value: string | undefined): string | undefined {
     : undefined;
 }
 
-/** Builds the usage match for one resolved skill, keyed by its canonical SKILL.md file. */
-export function resolvedSkillUsageMatch(params: {
+function resolvedSkillUsageMatch(params: {
   activation: SkillUsageMatch["activation"];
   skill: Pick<Skill, "name" | "filePath"> & Partial<Pick<Skill, "source" | "sourceInfo">>;
 }): SkillUsageMatch {

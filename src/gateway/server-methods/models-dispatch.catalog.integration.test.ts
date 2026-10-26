@@ -7,7 +7,6 @@ import type { ModelsListResult } from "../../../packages/gateway-protocol/src/sc
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  catalogTransportModels,
   catalogReply,
   catalogAgents,
   catalogSessionRpc,
@@ -103,7 +102,18 @@ it("dispatches a discovered model outside the agent workspace and preserves it a
   const token = "catalog-dispatch-gateway-token";
   const cfg = {
     cron: { enabled: false },
-    models: catalogTransportModels(provider, "configured-transport"),
+    models: {
+      providers: {
+        [provider]: {
+          baseUrl: "",
+          models: [],
+          request: {
+            allowPrivateNetwork: true,
+            headers: { "X-Dispatch-Request": "configured-transport" },
+          },
+        },
+      },
+    },
     agents: catalogAgents(state, {
       skipBootstrap: true,
       modelPolicy: { allow: [`${provider}/*`] },

@@ -1,7 +1,6 @@
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
   SessionCatalogEntrySnapshot,
@@ -38,18 +37,6 @@ import type {
   CodexSessionCatalogParams,
 } from "./session-catalog-types.js";
 import { CodexCatalogVisiblePage } from "./session-catalog-visible-page.js";
-
-const loadCatalogAdoption = createLazyRuntimeModule(() => import("./session-catalog-adoption.js"));
-const loadSessionCatalog = createLazyRuntimeModule(async () => {
-  const { sessionCatalogAdoptedSourceKey } = await import("openclaw/plugin-sdk/session-catalog");
-  return { sessionCatalogAdoptedSourceKey };
-});
-const loadNodeAdoption = createLazyRuntimeModule(
-  () => import("./session-catalog-node-adoption.js"),
-);
-const loadNodeContinue = createLazyRuntimeModule(
-  () => import("./session-catalog-node-continue.js"),
-);
 
 type ListParams = {
   agentId?: string;
@@ -136,8 +123,8 @@ async function projectLocalHost(
   page: CodexSessionCatalogPage,
 ): Promise<CodexSessionCatalogHost> {
   params.signal?.throwIfAborted();
-  const { listAdoptedSessionEntries } = await loadCatalogAdoption();
-  const { sessionCatalogAdoptedSourceKey } = await loadSessionCatalog();
+  const { listAdoptedSessionEntries } = await import("./session-catalog-adoption.js");
+  const { sessionCatalogAdoptedSourceKey } = await import("openclaw/plugin-sdk/session-catalog");
   params.signal?.throwIfAborted();
   const finishTiming = startCodexCatalogListTiming("adoptionSumMs", "adoptionCalls");
   let adopted: Awaited<ReturnType<typeof listAdoptedSessionEntries>>;
@@ -449,8 +436,10 @@ class CodexCatalogListDriver {
     }
     params.signal?.throwIfAborted();
     this.nodeSnapshots.observe(inventory);
-    const { listNodeAdoptedSessionEntries, nodeAdoptedSourceKey } = await loadNodeAdoption();
-    const { compareNodeLabels, listPairedNode, nodeLabel } = await loadNodeContinue();
+    const { listNodeAdoptedSessionEntries, nodeAdoptedSourceKey } =
+      await import("./session-catalog-node-adoption.js");
+    const { compareNodeLabels, listPairedNode, nodeLabel } =
+      await import("./session-catalog-node-continue.js");
     params.signal?.throwIfAborted();
     const adopted = listNodeAdoptedSessionEntries({
       agentId,

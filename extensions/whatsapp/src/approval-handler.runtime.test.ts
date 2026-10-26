@@ -82,26 +82,29 @@ describe("whatsappApprovalNativeRuntime", () => {
     expect(payload.reactionPayload.allowedDecisions).toEqual(["allow-once", "deny"]);
   });
 
-  it.each([
-    ["explicit account", {}, "ops", "ops"],
-    [
-      "configured default",
-      { channels: { whatsapp: { defaultAccount: "work", accounts: { work: {} } } } },
-      undefined,
-      "work",
-    ],
-  ] as const)("normalizes targets with %s", async (_name, cfg, accountId, expectedAccount) => {
+  it("normalizes WhatsApp targets and carries account ids into prepared delivery", async () => {
     await expect(
       transport.prepareTarget({
         ...approvalContext(),
-        cfg,
-        accountId,
-        context: { accountId },
+        accountId: "ops",
+        context: { accountId: "ops" },
         plannedTarget,
       }),
     ).resolves.toEqual({
-      dedupeKey: expect.stringContaining(`${expectedAccount}:`),
-      target: { to: "+15551230000", accountId: expectedAccount },
+      dedupeKey: expect.any(String),
+      target: { to: "+15551230000", accountId: "ops" },
+    });
+  });
+
+  it("resolves the configured default account before binding native reactions", async () => {
+    await expect(
+      transport.prepareTarget({
+        cfg: { channels: { whatsapp: { defaultAccount: "work", accounts: { work: {} } } } },
+        plannedTarget,
+      } as never),
+    ).resolves.toEqual({
+      dedupeKey: expect.stringContaining("work:"),
+      target: { to: "+15551230000", accountId: "work" },
     });
   });
 });

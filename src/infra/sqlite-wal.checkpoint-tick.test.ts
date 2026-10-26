@@ -1,3 +1,4 @@
+import { setImmediate as realImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createEnteredGate } from "../agents/entered-gate.test-support.js";
@@ -106,9 +107,15 @@ describe("sqlite WAL checkpoint tick", () => {
   });
 
   it("checkpoints on the maintenance tick and vacuums only on the periodic pass", async () => {
-    const clock = sqliteSchedulerClock();
+    vi.useFakeTimers();
     const { db, dbPath, pragma } = createDatabase();
     const freelistCount = () => pragma("freelist_count");
+    // The periodic pass yields between vacuum units on real immediates that fake timers do not own.
+    const settle = async () => {
+      for (let index = 0; index < 64; index += 1) {
+        await realImmediate();
+      }
+    };
     configureSqlitePreSchemaPragmas(db);
     const maintenance = resources.maintain(db, {
       busyTimeoutMs: 1_000,
@@ -123,16 +130,16 @@ describe("sqlite WAL checkpoint tick", () => {
     // Commits below the inline threshold leave every frame for the maintenance tick.
     expect(maintenance.health).toBeUndefined();
 
-    await clock.advanceBy(10_000);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await settle();
 
     const ticked = expectDefined(maintenance.health, "WAL tick health");
     expect(ticked).toMatchObject({ state: "complete", checkpointedFrames: ticked.logFrames });
     expect(ticked.checkpointedFrames).toBeGreaterThan(0);
     expect(freelistCount()).toBe(freeBefore);
 
-    for (let tick = 0; tick < 5; tick++) {
-      await clock.advanceBy(10_000);
-    }
+    await vi.advanceTimersByTimeAsync(50_000);
+    await settle();
     expect(freelistCount()).toBeLessThan(freeBefore);
   });
 });

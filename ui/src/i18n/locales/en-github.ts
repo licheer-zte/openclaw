@@ -93,7 +93,6 @@ const enGitHub = {
       checksRunning: "Running",
       checksSkipped: "Skipped",
       checksTitle: "Checks",
-      automationNoChecks: "No CI checks reported.",
       codeChanges: "Code changes",
       status: "Status",
       rateLimitedShort: "GitHub is limiting updates. PR info may be outdated.",

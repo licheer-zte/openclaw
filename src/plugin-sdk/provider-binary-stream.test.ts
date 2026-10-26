@@ -1,6 +1,5 @@
 import { setImmediate as waitForImmediate } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
-import { makeStallingStream } from "../infra/http-body.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createBoundedProviderBinaryStream } from "./provider-binary-stream.js";
 
@@ -40,7 +39,12 @@ function track<T>(work: Promise<T>) {
   return { state, result };
 }
 function bytesSource(cancel: UnderlyingSource<Uint8Array>["cancel"]) {
-  return makeStallingStream([Uint8Array.from([1, 2, 3, 4, 5])], cancel);
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(Uint8Array.from([1, 2, 3, 4, 5]));
+    },
+    cancel,
+  });
 }
 
 it("shares finalization when source cancellation reenters release", async () => {

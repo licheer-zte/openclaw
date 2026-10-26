@@ -18,7 +18,6 @@ type SeedWorkspaceBootstrapParams = {
   nowMs?: number;
   stateOptions?: OpenClawStateDatabaseOptions;
   beforePersistentApply?: () => void;
-  beforePersistentEffect?: () => Promise<void>;
   mergeSetupState?: typeof mergeWorkspaceSetupState;
 };
 
@@ -81,7 +80,6 @@ async function seedWorkspaceBootstrapOwned(
     return "consumed";
   }
 
-  await params.beforePersistentEffect?.();
   assertSeedCurrent();
   await fs.mkdir(dir, { recursive: true });
   assertCurrent();
@@ -93,8 +91,6 @@ async function seedWorkspaceBootstrapOwned(
   let created = false;
   if (!bootstrapExists) {
     try {
-      await params.beforePersistentEffect?.();
-      assertSeedCurrent();
       await workspaceRoot.write(DEFAULT_BOOTSTRAP_FILENAME, params.content, {
         overwrite: false,
         assertBeforeMutation: assertSeedCurrent,
@@ -132,7 +128,6 @@ async function seedWorkspaceBootstrapOwned(
 
   if (!initialState.bootstrapSeededAt) {
     const nowMs = params.nowMs ?? Date.now();
-    await params.beforePersistentEffect?.();
     assertSeedCurrent();
     await (params.mergeSetupState ?? mergeWorkspaceSetupState)(
       dir,

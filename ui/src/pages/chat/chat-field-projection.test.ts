@@ -16,10 +16,6 @@ function observe<T>(read: () => T): T[] {
   createEffect(read, (value) => void values.push(value));
   return values;
 }
-function published<T>(actual: T, expected: T) {
-  flush();
-  expect(actual).toEqual(expected);
-}
 
 it("publishes fields independently while owner reads and array identity stay synchronous", () => {
   const owner = { loading: false, messages: ["first"], unrelated: 0 };
@@ -27,25 +23,27 @@ it("publishes fields independently while owner reads and array identity stay syn
     expect(projectChatFields(owner, ["loading", "messages"])).toBe(owner);
     return { messages: observe(() => owner.messages), loading: observe(() => owner.loading) };
   });
-  const expectPublished = (expectedMessages: string[][], expectedLoading: boolean[]) => {
-    flush();
-    expect({ messages, loading }).toEqual({ messages: expectedMessages, loading: expectedLoading });
-  };
   flush();
   const next = ["first", "second"];
   owner.messages = next;
   expect(owner.messages).toBe(next);
   expect(messages).toEqual([["first"]]);
-  expectPublished([["first"], ["first", "second"]], [false]);
+  flush();
+  expect(messages).toEqual([["first"], ["first", "second"]]);
   expect(messages[1]).toBe(next);
+  expect(loading).toEqual([false]);
 
   owner.messages = next;
   owner.unrelated += 1;
-  expectPublished([["first"], ["first", "second"]], [false]);
+  flush();
+  expect(messages).toHaveLength(2);
+  expect(loading).toEqual([false]);
 
   owner.loading = true;
   expect(owner.loading).toBe(true);
-  expectPublished([["first"], ["first", "second"]], [false, true]);
+  flush();
+  expect(loading).toEqual([false, true]);
+  expect(messages).toHaveLength(2);
 });
 
 it("keeps callback values and existing accessor ownership when selecting all fields", () => {
@@ -60,8 +58,10 @@ it("keeps callback values and existing accessor ownership when selecting all fie
       ownedValue = value;
     },
   };
+  const accessor = Object.getOwnPropertyDescriptor(owner, "owned");
   root(() => projectChatFields(owner));
   expect(owner.callback).toBe(callback);
+  expect(Object.getOwnPropertyDescriptor(owner, "owned")).toEqual(accessor);
   owner.owned = "second";
   expect(ownedValue).toBe("second");
   const replacement = () => "replacement";
@@ -75,15 +75,18 @@ it("observes current owner values after pre-render writes and a previous reader 
   const owner = root(() => projectChatFields({ value: "initial" }));
   owner.value = "before render";
   const first = createRoot((dispose) => ({ dispose, values: observe(() => owner.value) }));
-  published(first.values, ["before render"]);
+  flush();
+  expect(first.values).toEqual(["before render"]);
   first.dispose();
 
   owner.value = "between readers";
   const second = root(() => observe(() => owner.value));
-  published(second, ["between readers"]);
+  flush();
+  expect(second).toEqual(["between readers"]);
   owner.value = "updated";
   expect(owner.value).toBe("updated");
-  published(second, ["between readers", "updated"]);
+  flush();
+  expect(second).toEqual(["between readers", "updated"]);
   expect(first.values).toEqual(["before render"]);
 });
 
@@ -92,21 +95,28 @@ it("publishes error changes without letting recovery clear another writer's iden
     const owner = createTestPageState(makeChatHost());
     return { state: owner, frames: observe(() => [owner.lastError, owner.chatError]) };
   });
-  const check = (lastError: string | null, chatError: string | null, count: number) => {
-    expect(state).toMatchObject({ lastError, chatError });
-    flush();
-    expect(frames).toHaveLength(count);
-    expect(frames.at(-1)).toEqual([lastError, chatError]);
-  };
-  check(null, null, 1);
+  flush();
   const clear = state.setRecoverableChatError("read failed");
-  check("read failed", "read failed", 2);
+  expect(state).toMatchObject({ lastError: "read failed", chatError: "read failed" });
+  flush();
+  expect(frames).toEqual([
+    [null, null],
+    ["read failed", "read failed"],
+  ]);
+
   state.lastError = "read failed";
-  check("read failed", "read failed", 2);
+  flush();
+  expect(frames).toHaveLength(2);
   clear();
-  check("read failed", null, 3);
+  expect(state).toMatchObject({ lastError: "read failed", chatError: null });
+  flush();
+  expect(frames.at(-1)).toEqual(["read failed", null]);
+
   clear();
-  check("read failed", null, 3);
+  flush();
+  expect(frames).toHaveLength(3);
   state.chatError = "another failure";
-  check("read failed", "another failure", 4);
+  expect(state.chatError).toBe("another failure");
+  flush();
+  expect(frames.at(-1)).toEqual(["read failed", "another failure"]);
 });

@@ -124,11 +124,9 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle({
       }
     },
   });
-  const assertAdmittedActive =
-    preparedTarget?.assertCurrent ??
-    (admittedRunContext
-      ? resolveAdmittedRunActiveAssertion(admittedRunContext, abortSignal)
-      : undefined);
+  const assertAdmittedActive = admittedRunContext
+    ? resolveAdmittedRunActiveAssertion(admittedRunContext, abortSignal)
+    : undefined;
   const { writeContext: terminalWriter } = captureAgentRunTerminalPersistence(runId);
   const assertTerminalCurrent = composeSessionSourceAssertion([
     terminalWriter?.assertCurrent,
@@ -150,6 +148,7 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle({
       [assertAdmittedActive, generation?.assertCurrent],
       (assertSources) => {
         abortSignal?.throwIfAborted();
+        preparedTarget?.assertCurrent();
         assertSources();
       },
     ),

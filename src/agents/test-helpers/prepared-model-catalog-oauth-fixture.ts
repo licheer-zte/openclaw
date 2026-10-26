@@ -28,7 +28,6 @@ import type {
   AuthProfileStore,
   OAuthCredential,
 } from "../auth-profiles/types.js";
-import { prepareModelCatalogWorkerContext } from "../prepared-model-catalog-fingerprints.js";
 import { createPreparedModelCatalogWorkerInput } from "../prepared-model-catalog-worker.js";
 import {
   catalogInput,
@@ -196,7 +195,6 @@ api.registerProvider({
         const controller = new AbortController();
         const pending = pool.run(
           {
-            context: prepareModelCatalogWorkerContext(input),
             value: input,
             request: {
               kind: "catalog",

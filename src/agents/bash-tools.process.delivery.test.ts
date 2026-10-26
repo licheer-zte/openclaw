@@ -240,18 +240,14 @@ test("Code Mode pages retained logs after showing the default tail and continuat
     value: {
       status: "completed",
       totalLines: 205,
-      output: `${lines.slice(5).join("\n")}\n\n[showing last 200 of 205 lines; pass offset/limit to page]\n\nProcess exited with code 0.`,
+      output: `${lines.slice(5).join("\n")}\n\n[showing last 200 of 205 lines; pass offset/limit to page]`,
     },
   });
   expect(
     await runProcessInCodeMode({ action: "log", sessionId: session.id, offset: 1, limit: 1 }),
   ).toMatchObject({
     status: "completed",
-    value: {
-      status: "completed",
-      output: "line-1\n\nProcess exited with code 0.",
-      totalLines: 205,
-    },
+    value: { status: "completed", output: "line-1", totalLines: 205 },
   });
 });
 

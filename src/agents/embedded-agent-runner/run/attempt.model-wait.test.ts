@@ -14,7 +14,12 @@ import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixt
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 
 const runId = "model-wait-test";
-const model = makeProviderModelFixture({ id: "m", provider: "ollama", api: "ollama", baseUrl: "" });
+const model = makeProviderModelFixture({
+  id: "local-model",
+  provider: "ollama",
+  api: "ollama",
+  baseUrl: "http://127.0.0.1:11434",
+});
 const starting = { phase: "starting_model" };
 const waiting = (reason: "response" | "slot") => ({ phase: "waiting_for_model", reason });
 let unsubscribe: (() => void) | undefined;
@@ -37,7 +42,7 @@ function harness() {
   const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(source, {
     runId,
     provider: "ollama",
-    model: model.id,
+    model: "local-model",
     trace: createDiagnosticTraceContext(),
     nextCallId: () => `call-${++callId}`,
     onAgentEvent: ({ data }) => void delivered.push(data),
@@ -89,7 +94,10 @@ it.each(["abort", "failure", "completion"] as const)("clears %s waits", async (t
     expect(h.statuses.at(-1)).toEqual(starting);
   }
   call.stream.end(
-    makeAssistantMessageFixture({ stopReason: termination === "completion" ? "stop" : "error" }),
+    makeAssistantMessageFixture({
+      stopReason: termination === "completion" ? "stop" : "error",
+      ...(termination === "completion" ? {} : { errorMessage: "synthetic failure" }),
+    }),
   );
   await call.observed.result();
   expect(getAgentRunContext(runId)?.localModelWait).toBeUndefined();

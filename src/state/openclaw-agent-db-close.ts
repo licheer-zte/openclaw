@@ -1,8 +1,5 @@
 import { statSync } from "node:fs";
-import {
-  assertNodeSqliteDisposalAllowed,
-  disposeNodeSqliteDependents,
-} from "../infra/kysely-sync-cache-state.js";
+import { disposeNodeSqliteDependents } from "../infra/kysely-sync-cache-state.js";
 import { isPostgresSqlConnection, sqlPublicationAnchor } from "../infra/sql-connection.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import {
@@ -32,7 +29,6 @@ export function createAgentDatabaseHandleCloser(cache: {
     const priorCheckpointError = database.walMaintenance.health?.state === "error";
     const postgres = isPostgresSqlConnection(database.db);
     const anchor = sqlPublicationAnchor(database.db);
-    assertNodeSqliteDisposalAllowed(anchor);
     using seal = !alreadyClosed && !postgres ? prepareSqliteDatabaseCleanClose(anchor) : undefined;
     let clean: { path: string; publishSeal: () => boolean } | undefined;
     let retainRuntimeProof: boolean;

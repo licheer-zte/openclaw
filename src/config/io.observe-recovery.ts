@@ -33,7 +33,7 @@ import {
 } from "./io.observe-state.js";
 import { resolveConfigObserveSuspiciousReasons } from "./io.observe-suspicious.js";
 import { hashConfigRaw, resolveGatewayMode } from "./io.read-helpers.js";
-import type { ConfigSnapshotReadMeasure, NormalizedConfigIoDeps } from "./io.read.types.js";
+import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 import type {
   ConfigRecoveryCandidate,
   ConfigRecoveryCandidatePreparation,
@@ -66,7 +66,6 @@ type ConfigReadRecoveryParams = {
   ) => Promise<ConfigRecoveryCandidatePreparation>;
   assertCurrent?: () => void;
   allowBackupRecovery?: () => Promise<boolean>;
-  measure?: ConfigSnapshotReadMeasure;
 };
 
 type ConfigReadRecoveryResult = Pick<ConfigRecoveryCandidate, "raw" | "parsed">;
@@ -272,10 +271,7 @@ function* planSuspiciousConfigRead(
   });
   const healthSnapshot = (yield {
     sync: () => ({ state: readConfigHealthStateFromStore(deps), basis: null }),
-    async: (health) =>
-      params.measure
-        ? params.measure("config.recovery.health-read", () => health.read())
-        : health.read(),
+    async: (health) => health.read(),
   }) as ConfigHealthSnapshot; // SAFETY: Both effect runners return the typed health-owner snapshot.
   const entry = readConfigHealthEntry(healthSnapshot.state, configPath);
   let backupRaw: string | null = null;

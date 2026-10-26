@@ -155,7 +155,7 @@ export function Detail(props: { view: WorkshopView; reads: WorkshopReads }) {
   );
 }
 
-export function LoadState(props: { error?: unknown }) {
+function LoadState(props: { error?: unknown }) {
   return (
     <>
       {props.error !== undefined ? (
@@ -231,12 +231,7 @@ function Instructions(props: { view: WorkshopView; reads: WorkshopReads }) {
                   </div>
                 )}
                 {viewer().current !== undefined ? (
-                  <Diff
-                    before={viewer().result.content}
-                    after={viewer().current!}
-                    beforeLabel={t("skillWorkshop.viewer.diffVersion")}
-                    afterLabel={t("skillWorkshop.viewer.diffCurrent")}
-                  />
+                  <Diff current={viewer().current!} version={viewer().result.content} />
                 ) : (
                   <MarkdownHtml
                     class="sw-markdown chat-text"
@@ -445,33 +440,23 @@ function History(props: { view: WorkshopView }) {
   );
 }
 
-/** Line diff from `before` to `after`; falls back to rendering `before` when they match. */
-export function Diff(props: {
-  before: string;
-  after: string;
-  beforeLabel: string;
-  afterLabel: string;
-  sameText?: string;
-  tooLargeText?: string;
-  /** Which side to show when there is no line diff; `before` unless set. */
-  fallbackSide?: "before" | "after";
-}) {
-  const lines = createMemo(() => diffLines(props.before, props.after));
+function Diff(props: { current: string; version: string }) {
+  const lines = createMemo(() => diffLines(props.version, props.current));
   return (
     <Show
       when={lines() && !lines()!.every((line) => line.kind === "same")}
       fallback={
         <>
           <p class="sw-diff__same">
-            {lines() === null
-              ? (props.tooLargeText ?? t("skillWorkshop.viewer.diffTooLarge"))
-              : (props.sameText ?? t("skillWorkshop.viewer.noDiff"))}
+            {t(
+              lines() === null
+                ? "skillWorkshop.viewer.diffTooLarge"
+                : "skillWorkshop.viewer.noDiff",
+            )}
           </p>
           <MarkdownHtml
             class="sw-markdown chat-text"
-            markdown={
-              splitFrontmatter(props.fallbackSide === "after" ? props.after : props.before).body
-            }
+            markdown={splitFrontmatter(props.version).body}
             options={{ mode: "document" }}
           />
         </>
@@ -479,8 +464,12 @@ export function Diff(props: {
     >
       <div class="sw-diff">
         <div class="sw-diff__legend">
-          <span class="sw-diff__key sw-diff__key--remove">{props.beforeLabel}</span>
-          <span class="sw-diff__key sw-diff__key--add">{props.afterLabel}</span>
+          <span class="sw-diff__key sw-diff__key--remove">
+            {t("skillWorkshop.viewer.diffVersion")}
+          </span>
+          <span class="sw-diff__key sw-diff__key--add">
+            {t("skillWorkshop.viewer.diffCurrent")}
+          </span>
         </div>
         <div class="sw-diff__lines" role="table">
           <For each={lines() ?? []}>
@@ -499,7 +488,7 @@ export function Diff(props: {
   );
 }
 /** SKILL.md frontmatter is shown as the header; the body renders as markdown. */
-export function splitFrontmatter(content: string): { description?: string; body: string } {
+function splitFrontmatter(content: string): { description?: string; body: string } {
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(content);
   if (!match) {
     return { body: content };

@@ -34,7 +34,6 @@ import {
 import { GatewaySessionFactsChangedDuringReadError } from "./session-utils-store-errors.js";
 import { prepareIncognitoGatewaySessionStoreTarget } from "./session-utils-store-incognito.js";
 import {
-  createGatewaySessionStore,
   gatewaySessionStoreReadOptions,
   readGatewaySessionStore,
   type GatewaySessionStoreRead,
@@ -83,11 +82,7 @@ function prepareGatewaySessionStoreLookup(
     // Retired/manual agents require an existing discovered store; lookup never creates one.
     return {
       reads: [],
-      resolve: () => ({
-        storePath: fallback.storePath,
-        store: createGatewaySessionStore([]),
-        match: undefined,
-      }),
+      resolve: () => ({ storePath: fallback.storePath, store: {}, match: undefined }),
     };
   }
   const reads = candidates.map((target, index): GatewaySessionStoreRead => ({
@@ -442,7 +437,9 @@ export async function withGatewaySessionStoreTarget<T>(
               };
               for (const [index, read] of reads.entries()) {
                 const owner = prepared[index]!;
-                read.result = createGatewaySessionStore(owner.result.entries);
+                read.result = Object.fromEntries(
+                  owner.result.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+                );
                 read.readSource = { agentId: owner.database.agentId, path: owner.database.path };
                 read.capturedReadSource =
                   captureGatewaySessionReadSource(read.readSource, owner.result.databaseIdentity) ??

@@ -623,7 +623,6 @@ export async function installPluginFromManagedNpmRoot(
         },
       },
       transactionRequest?.assertOwned,
-      transactionRequest?.prepareSettlement,
     ),
   );
   if (staged.failure) {

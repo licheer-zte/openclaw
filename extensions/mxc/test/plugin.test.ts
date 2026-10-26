@@ -15,6 +15,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 import { registerMxcPlugin } from "../src/plugin.js";
+import { assertMxcReadiness, warnMxcHostPrepIfNeeded } from "../src/readiness.js";
 
 const originalPlatform = process.platform;
 const icacls = path.win32.join(
@@ -95,19 +96,14 @@ afterEach(async () => {
   Object.defineProperty(process, "platform", { value: originalPlatform });
 });
 
-const assertReady = () => createApi().register();
-const expectWarning = (...messages: RegExp[]) =>
-  expect(vi.mocked(console.warn).mock.calls).toEqual(
-    messages.map((message) => [expect.stringMatching(message)]),
-  );
+const assertReady = () => assertMxcReadiness({ executablePath: "mxc-test-binary" });
+const expectWarning = (message: RegExp) =>
+  expect(vi.mocked(console.warn).mock.calls).toEqual([[expect.stringMatching(message)]]);
 
-test("reports tier degradation and host-preparation advice without blocking registration", () => {
+test("reports tier degradation without requiring system-drive preparation", () => {
   mockHost({ tier: "appcontainer-dacl", warnings: ["BaseContainer unavailable"] }, "");
   expect(assertReady).not.toThrow();
-  expectWarning(
-    /appcontainer-dacl isolation tier: BaseContainer unavailable/u,
-    /prepare-system-drive/u,
-  );
+  expectWarning(/appcontainer-dacl isolation tier: BaseContainer unavailable/u);
 });
 
 test.each([
@@ -121,7 +117,7 @@ test.each([
 
 test("warns when the system drive lacks AppContainer ACEs", () => {
   mockHost({ tier: "base-container" }, "");
-  createApi().register();
+  warnMxcHostPrepIfNeeded();
   expectWarning(/prepare-system-drive/u);
 });
 
@@ -144,6 +140,8 @@ test.each([
     expect(mocks.resolveBinary).not.toHaveBeenCalled();
   }
   if (platform === "darwin") {
+    assertReady();
+    warnMxcHostPrepIfNeeded();
     expectWarning(/Windows-only.*darwin.*dormant/u);
   } else {
     expect(console.warn).not.toHaveBeenCalled();

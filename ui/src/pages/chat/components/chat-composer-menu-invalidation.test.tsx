@@ -12,7 +12,7 @@ import {
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import type { ChatComposerPlusMenuProps } from "./chat-composer-plus-menu.types.ts";
 
-it.each(["root", "skills", "connectors", "libraries", "library:missing"] as const)(
+it.each(["root", "skills", "connectors", "tools:docs", "library:missing"] as const)(
   "retains %s menu content on unrelated publications and admits in-place display changes",
   async (view) => {
     const skillName = vi.fn(() => "Focused skill");
@@ -43,7 +43,8 @@ it.each(["root", "skills", "connectors", "libraries", "library:missing"] as cons
           result: null,
           loading: false,
           busy: false,
-          error: "Library unavailable",
+          error: null,
+          notice: "Library ready",
           canWrite: true,
           onReload: vi.fn(),
           onRead: vi.fn(),
@@ -63,14 +64,10 @@ it.each(["root", "skills", "connectors", "libraries", "library:missing"] as cons
       root: "Web search",
       skills: "Focused skill",
       connectors: "docs",
-      libraries: "Library unavailable",
-      "library:missing": "Library unavailable",
+      "tools:docs": "Search documents",
+      "library:missing": "Library ready",
     }[view];
     await waitForSolid(() => expect(content.textContent).toContain(expectedContent));
-    if (view === "connectors") {
-      (content.querySelector('[data-value="server:docs"]') as HTMLElement).click();
-      await waitForSolid(() => expect(content.textContent).toContain("Search documents"));
-    }
     const observer = new MutationObserver(() => {});
     observer.observe(mounted.container, { childList: true, subtree: true });
     onTestFinished(() => observer.disconnect());
@@ -107,27 +104,21 @@ it.each(["root", "skills", "connectors", "libraries", "library:missing"] as cons
           text: expect.stringContaining("Renamed skill"),
         });
         break;
-      case "connectors": {
+      case "connectors":
         capability.mcpServers[0]!.enabled = false;
         refresh();
-        expect(
-          content.querySelector('[role="switch"][aria-label="docs"]')?.getAttribute("aria-checked"),
-        ).toBe("false");
+        expect(item("connector:docs")).toMatchObject({
+          checked: "false",
+          text: expect.stringContaining("Disabled"),
+        });
+        break;
+      case "tools:docs":
         menu.toolOverrides = { mcpToolsDeny: { docs: ["search"] } };
         refresh();
         expect(item("mcp-tool:search").checked).toBe("false");
-        capability.toolsEffectiveError = true;
-        refresh();
-        const retry = vi.fn();
-        capability.onOpenToolAccess = retry;
-        refresh();
-        mounted.getByRole("button", { name: "Retry", hidden: true }).click();
-        expect(retry).toHaveBeenCalledExactlyOnceWith("docs");
         break;
-      }
-      case "libraries":
       case "library:missing":
-        capability.library!.error = "Refreshed library";
+        capability.library!.notice = "Refreshed library";
         refresh();
         expect(content.textContent).toContain("Refreshed library");
         break;

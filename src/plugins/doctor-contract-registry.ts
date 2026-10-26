@@ -108,7 +108,7 @@ type PluginDoctorRegistryParams = {
   pluginIds?: readonly string[];
   /** Candidate generation prepared by the install owner before publication. */
   manifestRegistry?: PluginManifestRegistry;
-  historicalWebhookListeners?: PluginDoctorCompatibilityOptions["historicalWebhookListeners"];
+  historicalWebhookListeners?: boolean;
   /** Port preflight inspects retained data even when its selected owner is disabled. */
   includeDisabled?: boolean;
 };

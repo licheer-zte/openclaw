@@ -26,6 +26,7 @@ import {
   type OutboundDeliveryResult,
   type OutboundPayloadDeliveryOutcome,
 } from "./deliver-types.js";
+import type { DeliveryMirror } from "./mirror.js";
 import type { OutboundSessionContext } from "./session-context.js";
 
 type OutboundAuditDeliveryContext = {
@@ -41,6 +42,7 @@ type OutboundAuditDeliveryContext = {
     sourcePayloadCount?: number;
   };
   session?: OutboundSessionContext;
+  mirror?: DeliveryMirror;
 };
 
 function outboundQueueAuditSourceId(
@@ -228,14 +230,18 @@ function resolveConversationKind(
     // Declared destination facts only; see OutboundSessionContext.conversationKind.
     return context.session.conversationKind;
   }
-  const routeCandidates = [context.session?.policyKey, context.session?.key];
+  const routeCandidates = [
+    context.session?.policyKey,
+    context.session?.key,
+    context.mirror?.sessionKey,
+  ];
   for (const candidate of routeCandidates) {
     const route = parseSessionDeliveryRoute(candidate);
     if (routeNamesDestination(route, context)) {
       return route.peerKind === "dm" || route.peerKind === "direct" ? "direct" : route.peerKind;
     }
   }
-  if (context.session?.conversationType === "group") {
+  if (context.session?.conversationType === "group" || context.mirror?.isGroup === true) {
     return "group";
   }
   return "unknown";
@@ -277,7 +283,7 @@ function resolveResultIdentifiers(
 }
 
 function outboundAuditContext(context: OutboundAuditDeliveryContext, includeReplyHook = false) {
-  const agentId = context.session?.agentId;
+  const agentId = context.session?.agentId ?? context.mirror?.agentId;
   const runId =
     context.runId ??
     context.preparedBatch?.runId ??

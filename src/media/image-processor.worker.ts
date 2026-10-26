@@ -1,6 +1,5 @@
 import { isRastermillError, isRastermillUnavailableError } from "rastermill";
 import { serveWorkerTasks } from "../infra/worker-task-server.js";
-import { ownedWorkerBytes } from "../infra/worker-transfer-bytes.js";
 import { createLocalImageProcessor } from "./image-processor-config.js";
 import type { ImageProcessorReply, ImageProcessorRequest } from "./image-processor.types.js";
 
@@ -18,7 +17,7 @@ serveWorkerTasks<ImageProcessorReply>(
       switch (request.kind) {
         case "encode": {
           const value = await processor.encode(request.input, request.options);
-          return { kind: request.kind, value: { ...value, data: ownedWorkerBytes(value.data) } };
+          return { kind: request.kind, value: { ...value, data: Uint8Array.from(value.data) } };
         }
         case "transparency":
           return { kind: request.kind, value: await processor.transparency(request.input) };
@@ -26,7 +25,7 @@ serveWorkerTasks<ImageProcessorReply>(
           const { convertBmpToPngWithPhoton } = await import("./photon.runtime.js");
           return {
             kind: request.kind,
-            value: ownedWorkerBytes(convertBmpToPngWithPhoton(request.input)),
+            value: Uint8Array.from(convertBmpToPngWithPhoton(Buffer.from(request.input))),
           };
         }
         default:

@@ -33,6 +33,7 @@ export type {
   OfficialExternalProviderAuthChoice,
   OfficialExternalWebSearchProvider,
   OfficialExternalPluginCatalogEntry,
+  OfficialExternalPluginCatalogFeed,
   HostedOfficialExternalPluginCatalogLoadResult,
 } from "./official-external-plugin-catalog.types.js";
 

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import {
   inspectMattermostAccount,
+  isMattermostConfigured,
   listMattermostAccountIds,
   resolveDefaultMattermostAccountId,
   resolveMattermostAccount,
@@ -18,7 +19,13 @@ describe("Mattermost accounts", () => {
     const cfg = config({
       botToken: "tok-default",
       baseUrl: "https://chat.example.com",
-      accounts: { work: { enabled: false } },
+      accounts: {
+        work: {
+          enabled: false,
+          botToken: "tok-work",
+          baseUrl: "https://work.example.com",
+        },
+      },
     });
     expect(listMattermostAccountIds(cfg)).toEqual(["default", "work"]);
     expect(resolveDefaultMattermostAccountId(cfg)).toBe("default");
@@ -52,8 +59,13 @@ describe("Mattermost accounts", () => {
       accounts: { work: { baseUrl: "https://mm.example.com", dmPolicy: "allowlist" } },
     });
     const account = inspectMattermostAccount({ cfg, accountId: "work" });
-    expect(account.configured).toBe(false);
-    expect(account.dmPolicy).toBe("allowlist");
+    expect(isMattermostConfigured(account)).toBe(false);
+    expect(account).toMatchObject({
+      accountId: "work",
+      enabled: true,
+      configured: false,
+      dmPolicy: "allowlist",
+    });
   });
 
   it("keeps direct account resolution strict", () => {

@@ -34,7 +34,10 @@ import {
   type SessionTranscriptInitializationPublication,
 } from "./session-accessor.sqlite-entry-cache.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
-import type { SessionEntryReplacementCandidate } from "./session-accessor.sqlite-replacement-types.js";
+import type {
+  SessionEntryReplacementCandidate,
+  SessionEntryReplacementCommitted,
+} from "./session-accessor.sqlite-replacement-types.js";
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 import { withSessionEntryWriterReads } from "./session-entry-read-facts.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
@@ -618,7 +621,7 @@ export async function commitSessionEntryReplacementsInWorker(
   },
   retainedExecution?: OpenClawAgentDatabaseExecution,
   nativeDeletion?: ReturnType<typeof captureNativeSessionWorkerDeletion>,
-): Promise<SessionEntryReplacementCandidate["result"]> {
+): Promise<SessionEntryReplacementCommitted> {
   const source = await prepareSessionSourceAuthority(assertCurrent);
   const sameStore = source.checks.every(
     ({ predicate }) => predicate.source.databaseIdentity === databaseIdentity,
@@ -642,7 +645,7 @@ export async function commitSessionEntryReplacementsInWorker(
         await import("./session-native-binding.js");
       return await runSessionNativeBindingWorkerOperation<
         SessionEntryReplacementCandidate,
-        SessionEntryReplacementCandidate["result"]
+        SessionEntryReplacementCommitted
       >({
         database: options,
         databaseIdentity,
@@ -663,7 +666,7 @@ export async function commitSessionEntryReplacementsInWorker(
         onTransactionFacts: acceptValidation,
         async onCommitted(candidate, published, identity, context) {
           try {
-            lifecycle.onLifecycleCommitted?.(candidate.publication.pendingArchiveRecovery);
+            lifecycle.onLifecycleCommitted?.(candidate.result.pendingArchiveRecovery);
           } finally {
             if (published) {
               publishCommittedSessionIdentity(
@@ -680,7 +683,7 @@ export async function commitSessionEntryReplacementsInWorker(
         },
       });
     }
-    return await runSessionEntryWorkerMutation<SessionEntryReplacementCandidate["result"]>(
+    return await runSessionEntryWorkerMutation<SessionEntryReplacementCommitted>(
       options,
       databaseIdentity,
       source.assertCurrent,

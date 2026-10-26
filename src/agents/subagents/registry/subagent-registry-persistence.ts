@@ -224,28 +224,13 @@ export async function runSubagentRegistryWorkerWrite<T>(
   prepare: () => SubagentRegistryWorkerWrite<T>,
 ): Promise<T> {
   const write = prepare();
-  let acknowledged = false;
   let commitGranted = false;
   let admission: SqliteWorkerOperationAdmission | undefined;
   try {
     return await runOpenClawStateWorkerOperation(
       context,
-      async (scope) => {
-        if (write.kind !== "registry") {
-          return write.execute(scope);
-        }
-        await write.execute(scope);
-        // The broker drains native receipts before acknowledging the command.
-        if (!admission?.committed) {
-          throw new SqliteWorkerError(
-            "Registry committed receipt is unavailable",
-            "outcome-unknown",
-          );
-        }
-        const result = write.decode(admission.committed.facts);
-        acknowledged = true;
-        return result;
-      },
+      async (scope) =>
+        write.kind === "registry" ? write.decode(await write.execute(scope)) : write.execute(scope),
       {
         assertCurrent: write.assertCurrent,
         createAdmission: () => {
@@ -318,7 +303,7 @@ export async function runSubagentRegistryWorkerWrite<T>(
       throw error;
     }
     throw new SubagentRegistryWriteError(
-      write.kind === "registry" && acknowledged
+      write.kind === "registry" && write.acknowledged()
         ? "committed"
         : commitGranted || hasSqliteWorkerOutcomeUnknown(error)
           ? "unknown"
@@ -365,8 +350,10 @@ async function commitRows<T>(
     return { value: planned.value, postimages };
   }
   return runSubagentRegistryWorkerWrite(context, () => {
+    let acknowledged = false;
     const decode = (value: unknown): SubagentRunMutationReceipt<T> => {
       const receipt = parseSubagentRegistryWriteReceipt(value, write);
+      acknowledged = true;
       // Runtime reservations are not encoded state; keep the admitted postimage intact.
       return {
         value: planned.value,
@@ -381,6 +368,7 @@ async function commitRows<T>(
       execute: (scope) => scope.execute({ type: "subagents.persistChanges", input: write }),
       decode,
       terminalEvents: planned.terminalEvents,
+      acknowledged: () => acknowledged,
     };
   });
 }

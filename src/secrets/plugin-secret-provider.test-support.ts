@@ -36,7 +36,14 @@ export function createPluginSecretProviderFixture() {
     cliBackends: [],
     skills: [],
     hooks: [],
-    secretProviderIntegrations: vaultSecretProviderIntegrations("./resolve.mjs", "vault"),
+    secretProviderIntegrations: {
+      vault: {
+        providerAlias: "vault",
+        source: "exec",
+        command: "${node}",
+        args: ["./resolve.mjs"],
+      },
+    },
   };
   const config: OpenClawConfig = {
     secrets: {
@@ -49,18 +56,4 @@ export function createPluginSecretProviderFixture() {
     },
   };
   return { config, rootDir, manifestRegistry: { plugins: [plugin], diagnostics: [] } };
-}
-
-export function vaultSecretProviderIntegrations(
-  entrypoint: string,
-  providerAlias: string,
-): NonNullable<PluginManifestRecord["secretProviderIntegrations"]> {
-  return {
-    vault: {
-      providerAlias,
-      source: "exec",
-      command: "${node}",
-      args: [entrypoint],
-    },
-  };
 }

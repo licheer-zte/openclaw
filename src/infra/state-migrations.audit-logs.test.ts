@@ -10,10 +10,7 @@ import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js"
 import { SYSTEM_AGENT_AUDIT_SCOPE } from "../system-agent/audit.js";
 import * as fsSafe from "./fs-safe.js";
 import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
-import {
-  openLegacyAuditRawCheckpointStore as openCheckpoints,
-  type LegacyAuditRawCheckpoint,
-} from "./state-migrations.audit-checkpoints.js";
+import { openLegacyAuditRawCheckpointStore } from "./state-migrations.audit-checkpoints.js";
 import { readLegacyAuditSourceSnapshot } from "./state-migrations.audit-recovery.js";
 import {
   AuditMigrationFixture,
@@ -79,19 +76,6 @@ async function expectMissing(...paths: string[]) {
 }
 function auditStore(audit: AuditMigrationFixture, scope: string, maxEntries: number) {
   return createSqliteAuditRecordStore({ env: audit.env, scope, maxEntries });
-}
-
-async function refreshCheckpoint(
-  audit: AuditMigrationFixture,
-  changes: Partial<LegacyAuditRawCheckpoint> = {},
-) {
-  const store = openCheckpoints(audit.stateDir);
-  const entry = store.entries()[0];
-  if (!entry) {
-    throw new Error("expected a raw archive checkpoint");
-  }
-  const { dev, ino, mtimeMs, size } = await fs.stat(audit.system.raw);
-  store.upsert(entry.key, { ...entry.value, dev, ino, mtimeMs, size, ...changes }, entry.createdAt);
 }
 
 it("preserves descriptor appends without the native helper", async ({ audit }) => {
@@ -312,13 +296,26 @@ it("rehashes a checkpointed raw archive before treating it as clean", async ({ a
   const original = event("original");
   const modified = { ...original, summary: "modified" };
   await audit.writeJsonLines(sourcePath, [original]);
+  const stableMtime = new Date("2026-07-03T01:00:00.000Z");
+  await fs.utimes(sourcePath, stableMtime, stableMtime);
   await audit.migrate();
   const checkpointedStat = await fs.stat(rawPath);
   const modifiedRaw = jsonLine(modified);
   expect(Buffer.byteLength(modifiedRaw)).toBe(checkpointedStat.size);
   await fs.writeFile(rawPath, modifiedRaw);
+  const rewrittenStat = await fs.stat(rawPath);
+  const checkpointStore = openLegacyAuditRawCheckpointStore(audit.stateDir);
+  const checkpoint = checkpointStore.entries()[0];
+  if (!checkpoint) {
+    throw new Error("expected a raw archive checkpoint");
+  }
   // Keep the original hash despite matching the rewritten file's cheap identity.
-  await refreshCheckpoint(audit);
+  const { dev, ino, mtimeMs, size } = rewrittenStat;
+  checkpointStore.upsert(
+    checkpoint.key,
+    { ...checkpoint.value, dev, ino, mtimeMs, size },
+    checkpoint.createdAt,
+  );
   const detected = audit.detect();
   expect(detected.sources).toMatchObject([{ sourcePath: rawPath, storage: "raw-archive" }]);
   const result = await audit.migrate(detected);
@@ -359,7 +356,12 @@ it("does not resurrect pruned history during append recovery", async ({ audit })
   const recovered = await migrateClean(audit);
   expect(recovered.changes.join("\n")).toContain("Recovered 1 later");
   expect(audit.systemSummaries()).toEqual(["second", "third", "appended", "runtime"]);
-  expect(openCheckpoints(audit.stateDir).entries()).toMatchObject([{ value: { recordCount: 0 } }]);
+  const rawCheckpoints = createSqliteAuditRecordStore<{ recordCount: number }>({
+    scope: "migration.legacy-audit-raw",
+    maxEntries: 10_000,
+    env: audit.env,
+  }).entries();
+  expect(rawCheckpoints).toMatchObject([{ value: { recordCount: 0 } }]);
 });
 
 it("keeps identical rows from separate raw archive generations", async ({ audit }) => {
@@ -577,14 +579,22 @@ it("upgrades a legacy nonzero raw checkpoint to the blank append pad", async ({ 
   await seedArchive(audit, [event("original")]);
   const legacyRaw = Buffer.from(jsonLine(event("é")));
   await fs.writeFile(rawPath, legacyRaw);
-  await refreshCheckpoint(audit, {
+  const { dev, ino, mtimeMs, size } = await fs.stat(rawPath);
+  const checkpointStore = openLegacyAuditRawCheckpointStore(audit.stateDir);
+  const checkpoint = checkpointStore.entries()[0]!;
+  checkpointStore.upsert(checkpoint.key, {
+    ...checkpoint.value,
+    dev,
+    ino,
+    mtimeMs,
+    size,
     contentHash: createHash("sha256").update(legacyRaw.toString("utf8")).digest("hex"),
     recordCount: 1,
   });
   const detected = audit.detect();
   expect(detected.hasLegacy).toBe(true);
   await migrateClean(audit, detected);
-  expect(openCheckpoints(audit.stateDir).entries()[0]?.value.recordCount).toBe(0);
+  expect(openLegacyAuditRawCheckpointStore(audit.stateDir).entries()[0]?.value.recordCount).toBe(0);
 });
 
 it.for(["stale", "later", "redacted", "scrubbing", "restoring"] as const)(

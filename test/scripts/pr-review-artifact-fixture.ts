@@ -46,6 +46,7 @@ export function validReview(headSha = REVIEWED_HEAD) {
 export type ReviewArtifactFixtureOptions = {
   files?: string[];
   prNumber?: number;
+  markdownIdentityLine?: string;
   metaEnvPrNumber?: number;
   mode?: "pr" | "main";
   headSha?: string;
@@ -64,7 +65,7 @@ export function writeReviewArtifacts(
   writeFileSync(
     join(localDir, "review.md"),
     [
-      `Review artifact for PR #${prNumber} at ${headSha}`,
+      options.markdownIdentityLine ?? `Review artifact for PR #${prNumber} at ${headSha}`,
       "A)",
       "B)",
       "C)",

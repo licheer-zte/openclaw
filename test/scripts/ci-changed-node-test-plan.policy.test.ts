@@ -51,7 +51,6 @@ it("classifies build-artifact and QA smoke impact by changed surface", () => {
     "cli-invocation.mjs",
     "tsdown.config.ts",
     "scripts/lib/build-artifact-cache.mts",
-    "scripts/test-built-source-verifiers.mts",
   ]);
   expectImpact(affectsBuild, false, [
     "src/gateway/server.auth.control-ui.trusted-proxy.suite.ts",

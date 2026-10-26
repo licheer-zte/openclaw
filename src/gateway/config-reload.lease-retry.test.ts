@@ -77,13 +77,12 @@ async function admittedWrite(hash: string) {
 it("keeps config observation and application free of main-thread lease reads", async () => {
   const { requireNodeSqlite } = await import("../infra/node-sqlite.js");
   const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-  const withLease = pluginLifecycleLease.withPluginLifecycleLeaseAsync;
-  vi.spyOn(pluginLifecycleLease, "withPluginLifecycleLeaseAsync").mockImplementation(
-    (options, run) =>
-      withLease(options, (lease) => {
-        reads.queries.length = 0;
-        return run(lease);
-      }),
+  const withLease = pluginLifecycleLease.withPluginLifecycleLease;
+  vi.spyOn(pluginLifecycleLease, "withPluginLifecycleLease").mockImplementation((options, run) =>
+    withLease(options, (lease) => {
+      reads.queries.length = 0;
+      return run(lease);
+    }),
   );
   const leaseReads = () => reads.queries.filter((sql) => /from "state_leases"/i.test(sql)).length;
   const checkpoints: number[] = [];
@@ -112,9 +111,9 @@ it("keeps config observation and application free of main-thread lease reads", a
 });
 
 it("rejects a lease that expires during observation before applying the config", async () => {
-  const withLease = pluginLifecycleLease.withPluginLifecycleLeaseAsync;
-  vi.spyOn(pluginLifecycleLease, "withPluginLifecycleLeaseAsync").mockImplementation(
-    (options, run) => withLease({ ...options, leaseMs: 1_000 }, run),
+  const withLease = pluginLifecycleLease.withPluginLifecycleLease;
+  vi.spyOn(pluginLifecycleLease, "withPluginLifecycleLease").mockImplementation((options, run) =>
+    withLease({ ...options, leaseMs: 1_000 }, run),
   );
   let expire = false;
   const snapshot = makeZeroDebounceHookWrite("expired-observation").snapshot;
@@ -269,7 +268,7 @@ it.each([
   "retries $source reload after $reason without another event",
   async ({ source, reason }) => {
     const acquire = vi
-      .spyOn(pluginLifecycleLease, "withPluginLifecycleLeaseAsync")
+      .spyOn(pluginLifecycleLease, "withPluginLifecycleLease")
       .mockRejectedValueOnce(unavailableError(reason));
     const harness = await readyHarness("lease-retry");
 
@@ -295,9 +294,9 @@ it.each([
 );
 
 it("settles an exhausted admission receipt and retries a later observation with a fresh budget", async () => {
-  const withLease = pluginLifecycleLease.withPluginLifecycleLeaseAsync;
+  const withLease = pluginLifecycleLease.withPluginLifecycleLease;
   const acquire = vi
-    .spyOn(pluginLifecycleLease, "withPluginLifecycleLeaseAsync")
+    .spyOn(pluginLifecycleLease, "withPluginLifecycleLease")
     .mockRejectedValue(unavailableError());
   const harness = await admittedWrite("backoff");
   const { settled } = harness;
@@ -332,7 +331,7 @@ it("settles an exhausted admission receipt and retries a later observation with 
 
 it("cancels a pending admission retry on shutdown without applying or leaking timers", async () => {
   const acquire = vi
-    .spyOn(pluginLifecycleLease, "withPluginLifecycleLeaseAsync")
+    .spyOn(pluginLifecycleLease, "withPluginLifecycleLease")
     .mockRejectedValueOnce(unavailableError());
   const harness = await admittedWrite("shutdown");
   await flushReload(harness.reloader);
@@ -364,8 +363,8 @@ it.each([
   ...nonRetryableErrors.map((error) => ({ error, entered: false })),
   { error: unavailableError(), entered: true },
 ])("does not retry $error after callback entry: $entered", async ({ error, entered }) => {
-  const withLease = pluginLifecycleLease.withPluginLifecycleLeaseAsync;
-  const acquire = vi.spyOn(pluginLifecycleLease, "withPluginLifecycleLeaseAsync");
+  const withLease = pluginLifecycleLease.withPluginLifecycleLease;
+  const acquire = vi.spyOn(pluginLifecycleLease, "withPluginLifecycleLease");
   if (entered) {
     acquire.mockImplementationOnce((options, run) =>
       withLease(options, async (lease) => {
@@ -389,7 +388,7 @@ it.each([
 it("settles a superseded write while lease admission is still pending", async ({ signal }) => {
   const lease = createDeferred<never>();
   const entered = createDeferred();
-  vi.spyOn(pluginLifecycleLease, "withPluginLifecycleLeaseAsync").mockImplementationOnce(() => {
+  vi.spyOn(pluginLifecycleLease, "withPluginLifecycleLease").mockImplementationOnce(() => {
     entered.resolve();
     return lease.promise;
   });
@@ -438,7 +437,7 @@ it("applies a leased plugin change while startup reconciles a config edit", asyn
   });
   try {
     // plugins.reload holds the lease before startup reaches its watcher drain.
-    await pluginLifecycleLease.withPluginLifecycleLeaseAsync({}, async () => {
+    await pluginLifecycleLease.withPluginLifecycleLease({}, async () => {
       const application = harness.reloader.applyPluginLifecycleChange({
         config: startupEdit,
         pluginIds: ["notes"],

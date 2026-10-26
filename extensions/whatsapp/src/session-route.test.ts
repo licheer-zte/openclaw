@@ -1,3 +1,4 @@
+// Whatsapp tests cover session route plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WHATSAPP_AUTH_UNSTABLE_CODE } from "./auth-store.js";
 import { whatsappPlugin } from "./channel.js";
@@ -22,33 +23,45 @@ beforeEach(() => {
 });
 
 describe("WhatsApp channel outbound session routing", () => {
-  it.each([
-    [
-      "channel",
-      "120363401234567890@newsletter",
-      "agent:main:whatsapp:channel:120363401234567890@newsletter",
-      {},
-    ],
-    [
-      "direct",
-      "+15551234567",
-      "agent:main:whatsapp:direct:+15551234567",
-      { session: { dmScope: "per-channel-peer" } },
-    ],
-  ] as const)("routes %s targets", async (kind, target, sessionKey, cfg) => {
+  it("routes newsletter JIDs as channel sessions", async () => {
     const route = await resolveSessionRoute({
-      cfg,
+      cfg: {},
       agentId: "main",
-      target,
+      target: "120363401234567890@newsletter",
     });
+
     expect(route).toEqual({
-      sessionKey,
-      baseSessionKey: sessionKey,
+      sessionKey: "agent:main:whatsapp:channel:120363401234567890@newsletter",
+      baseSessionKey: "agent:main:whatsapp:channel:120363401234567890@newsletter",
       recipientSessionExact: true,
-      peer: { kind, id: target },
-      chatType: kind,
-      from: target,
-      to: target,
+      peer: {
+        kind: "channel",
+        id: "120363401234567890@newsletter",
+      },
+      chatType: "channel",
+      from: "120363401234567890@newsletter",
+      to: "120363401234567890@newsletter",
+    });
+  });
+
+  it("keeps direct user targets on direct session semantics", async () => {
+    const route = await resolveSessionRoute({
+      cfg: { session: { dmScope: "per-channel-peer" } },
+      agentId: "main",
+      target: "+15551234567",
+    });
+
+    expect(route).toEqual({
+      sessionKey: "agent:main:whatsapp:direct:+15551234567",
+      baseSessionKey: "agent:main:whatsapp:direct:+15551234567",
+      recipientSessionExact: true,
+      peer: {
+        kind: "direct",
+        id: "+15551234567",
+      },
+      chatType: "direct",
+      from: "+15551234567",
+      to: "+15551234567",
     });
   });
 
@@ -69,30 +82,46 @@ describe("WhatsApp channel outbound session routing", () => {
 });
 
 describe("WhatsApp channel heartbeat readiness", () => {
-  it.each([
-    [
-      "default account listener",
-      { defaultAccount: "work", accounts: { work: { authDir: "/tmp/work" } } },
-      "work",
-      "ok",
-    ],
-    ["disabled channel", { enabled: false }, undefined, "whatsapp-disabled"],
-    [
-      "unstable auth",
-      { accounts: { default: { authDir: "/tmp/default" } } },
-      undefined,
-      WHATSAPP_AUTH_UNSTABLE_CODE,
-    ],
-  ] as const)("checks %s", async (_name, whatsapp, listenerAccount, reason) => {
-    if (reason === WHATSAPP_AUTH_UNSTABLE_CODE) {
-      readAuth.mockResolvedValueOnce({ outcome: "unstable" });
-    }
+  it("heartbeat readiness uses configured defaultAccount for active listener checks", async () => {
     const result = await checkReady({
-      cfg: { channels: { whatsapp } },
+      cfg: {
+        channels: {
+          whatsapp: {
+            defaultAccount: "work",
+            accounts: { work: { authDir: "/tmp/work" } },
+          },
+        },
+      },
       deps: {
-        hasActiveWebListener: (id) => listenerAccount === undefined || id === listenerAccount,
+        hasActiveWebListener: (accountId?: string) => accountId === "work",
       },
     });
-    expect(result).toEqual({ ok: reason === "ok", reason });
+
+    expect(result).toEqual({ ok: true, reason: "ok" });
+  });
+
+  it("heartbeat readiness honors the channel disable flag", async () => {
+    const result = await checkReady({
+      cfg: { channels: { whatsapp: { enabled: false } } },
+      deps: {
+        hasActiveWebListener: () => true,
+      },
+    });
+
+    expect(result).toEqual({ ok: false, reason: "whatsapp-disabled" });
+  });
+
+  it("heartbeat readiness returns unstable when auth state timing is unresolved", async () => {
+    readAuth.mockResolvedValueOnce({ outcome: "unstable" });
+    const result = await checkReady({
+      cfg: {
+        channels: { whatsapp: { accounts: { default: { authDir: "/tmp/default" } } } },
+      },
+      deps: {
+        hasActiveWebListener: () => true,
+      },
+    });
+
+    expect(result).toEqual({ ok: false, reason: WHATSAPP_AUTH_UNSTABLE_CODE });
   });
 });

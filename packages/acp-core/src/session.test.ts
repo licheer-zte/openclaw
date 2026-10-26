@@ -3,22 +3,19 @@ import { createInMemorySessionStore } from "./session.js";
 
 describe("acp session manager", () => {
   let nowMs = 0;
-  let removed: string[] = [];
   let store = createInMemorySessionStore();
-  const onRemove = (id: string) => removed.push(id);
-  const createSession = (sessionId?: string) =>
-    store.createSession({ sessionId, sessionKey: `acp:${sessionId}`, cwd: "/tmp" });
-  const startRun = (sessionId: string, runId = "run-1") => {
+  const createSession = (sessionId?: string, target = store) =>
+    target.createSession({ sessionId, sessionKey: `acp:${sessionId}`, cwd: "/tmp" });
+  const startRun = (sessionId: string, runId = "run-1", target = store) => {
     const controller = new AbortController();
-    store.setActiveRun(sessionId, runId, controller);
+    target.setActiveRun(sessionId, runId, controller);
     return controller;
   };
 
   beforeEach(() => {
     nowMs = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => nowMs);
-    removed = [];
-    store = createInMemorySessionStore({ maxSessions: 2, onSessionRemoved: onRemove });
+    store = createInMemorySessionStore();
   });
   afterEach(() => vi.restoreAllMocks());
 
@@ -32,18 +29,21 @@ describe("acp session manager", () => {
     expect(session).toMatchObject({ activeRunId: null, abortController: null });
   });
 
-  it.each(["clear", "cancel"] as const)("ignores stale %s ownership", (operation) => {
-    const session = createSession();
-    startRun(session.sessionId, "run-old");
-    const replacementController = startRun(session.sessionId, "run-new");
-    if (operation === "clear") {
-      store.clearActiveRun(session.sessionId, "run-old");
-    } else {
-      expect(store.cancelActiveRun(session.sessionId, "run-old")).toBe(false);
-    }
-    expect(session.activeRunId).toBe("run-new");
-    expect(replacementController.signal.aborted).toBe(false);
-  });
+  it.each(["clear", "cancel"] as const)(
+    "does not let stale %s ownership remove a replacement run",
+    (operation) => {
+      const session = createSession();
+      startRun(session.sessionId, "run-old");
+      const replacementController = startRun(session.sessionId, "run-new");
+      if (operation === "clear") {
+        store.clearActiveRun(session.sessionId, "run-old");
+      } else {
+        expect(store.cancelActiveRun(session.sessionId, "run-old")).toBe(false);
+      }
+      expect(session.activeRunId).toBe("run-new");
+      expect(replacementController.signal.aborted).toBe(false);
+    },
+  );
 
   it("deletes sessions and aborts active runs on close", () => {
     const session = createSession("close-me");
@@ -51,8 +51,10 @@ describe("acp session manager", () => {
     expect(store.deleteSession(session.sessionId)).toBe(true);
     expect(controller.signal.aborted).toBe(true);
     expect(store.hasSession(session.sessionId)).toBe(false);
-    expect(store.deleteSession(session.sessionId)).toBe(false);
-    expect(removed).toEqual(["close-me"]);
+  });
+
+  it("reports false when deleting a missing session", () => {
+    expect(store.deleteSession("missing")).toBe(false);
   });
 
   it("refreshes existing session IDs instead of creating duplicates", () => {
@@ -65,24 +67,45 @@ describe("acp session manager", () => {
     expect(store.hasSession("existing")).toBe(true);
   });
 
-  it("evicts idle sessions but rejects when all remaining sessions are active", () => {
-    createSession("first");
-    startRun(createSession("second").sessionId);
-    expect(createSession("third").sessionId).toBe("third");
-    expect(store.getSession("first")).toBeUndefined();
-    expect(store.getSession("second")?.sessionId).toBe("second");
-    expect(removed).toEqual(["first"]);
-    startRun("third");
-    expect(() => createSession("next")).toThrow(/session limit reached/i);
+  it("uses soft-cap eviction for the oldest idle session when full", () => {
+    const boundedStore = createInMemorySessionStore({ maxSessions: 2 });
+    const first = createSession("first", boundedStore);
+    nowMs += 100;
+    const second = createSession("second", boundedStore);
+    startRun(second.sessionId, "run-2", boundedStore);
+    nowMs += 100;
+    expect(createSession("third", boundedStore).sessionId).toBe("third");
+    expect(boundedStore.getSession(first.sessionId)).toBeUndefined();
+    expect(boundedStore.getSession(second.sessionId)?.sessionId).toBe("second");
   });
 
-  it("reports idle reaping and disposal through onSessionRemoved", () => {
-    createSession("stale");
+  it("rejects when full and no session is evictable", () => {
+    const boundedStore = createInMemorySessionStore({ maxSessions: 1 });
+    const only = createSession("only", boundedStore);
+    startRun(only.sessionId, "run-only", boundedStore);
+    expect(() => createSession("next", boundedStore)).toThrow(/session limit reached/i);
+  });
+
+  it("reports every removal path through onSessionRemoved", () => {
+    const removed: string[] = [];
+    const reportingStore = createInMemorySessionStore({
+      maxSessions: 2,
+      onSessionRemoved: (sessionId) => removed.push(sessionId),
+    });
+    createSession("deleted", reportingStore);
+    expect(reportingStore.deleteSession("deleted")).toBe(true);
+    expect(removed).toEqual(["deleted"]);
+
+    createSession("stale", reportingStore);
     nowMs += 24 * 60 * 60 * 1_000 + 1;
-    createSession("fresh");
-    expect(removed).toEqual(["stale"]);
-    createSession("second");
-    store.dispose();
-    expect(removed).toEqual(["stale", "fresh", "second"]);
+    createSession("fresh", reportingStore);
+    expect(removed).toEqual(["deleted", "stale"]);
+
+    createSession("second", reportingStore);
+    createSession("third", reportingStore);
+    expect(removed).toEqual(["deleted", "stale", "fresh"]);
+
+    reportingStore.dispose();
+    expect(removed).toEqual(["deleted", "stale", "fresh", "second", "third"]);
   });
 });

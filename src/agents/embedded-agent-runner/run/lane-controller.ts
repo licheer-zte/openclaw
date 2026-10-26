@@ -150,7 +150,9 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     releaseQueuedRunContext?.(outcome);
     releaseQueuedRunContext = undefined;
   };
-  const abandonQueuedContext = () => releaseQueuedContext("abandoned");
+  const abandonQueuedContext = () => {
+    releaseQueuedContext("abandoned");
+  };
 
   const noteLaneTaskProgress = () => {
     laneTaskProgressAtMs = Date.now();
@@ -238,7 +240,6 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
         attempt.setExecutionDeadline(boundedLaneDeadline());
       },
       isCurrent,
-      isAttemptCurrent,
       abortSignal: signal,
       onAttemptDeadlineChanged,
       onAttemptTimeout: (_reason: Error) => {

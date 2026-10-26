@@ -94,10 +94,16 @@ async function expectReachableAction(
   expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(visibleBottom);
   const point = { x: bounds!.x + bounds!.width / 2, y: bounds!.y + bounds!.height / 2 };
   if (mobile) {
-    const compact = await page
+    const { compact, resting, narrowViewport } = await page
       .locator(".agent-chat__composer-shell")
-      .evaluate((element) => element.getBoundingClientRect().width <= 560);
-    expect(Math.min(bounds!.width, bounds!.height)).toBeGreaterThanOrEqual(32);
+      .evaluate((element) => ({
+        compact: element.getBoundingClientRect().width <= 560,
+        resting: element.matches('[data-mobile-composer="true"][data-composer-editing="false"]'),
+        narrowViewport: matchMedia("(max-width: 560px)").matches,
+      }));
+    const targetSize =
+      label === "Stop generating" && narrowViewport ? 32 : resting || compact ? 36 : 32;
+    expect([bounds!.width, bounds!.height]).toEqual([targetSize, targetSize]);
     for (const picker of await page
       .locator(".chat-controls__model-trigger, .chat-controls__effort-trigger")
       .all()) {
@@ -113,7 +119,7 @@ async function expectReachableAction(
       point,
     ),
   ).toBe(true);
-  return { ...point, width: bounds!.width, height: bounds!.height };
+  return point;
 }
 
 async function expectEditableDraft(page: Page, visibleBottom: number, mobile: boolean) {
@@ -164,7 +170,6 @@ async function expectEditableDraft(page: Page, visibleBottom: number, mobile: bo
   await expect(textarea).toHaveValue("First line\nSecond line\nThird line\nLast line typed");
   await waitForLayoutSettled(page, ".agent-chat__composer-combobox textarea");
   // Scroll the complete line into view; native caret scrolling may show only its glyphs.
-  await textarea.hover();
   await page.mouse.wheel(0, 1000);
   await expect
     .poll(() => textarea.evaluate((editor) => editor.scrollTop + editor.clientHeight))
@@ -175,7 +180,6 @@ async function expectEditableDraft(page: Page, visibleBottom: number, mobile: bo
   await page.keyboard.press(process.platform === "darwin" ? "Meta+ArrowUp" : "Control+Home");
   await page.keyboard.type("Edited ");
   await waitForLayoutSettled(page, ".agent-chat__composer-combobox textarea");
-  await textarea.hover();
   await page.mouse.wheel(0, -1000);
   await expect.poll(() => textarea.evaluate((editor) => editor.scrollTop)).toBe(0);
   const first = await measure();
@@ -346,11 +350,6 @@ suite.define(() => {
         await gateway.waitForRequest("chat.send");
         const stop = page.getByRole("button", { name: "Stop generating" });
         await expect(stop).toBeVisible();
-        const stopBounds = await stop.boundingBox();
-        expect(stopBounds && { width: stopBounds.width, height: stopBounds.height }).toEqual({
-          width: sendPoint.width,
-          height: sendPoint.height,
-        });
         const generating = await geometry(page);
         if (mobile) {
           await textarea.focus();
@@ -425,7 +424,7 @@ suite.define(() => {
           await navigationDrawerToggle(page).click();
           await expect(page.locator(".shell--nav-drawer-open")).toBeVisible();
           await readSurface(".shell-nav", "drawer");
-          await page.getByRole("button", { name: /^Filter & sort · /, exact: true }).click();
+          await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
           await expect(page.locator(".sidebar-session-filter-panel")).toBeVisible();
           await readSurface(".sidebar-session-filter-panel", "filter-sheet");
           await page.keyboard.press("Escape");

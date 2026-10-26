@@ -17,6 +17,12 @@ import {
 import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
 
 const events: DiagnosticEventPayload[] = [];
+function session(incognito: boolean, suffix: string) {
+  return {
+    sessionKey: `agent:main:dashboard:${incognito ? "incognito-" : ""}${suffix}`,
+    sessionId: `${incognito ? "private" : "ordinary"}-${suffix}-id`,
+  };
+}
 beforeEach(() => {
   resetDiagnosticStateForTest();
   resetDiagnosticEventsForTest();
@@ -31,17 +37,17 @@ afterEach(() => {
   resetDiagnosticEventsForTest();
   setDiagnosticsEnabledForProcess(false);
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 it.each(["key", "session-id"] as const)(
-  "hides Incognito text for a %s but retains lifecycle events",
+  "keeps Incognito text out of formatted logs for a %s while retaining lifecycle state",
   async (identity) => {
     const logs = (["debug", "warn", "error"] as const).map((level) =>
       vi.spyOn(diagnosticLogger, level).mockImplementation(() => {}),
     );
     for (const incognito of [true, false]) {
-      const sessionKey = `agent:main:dashboard:${incognito ? "incognito-" : ""}diagnostic`;
-      const sessionId = `${incognito ? "private" : "ordinary"}-diagnostic-id`;
+      const { sessionKey, sessionId } = session(incognito, "diagnostic");
       const state = getDiagnosticSessionState({ sessionId, sessionKey });
       const ref = identity === "key" ? { sessionKey } : { sessionId };
       const marker = incognito
@@ -49,8 +55,16 @@ it.each(["key", "session-id"] as const)(
         : "SYNTHETIC_ORDINARY_DIAGNOSTIC_TEXT";
       const failure = { outcome: "error", reason: marker, error: marker } as const;
       const failed = { ...ref, ...failure };
-      logMessageDispatchCompleted({ ...failed, source: "test", durationMs: 1 });
-      logMessageProcessed({ ...failed, agentId: "main", channel: "webchat" });
+      logMessageDispatchCompleted({
+        ...failed,
+        source: "test",
+        durationMs: 1,
+      });
+      logMessageProcessed({
+        ...failed,
+        agentId: "main",
+        channel: "webchat",
+      });
       for (const next of ["processing", "idle"] as const) {
         logSessionStateChange({ ...ref, state: next, reason: marker });
         expect(state.state).toBe(next);

@@ -25,11 +25,17 @@ function start(
     pid?: number;
     detached?: boolean;
     onError?: (error: unknown) => void | Promise<void>;
+    spawnError?: Error;
   } = {},
 ) {
   const child = Object.assign(new ChildProcess(), { pid: options.pid });
   const kill = vi.spyOn(child, "kill").mockReturnValue(true);
-  vi.spyOn(childProcess, "spawn").mockReturnValue(child);
+  vi.spyOn(childProcess, "spawn").mockImplementation(() => {
+    if (options.spawnError) {
+      throw options.spawnError;
+    }
+    return child;
+  });
   const detach = vi.fn();
   let onSignal: ((signal: NodeJS.Signals) => void) | undefined;
   const onError = vi.fn(options.onError ?? (() => {}));
@@ -183,4 +189,10 @@ it.each(["reject", "throw"] as const)("joins close and diagnostics: %s", async (
   } finally {
     reporting.resolve();
   }
+});
+it("preserves synchronous spawn errors without diagnostics", () => {
+  const error = new Error("invalid spawn options");
+  const onError = vi.fn();
+  expect(() => start({ spawnError: error, onError })).toThrow(error);
+  expect(onError).not.toHaveBeenCalled();
 });

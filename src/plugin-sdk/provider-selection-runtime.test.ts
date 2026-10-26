@@ -71,7 +71,10 @@ it("selects an explicit provider when it exists", () => {
 it("auto-selects the first configured provider by order", () => {
   const resolution = resolveConfiguredCapabilityProvider({
     ...params,
-    resolveProviderConfig: ({ provider, rawConfig }) => ({ ...rawConfig, providerId: provider.id }),
+    resolveProviderConfig: ({ provider, rawConfig }) => ({
+      ...rawConfig,
+      providerId: provider.id,
+    }),
     isProviderConfigured: ({ providerConfig }) => providerConfig.providerId === "second",
   });
 
@@ -81,6 +84,7 @@ it("auto-selects the first configured provider by order", () => {
     provider: providers[1],
     providerConfig: { providerId: "second" },
   });
+  expect(resolution.provider).toBe(providers[1]);
 });
 
 it.each([

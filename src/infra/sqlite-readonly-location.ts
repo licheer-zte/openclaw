@@ -7,17 +7,15 @@ import {
   sameFileContentsSync,
   sameFileIdentity,
 } from "@openclaw/fs-safe/advanced";
-import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { coerceErrorMessage, extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { withSqliteInspectionOperation } from "./sqlite-error-diagnostics.js";
 import { copySqliteFile } from "./sqlite-file-copy.js";
+import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import {
-  cleanupFailedSnapshotPreparation,
-  discardPreparedCopyPayload,
-  preparationCleanupError,
   publishPreparedCopy,
   removeTempDirectory,
   removeTempDirectoryAsync,
@@ -26,7 +24,6 @@ import {
 import type {
   AsyncPreparedSqliteReadOnlyLocation,
   PreparedSqliteReadOnlyLocation,
-  SqliteSnapshotDestination,
 } from "./sqlite-readonly-location.types.js";
 import {
   readSqliteSchemaHeader,
@@ -453,41 +450,45 @@ async function copyPreparedLocation(
   return step.value;
 }
 
+function preparationCleanupError(errors: unknown[], operation: string): AggregateError {
+  return createSqliteLifecycleAggregateError(
+    errors,
+    `${operation} and cleanup failed: ${coerceErrorMessage(errors[0])}`,
+    errors[0],
+  );
+}
+
 async function createStableReadOnlyCopy(
   pathname: string,
   journalMode: Exclude<SourceJournalMode, "unknown">,
-  stagingRoot?: SqliteSnapshotDestination,
+  stagingRoot?: string,
   signal?: AbortSignal,
 ): Promise<PreparedSqliteReadOnlyLocation> {
-  const tempDir =
-    typeof stagingRoot === "object"
-      ? stagingRoot.directory
-      : await createSqliteSnapshotStagingDirectory(stagingRoot, false, signal);
+  const tempDir = await createSqliteSnapshotStagingDirectory(stagingRoot, false, signal);
   try {
     return await copyPreparedLocation(
       createStableReadOnlyCopyInTempDirectory(pathname, journalMode, tempDir),
     );
   } catch (error) {
-    return cleanupFailedSnapshotPreparation(
-      tempDir,
-      error,
-      "SQLite snapshot preparation",
-      typeof stagingRoot === "object",
+    const errors: unknown[] = [error];
+    const removed = await removeTempDirectoryAsync(tempDir, (cleanupError) =>
+      errors.push(cleanupError),
     );
+    if (!removed) {
+      throw preparationCleanupError(errors, "SQLite snapshot preparation");
+    }
+    throw error;
   }
 }
 
 /** Native reads may create WAL-index files; callers need an isolated child or a private source. */
 export async function createOnlineReadOnlyBackup(
   pathname: string,
-  stagingRoot?: SqliteSnapshotDestination,
+  stagingRoot?: string,
   signal?: AbortSignal,
   onProgress?: (progress: import("node:sqlite").BackupProgressInfo) => void,
 ): Promise<PreparedSqliteReadOnlyLocation> {
-  const tempDir =
-    typeof stagingRoot === "object"
-      ? stagingRoot.directory
-      : await createSqliteSnapshotStagingDirectory(stagingRoot, false, signal);
+  const tempDir = await createSqliteSnapshotStagingDirectory(stagingRoot, false, signal);
   const snapshotPath = path.join(tempDir, "database.sqlite.partial");
   try {
     if (process.platform !== "win32") {
@@ -518,12 +519,14 @@ export async function createOnlineReadOnlyBackup(
     return publishPreparedCopy(tempDir);
   } catch (error) {
     const stagingError = sqliteSnapshotStagingError(tempDir, error, false, pathname);
-    return cleanupFailedSnapshotPreparation(
-      tempDir,
-      stagingError,
-      "SQLite online backup",
-      typeof stagingRoot === "object",
+    const errors: unknown[] = [stagingError];
+    const removed = await removeTempDirectoryAsync(tempDir, (cleanupError) =>
+      errors.push(cleanupError),
     );
+    if (!removed) {
+      throw preparationCleanupError(errors, "SQLite online backup");
+    }
+    throw stagingError;
   }
 }
 
@@ -536,7 +539,7 @@ export async function createOnlineReadOnlyBackup(
  */
 async function prepareReadOnlySourceInProcess(
   pathname: string,
-  stagingRoot?: SqliteSnapshotDestination,
+  stagingRoot?: string,
   signal?: AbortSignal,
   onProgress?: (progress: import("node:sqlite").BackupProgressInfo) => void,
 ): Promise<PreparedSqliteReadOnlyLocation> {
@@ -589,7 +592,7 @@ async function prepareReadOnlySourceInProcess(
 
 function* prepareArtifactPreservingCopy(
   pathname: string,
-  stagingRoot?: SqliteSnapshotDestination,
+  stagingRoot?: string,
   expectedSourceIdentity?: DatabaseFileIdentity,
   expectedSourceContent?: SqliteFileContent,
 ): Generator<CopyRequest, PreparedSqliteReadOnlyLocation, void> {
@@ -603,15 +606,12 @@ function* prepareArtifactPreservingCopy(
       return yield* createStableReadOnlyCopyInTempDirectory(
         canonicalPath,
         journalMode,
-        typeof stagingRoot === "object" ? stagingRoot.directory : undefined,
-        typeof stagingRoot === "string" ? stagingRoot : undefined,
+        undefined,
+        stagingRoot,
         expectedSourceIdentity,
         expectedSourceContent,
       );
     } catch (error) {
-      if (typeof stagingRoot === "object") {
-        discardPreparedCopyPayload(stagingRoot.directory, error);
-      }
       if (!(error instanceof SqliteSourceChangedError)) {
         throw error;
       }
@@ -629,7 +629,7 @@ function* prepareArtifactPreservingCopy(
 
 export function prepareSqliteReadOnlyLocationSyncInProcess(
   pathname: string,
-  stagingRoot?: SqliteSnapshotDestination,
+  stagingRoot?: string,
   expectedSourceIdentity?: DatabaseFileIdentity,
   expectedSourceContent?: SqliteFileContent,
 ): PreparedSqliteReadOnlyLocation {
@@ -646,7 +646,7 @@ export function prepareSqliteReadOnlyLocationSyncInProcess(
 /** Artifact-preserving acquisition with native CoW where supported, in the isolated child. */
 export function prepareSqliteReadOnlyCopyInProcess(
   pathname: string,
-  stagingRoot?: SqliteSnapshotDestination,
+  stagingRoot?: string,
   expectedSourceIdentity?: DatabaseFileIdentity,
 ): Promise<PreparedSqliteReadOnlyLocation> {
   return copyPreparedLocation(
@@ -705,7 +705,7 @@ export async function inspectSqliteSchemaHeaderInProcess(
 
 export function prepareSqliteReadOnlyLocationInProcess(
   pathname: string,
-  stagingRoot?: SqliteSnapshotDestination,
+  stagingRoot?: string,
   signal?: AbortSignal,
   onProgress?: (progress: import("node:sqlite").BackupProgressInfo) => void,
 ) {

@@ -9,7 +9,7 @@ export function testBoard(sessionKey = "agent:main:board") {
   return boardClient(createTestBoardStore(), { sessionKey });
 }
 
-function boardClient(store: BoardStore, target: BoardSessionTarget) {
+export function boardClient(store: BoardStore, target: BoardSessionTarget) {
   return {
     store,
     snapshot: () => store.getSnapshot(target),

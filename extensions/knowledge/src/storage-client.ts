@@ -1,15 +1,13 @@
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
-import type { Worker } from "node:worker_threads";
+import { Worker } from "node:worker_threads";
 import {
-  createCpuTrackedWorker,
   createPluginRuntimeProcessEntrypoint,
   resolveRuntimeWorkerUrl,
 } from "openclaw/plugin-sdk/process-runtime";
 import type { VaultAccess } from "./access.js";
 import { pluginFilesLocation } from "./plugin-files.js";
 import type { StoreConfig } from "./real-vault.js";
-import { KnowledgeRestartError } from "./restart-error.js";
 import type { StorageOperations } from "./storage-host.js";
 import { AUTHORITY_REVOKED, type HostMessage, type WorkerMessage } from "./storage-protocol.js";
 
@@ -25,6 +23,7 @@ type Call = {
 
 // SDK modules reachable from storage and registry code in the workers.
 const SDK_MODULES = [
+  "openclaw/plugin-sdk/database-engine-worker-runtime",
   "openclaw/plugin-sdk/feature-contract",
   "openclaw/plugin-sdk/routing",
   "openclaw/plugin-sdk/sqlite-worker-runtime",
@@ -85,24 +84,18 @@ export class StorageClient {
       );
     });
   }
-  /** Stop the worker and resolve once it has exited. Outstanding calls fail;
-   * the next call starts a new worker. */
-  async close() {
+  /** Stop the worker. Outstanding calls fail; the next call starts a new worker. */
+  close() {
     const worker = this.worker;
     this.worker = undefined;
-    this.fail(
-      new KnowledgeRestartError(
-        "storage-stopped",
-        "Knowledge storage stopped; retry the original request.",
-      ),
-    );
-    await worker?.terminate();
+    this.fail(new Error("Knowledge storage stopped; retry the original request."));
+    void worker?.terminate();
   }
   private start(): Worker {
     if (this.worker) {
       return this.worker;
     }
-    const worker = createCpuTrackedWorker(resolveRuntimeWorkerUrl(storageEntrypoint), {
+    const worker = new Worker(resolveRuntimeWorkerUrl(storageEntrypoint), {
       workerData: {
         sdk: sdkUrls(),
         files: pluginFilesLocation(),

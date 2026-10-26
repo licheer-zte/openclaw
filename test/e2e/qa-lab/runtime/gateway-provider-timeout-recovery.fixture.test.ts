@@ -1,5 +1,4 @@
 import { request, type ClientRequest } from "node:http";
-import { text as readStreamText } from "node:stream/consumers";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 
@@ -25,11 +24,6 @@ it("keeps bootstrap outside the hold deadline and reports progress with console 
   let assistantMessages: unknown[] = [];
   const bootstrap: Array<() => Promise<void>> = [];
   const cleanup: Array<() => Promise<void>> = [];
-  const runCleanup = async () => {
-    for (const run of cleanup.splice(0).toReversed()) {
-      await run();
-    }
-  };
   const cases: Array<{
     run: (context: { signal: AbortSignal }) => Promise<void>;
     timeout: number;
@@ -89,7 +83,13 @@ it("keeps bootstrap outside the hold deadline and reports progress with console 
                   { method: "POST" },
                   (response) => {
                     releasedAt = now;
-                    void readStreamText(response).then(resolve, reject);
+                    let body = "";
+                    response.setEncoding("utf8");
+                    response.on("data", (chunk: string) => {
+                      body += chunk;
+                    });
+                    response.on("end", () => resolve(body));
+                    response.on("error", reject);
                   },
                 );
                 providerRequest.on("error", reject);
@@ -131,7 +131,9 @@ it("keeps bootstrap outside the hold deadline and reports progress with console 
     const bodyStartedAt = now;
     await test.run({ signal });
     const bodyMs = now - bodyStartedAt;
-    await runCleanup();
+    for (const run of cleanup.splice(0).toReversed()) {
+      await run();
+    }
 
     expect.soft(test.timeout).toBe(510_000);
     expect.soft(bodyMs).toBeLessThan(test.timeout);
@@ -152,7 +154,9 @@ it("keeps bootstrap outside the hold deadline and reports progress with console 
     expect.soft(completed).toBe(true);
   } finally {
     providerRequest?.destroy();
-    await runCleanup();
+    for (const run of cleanup.splice(0).toReversed()) {
+      await run();
+    }
     await providerReply?.catch(() => {});
   }
 });

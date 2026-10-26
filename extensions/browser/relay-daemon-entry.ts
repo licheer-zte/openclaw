@@ -4,7 +4,6 @@
  * Playwright, chrome-devtools-mcp) attach through the same relay port. Spawned
  * on demand by the native messaging host, or run manually.
  */
-import { fileURLToPath } from "node:url";
 import { readBrowserHostConfig } from "./src/browser/extension-host-config.js";
 import { runExtensionRelayDaemon } from "./src/browser/relay-daemon.js";
 
@@ -42,8 +41,6 @@ async function main(): Promise<void> {
   const run = await runExtensionRelayDaemon({
     port: resolvePortArgument(process.argv.slice(2)),
     allowLegacyAuth: await resolveAllowLegacyAuth(),
-    // An app or package update replaces this file; the daemon then retires.
-    installationPath: fileURLToPath(import.meta.url),
   });
   const stop = (): void => run.stop();
   process.once("SIGINT", stop);

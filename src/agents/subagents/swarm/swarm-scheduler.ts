@@ -228,7 +228,11 @@ function pumpLane(lane: SwarmGroupLane) {
   });
 }
 
-function ensureLane(params: Parameters<typeof reserveSwarmRun>[0]): SwarmGroupLane {
+function ensureLane(params: {
+  groupId: string;
+  maxConcurrent: number;
+  activeRunIds: readonly string[];
+}): SwarmGroupLane {
   const lane = lanes.get(params.groupId) ?? {
     groupId: params.groupId,
     limit: params.maxConcurrent,

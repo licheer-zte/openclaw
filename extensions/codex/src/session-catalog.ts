@@ -1,6 +1,5 @@
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   OpenClawPluginApi,
   OpenClawPluginNodeInvokePolicy,
@@ -50,12 +49,6 @@ import {
   codexUpstreamContinueResult,
   type CodexUpstreamBaseline,
 } from "./session-upstream-marker.js";
-
-const loadNodeContinue = createLazyRuntimeModule(
-  () => import("./session-catalog-node-continue.js"),
-);
-const loadCatalogAdoption = createLazyRuntimeModule(() => import("./session-catalog-adoption.js"));
-const loadCatalogArchive = createLazyRuntimeModule(() => import("./session-catalog-archive.js"));
 
 export { createCodexSessionCatalogControl } from "./session-catalog-control.js";
 export { createCodexSessionCatalogNodeHostCommands } from "./session-catalog-listing.js";
@@ -340,7 +333,7 @@ export function registerCodexSessionCatalog(params: {
       }
       if (request.hostId.startsWith("node:")) {
         const agentId = resolveRequestAgentId(request.agentId);
-        const { continueNodeCodexSession } = await loadNodeContinue();
+        const { continueNodeCodexSession } = await import("./session-catalog-node-continue.js");
         return await continueNodeCodexSession({
           agentId,
           api: params.api,
@@ -362,7 +355,7 @@ export function registerCodexSessionCatalog(params: {
         );
       }
       let upstreamBaseline: (CodexUpstreamBaseline & { connectionFingerprint: string }) | undefined;
-      const { continueLocalCodexSession } = await loadCatalogAdoption();
+      const { continueLocalCodexSession } = await import("./session-catalog-adoption.js");
       const continued = await continueLocalCodexSession({
         agentId,
         api: params.api,
@@ -408,7 +401,7 @@ export function registerCodexSessionCatalog(params: {
       }
       const { agentId, source, control } = await bindLocalRequest(request);
       source.assertCurrent();
-      const { archiveLocalCodexSession } = await loadCatalogArchive();
+      const { archiveLocalCodexSession } = await import("./session-catalog-archive.js");
       await archiveLocalCodexSession({
         agentId,
         bindingStore: params.bindingStore,

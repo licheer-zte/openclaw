@@ -105,4 +105,5 @@ it("reports missing parent evidence and unsupported ACP-native callbacks without
     "lineage.parent-run",
     "acp.native-action-callback",
   ]);
+  expect(JSON.stringify(facts)).not.toMatch(/task|prompt|externalSession/i);
 });

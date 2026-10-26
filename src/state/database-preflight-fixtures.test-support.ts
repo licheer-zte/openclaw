@@ -4,14 +4,14 @@ import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION as agent } from "./openclaw-agent-db-contract.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import * as agentDb from "./openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import {
   assertOpenClawDatabasesReady as assertReady,
   preflightOpenClawDatabaseSchemas as inspectSchemas,
 } from "./openclaw-database-preflight.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION as state } from "./openclaw-state-db-contract.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import * as stateDb from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
@@ -29,8 +29,16 @@ export function databaseFixture(dir: string, extraEnv?: NodeJS.ProcessEnv) {
     agent: (agentId = "main", pathname?: string) =>
       agentDb.openOpenClawAgentDatabase({ agentId, path: pathname, env }),
     close: closeDatabases,
-    doctor: (targets: readonly { agentId: string; path: string }[] = [], config?: OpenClawConfig) =>
-      assertReady({ env, config, operation: "doctor", configuredAgentDatabaseTargets: targets }),
+    doctor: (
+      configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[] = [],
+      config?: OpenClawConfig,
+    ) =>
+      assertReady({
+        env,
+        config,
+        operation: "doctor",
+        configuredAgentDatabaseTargets,
+      }),
     ready: (
       config?: OpenClawConfig,
       operation: "gateway-startup" | "gateway-restart" = "gateway-startup",
@@ -44,7 +52,10 @@ export function databaseFixture(dir: string, extraEnv?: NodeJS.ProcessEnv) {
   };
 }
 
-export const supportedVersions = { state, agent };
+export const supportedVersions = {
+  state: OPENCLAW_STATE_SCHEMA_VERSION,
+  agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+};
 export const compatible = { incompatible: [], indeterminate: [] };
 
 export const versionRow = (
@@ -70,8 +81,9 @@ export const agentConfig = (ids: string[], systemAgent: string): OpenClawConfig 
   },
 });
 
-export const expectFiles = (paths: string[], exists: boolean) =>
+export function expectFiles(paths: string[], exists: boolean) {
   expect(paths.map((pathname) => fs.existsSync(pathname))).toEqual(paths.map(() => exists));
+}
 
 export function closeDatabases() {
   agentDb.closeOpenClawAgentDatabasesForTest();
@@ -96,4 +108,13 @@ export function rejectSnapshot(pathname: string, message: string, normalize = fa
       }
       return prepare(source, options);
     });
+}
+
+export function trackSettlement(run: Promise<unknown>) {
+  let settled = false;
+  const markSettled = () => {
+    settled = true;
+  };
+  void run.then(markSettled, markSettled);
+  return () => settled;
 }

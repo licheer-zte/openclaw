@@ -34,10 +34,7 @@ import {
 } from "./subagent-control-session.js";
 import type { ResolvedSubagentController, KillScope } from "./subagent-control.types.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
-import {
-  captureSubagentExecution,
-  captureSubagentRetainedWork,
-} from "./subagent-registry-execution-cleanup.js";
+import { captureSubagentExecution } from "./subagent-registry-execution-cleanup.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
@@ -296,7 +293,6 @@ export async function withSubagentKillScope<T>(
     // Resident reservations can dispatch on the first await. Capture all known roots and
     // descendants first; persisted-only discovery below remains worker-owned.
     const resident = new Map(subagentRuns);
-    const hasRetainedWork = captureSubagentRetainedWork();
     for (const { tree } of pending) {
       const controller = controllerFor(tree);
       capture(
@@ -305,7 +301,7 @@ export async function withSubagentKillScope<T>(
           resident,
           controller.controllerSessionKey,
           controller.controllerAgentId,
-        ).filter(hasRetainedWork),
+        ),
         tree.children,
         controller,
         tree,
@@ -391,12 +387,7 @@ export async function withSubagentKillScope<T>(
           await pending;
           assertCurrent();
         }
-        await select(
-          candidates.filter(captureSubagentRetainedWork()),
-          tree.children,
-          controller,
-          tree,
-        );
+        await select(candidates, tree.children, controller, tree);
       }
       for (const child of tree.children) {
         await refreshTree(child);

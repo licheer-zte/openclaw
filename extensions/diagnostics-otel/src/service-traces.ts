@@ -249,6 +249,18 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
   ) => {
     span.setAttributes?.(redactOtelAttributes(attributes));
   };
+  const retainTrustedSpanContext = (
+    traceId: string,
+    spanId: string,
+    spanContext: SpanContext,
+    owner?: string,
+  ) => {
+    retainedTrustedSpanContexts.set(
+      retainedTrustedSpanContextKey(traceId, spanId, owner),
+      spanContext,
+    );
+    pruneMapToMaxSize(retainedTrustedSpanContexts, MAX_RETAINED_TRUSTED_SPAN_CONTEXTS);
+  };
   // Retention keys on the diagnostic ids the event carries. Taking the whole context
   // (not a bare trace id) makes an OTel SpanContext a type error here; keying by OTel
   // ids instead would silently split every late child into its own trace.
@@ -275,14 +287,12 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     }
     span.end(endTimeMs);
     for (const retainedKey of retainedKeys) {
-      const traceId = traceContext.traceId;
-      const retainedSpanId = retainedKey.spanId;
-      const owner = retainedKey.owner;
-      retainedTrustedSpanContexts.set(
-        retainedTrustedSpanContextKey(traceId, retainedSpanId, owner),
+      retainTrustedSpanContext(
+        traceContext.traceId,
+        retainedKey.spanId,
         spanContext,
+        retainedKey.owner,
       );
-      pruneMapToMaxSize(retainedTrustedSpanContexts, MAX_RETAINED_TRUSTED_SPAN_CONTEXTS);
     }
   };
 

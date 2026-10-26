@@ -11,9 +11,14 @@ function fixture(context, { initial = false, acceptsChange = true, closeFails = 
   const urlFile = path.join(root, "url");
   const url = "https://example.invalid/?tgWebAppData=synthetic-private-session";
   fs.writeFileSync(urlFile, url, { mode: 0o600 });
-  const state = { enabled: initial, closed: false, launched: false, toggles: 0 };
+  let enabled = initial;
+  let closed = false;
+  let launched = false;
+  let toggles = 0;
   const page = {
-    goto: async (value) => assert.equal(value, url),
+    async goto(value) {
+      assert.equal(value, url);
+    },
     async waitForLoadState() {},
     getByText(text) {
       if (text instanceof RegExp) {
@@ -25,9 +30,11 @@ function fixture(context, { initial = false, acceptsChange = true, closeFails = 
           first() {
             return this;
           },
-          isVisible: async () => state.enabled,
-          async waitFor({ state: visibility }) {
-            if ((visibility === "visible") !== state.enabled) {
+          async isVisible() {
+            return enabled;
+          },
+          async waitFor({ state }) {
+            if ((state === "visible") !== enabled) {
               throw new Error(`request failed: ${url}`);
             }
           },
@@ -40,9 +47,9 @@ function fixture(context, { initial = false, acceptsChange = true, closeFails = 
         async waitFor() {},
         async click() {
           if (text === "Threaded Mode") {
-            state.toggles += 1;
+            toggles += 1;
             if (acceptsChange) {
-              state.enabled = !state.enabled;
+              enabled = !enabled;
             }
           }
         },
@@ -53,14 +60,15 @@ function fixture(context, { initial = false, acceptsChange = true, closeFails = 
     urlFile,
     username: "leased_bot",
     url,
-    state,
     chromium: {
       async launch() {
-        state.launched = true;
+        launched = true;
         return {
-          newPage: async () => page,
+          async newPage() {
+            return page;
+          },
           async close() {
-            state.closed = true;
+            closed = true;
             if (closeFails) {
               throw new Error(`browser close failed: ${url}`);
             }
@@ -68,6 +76,9 @@ function fixture(context, { initial = false, acceptsChange = true, closeFails = 
         };
       },
     },
+    closed: () => closed,
+    launched: () => launched,
+    toggles: () => toggles,
   };
 }
 
@@ -82,29 +93,33 @@ for (const [initial, desired] of [
       before: initial,
       after: desired,
     });
-    assert.equal(f.state.closed, true);
-    assert.equal(f.state.toggles, initial === desired ? 0 : 1);
+    assert.equal(f.closed(), true);
+    assert.equal(f.toggles(), initial === desired ? 0 : 1);
   });
 }
 
-for (const [flag, message] of Object.entries({
-  acceptsChange: "BotFather Threaded Mode could not be confirmed.",
-  closeFails: "BotFather browser cleanup failed.",
-})) {
-  test(`${flag} failure does not leak the signed URL`, async (context) => {
-    const f = fixture(context, { [flag]: flag === "closeFails" });
-    await assert.rejects(setBotFatherThreadedMode({ ...f, enabled: true }), (error) => {
-      assert.equal(error.message, message);
-      assert.equal(error.stack.includes(f.url), false);
-      return true;
-    });
-    assert.equal(f.state.closed, true);
+test("an unconfirmed switch fails without leaking the signed URL", async (context) => {
+  const f = fixture(context, { acceptsChange: false });
+  await assert.rejects(setBotFatherThreadedMode({ ...f, enabled: true }), (error) => {
+    assert.equal(error.message, "BotFather Threaded Mode could not be confirmed.");
+    assert.equal(error.stack.includes(f.url), false);
+    return true;
   });
-}
+  assert.equal(f.closed(), true);
+});
+
+test("a failed browser close cannot report success or expose its URL", async (context) => {
+  const f = fixture(context, { closeFails: true });
+  await assert.rejects(setBotFatherThreadedMode({ ...f, enabled: true }), (error) => {
+    assert.equal(error.message, "BotFather browser cleanup failed.");
+    assert.equal(error.stack.includes(f.url), false);
+    return true;
+  });
+});
 
 test("a world-readable URL file is rejected before opening a browser", async (context) => {
   const f = fixture(context);
   fs.chmodSync(f.urlFile, 0o644);
   await assert.rejects(setBotFatherThreadedMode({ ...f, enabled: true }));
-  assert.equal(f.state.launched, false);
+  assert.equal(f.launched(), false);
 });

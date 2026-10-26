@@ -1,5 +1,4 @@
 /** Typed CLI transport shared by command inspection and native-off inventory. */
-import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import {
   getServiceInspectionClock,
   runServiceInspectionGuard,
@@ -94,8 +93,7 @@ export function createSystemdBusctlQuery(options: {
     }
     if (result.code !== 0) {
       const unitName = options.unitName ?? args[6];
-      // systemd 245 busctl colors this line even when stderr is not a terminal.
-      const detail = stripAnsi(result.stderr).trim();
+      const detail = result.stderr.trim();
       if (
         result.termination === "exit" &&
         ((args.includes("LoadUnit") && detail === `Call failed: Unit ${unitName} not found.`) ||

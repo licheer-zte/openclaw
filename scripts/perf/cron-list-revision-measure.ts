@@ -3,7 +3,6 @@
  * Each operation enters the real lock without publishing a change, then lists 25
  * rows. Every 50 operations per store publishes one changed worker postimage.
  * This models no-op scheduler/CRUD invalidation, not worker or Gateway latency.
- * Add --query synthetic to measure repeated search preparation within each revision.
  *
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/cron-list-revision-measure.ts \
  *   --mode timing --output .local/cron-revision/head.json
@@ -11,8 +10,7 @@
  * allocation includes collected objects; promotion needs --trace-gc-nvp and
  * --gc-log pointing at redirected stdout. --lock accepts the baseline locked.ts
  * with its relative imports resolved to the same checkout. All other code stays
- * identical. --read likewise accepts a baseline ops-read.ts with resolved imports.
- * Compare revisionDigest, publications, operations, and hashComputations.
+ * identical. Compare revisionDigest, publications, operations, and hashComputations.
  * Decide on allocation/operation and CPU/operation with GC, promotion, latency,
  * loop tails and maxima under the campaign's absolute-materiality thresholds.
  */
@@ -41,8 +39,6 @@ const { values } = parseArgs({
     mode: { type: "string", default: "timing" },
     output: { type: "string" },
     lock: { type: "string" },
-    query: { type: "string" },
-    read: { type: "string" },
     operations: { type: "string", default: "2000" },
     "gc-log": { type: "string" },
   },
@@ -62,12 +58,7 @@ const operations = parseStrictIntegerOption({
 });
 const { GatewayScheduler } = await import("../../src/infra/gateway-scheduler.js");
 const { createCronServiceState } = await import("../../src/cron/service/state.js");
-const readUrl = values.read
-  ? pathToFileURL(path.resolve(values.read))
-  : new URL("../../src/cron/service/ops-read.ts", import.meta.url);
-const { listPage }: typeof import("../../src/cron/service/ops-read.js") = await import(
-  readUrl.href
-);
+const { listPage } = await import("../../src/cron/service/ops-read.js");
 const { applyCronRuntimeRowsToState } =
   await import("../../src/cron/service/runtime-publication.js");
 const lockUrl = values.lock
@@ -123,7 +114,7 @@ async function run(operation: number) {
       publications++;
     }
   });
-  const page = await listPage(state, { sortBy: "name", limit: 25, query: values.query });
+  const page = await listPage(state, { sortBy: "name", limit: 25 });
   if (state.readSnapshot?.lists[0] !== previousList) {
     hashComputations++;
   }
@@ -237,8 +228,6 @@ const report = {
   node: process.version,
   platform: process.platform,
   lock: lockUrl.href,
-  read: readUrl.href,
-  query: values.query ?? null,
   stores: stores.length,
   jobsPerStore: 200,
   warmup,

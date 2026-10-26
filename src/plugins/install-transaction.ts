@@ -12,7 +12,6 @@ type PluginInstallTransactionRequest = {
   deferCommit: true;
   transactionSink?: PluginInstallTransaction[];
   assertOwned?: () => void;
-  prepareSettlement?: () => void | Promise<void>;
 };
 
 export function attachPluginInstallTransaction<T extends object>(
@@ -45,7 +44,6 @@ export function requestDeferredPluginInstall<T extends object>(
   params: T,
   transactionSink?: PluginInstallTransaction[],
   assertOwned?: () => void,
-  prepareSettlement?: () => void | Promise<void>,
 ): T {
   Object.defineProperty(params, PLUGIN_INSTALL_TRANSACTION_REQUEST, {
     configurable: false,
@@ -54,7 +52,6 @@ export function requestDeferredPluginInstall<T extends object>(
       deferCommit: true,
       ...(transactionSink ? { transactionSink } : {}),
       ...(assertOwned ? { assertOwned } : {}),
-      ...(prepareSettlement ? { prepareSettlement } : {}),
     } satisfies PluginInstallTransactionRequest,
   });
   return params;
@@ -66,12 +63,7 @@ export function copyPluginInstallTransactionRequest<T extends object>(
 ): T {
   const request = resolvePluginInstallTransactionRequest(source);
   return request
-    ? requestDeferredPluginInstall(
-        target,
-        request.transactionSink,
-        request.assertOwned,
-        request.prepareSettlement,
-      )
+    ? requestDeferredPluginInstall(target, request.transactionSink, request.assertOwned)
     : target;
 }
 
@@ -89,16 +81,11 @@ export async function withPluginInstallTransactions<
   R,
 >(
   params: T,
-  lease: { assertCurrent(): void; assertOwned(): void | Promise<void> },
-  run: (
-    params: T,
-    assertCurrent: () => void,
-    prepareEffect: () => void | Promise<void>,
-  ) => Promise<R>,
+  assertOwned: () => void,
+  run: (params: T, assertCurrent: () => void) => Promise<R>,
 ): Promise<R> {
   const request = resolvePluginInstallTransactionRequest(params);
   const initiatingAssert = request?.assertOwned;
-  const initiatingPreparation = request?.prepareSettlement;
   const callerBeforePersistentEffect = params.beforePersistentEffect;
   const transactions: PluginInstallTransaction[] = [];
   let refusal: { error: unknown } | undefined;
@@ -108,56 +95,43 @@ export async function withPluginInstallTransactions<
     }
     try {
       initiatingAssert?.();
-      lease.assertCurrent();
+      assertOwned();
     } catch (error) {
       refusal = { error };
       throw error;
     }
   };
   assertCurrent();
-  const refuse = (error: unknown): never => {
-    refusal ??= { error };
-    throw refusal.error;
-  };
-  const prepareEffect = () => {
-    try {
-      assertCurrent();
-      const verifyLease = () => {
-        const pending = lease.assertOwned();
-        return pending ? pending.then(assertCurrent, refuse) : assertCurrent();
-      };
-      const pending = initiatingPreparation?.();
-      return pending ? pending.then(verifyLease).catch(refuse) : verifyLease();
-    } catch (error) {
-      return refuse(error);
-    }
-  };
   const beforePersistentEffect = () => {
     try {
       assertCurrent();
       const pending = callerBeforePersistentEffect?.();
-      // Native callers keep synchronous planning; worker owners await durable authority.
-      return pending ? pending.then(prepareEffect, refuse) : prepareEffect();
+      // Planning hooks may await consent. Synchronous hooks stay synchronous;
+      // either form records refusal before an installer can normalize it.
+      return pending?.then(assertCurrent, (error: unknown) => {
+        refusal ??= { error };
+        throw refusal.error;
+      });
     } catch (error) {
-      return refuse(error);
+      refusal ??= { error };
+      throw refusal.error;
     }
   };
   const owned = requestDeferredPluginInstall(
     { ...params, beforePersistentEffect },
     request ? request.transactionSink : transactions,
     assertCurrent,
-    prepareEffect,
   );
   let result: R;
   try {
-    result = await run(owned, assertCurrent, prepareEffect);
+    result = await run(owned, assertCurrent);
     // Installers may return ordinary failures after a refused mutation. Keep
     // that refusal sticky, including falsy values, before settling any siblings.
     assertCurrent();
   } catch (error) {
     if (!request && !refusal) {
       try {
-        await settlePluginInstallTransactions(transactions, "rollback", { error }, prepareEffect);
+        await settlePluginInstallTransactions(transactions, "rollback", { error });
       } catch (rollbackError) {
         if (!refusal) {
           throw rollbackError;
@@ -170,7 +144,7 @@ export async function withPluginInstallTransactions<
   // the published package, never roll it back beneath that committed record.
   if (!request) {
     try {
-      await settlePluginInstallTransactions(transactions, "commit", undefined, prepareEffect);
+      await settlePluginInstallTransactions(transactions, "commit");
     } catch (error) {
       throw refusal ? refusal.error : error;
     }
@@ -209,7 +183,6 @@ export async function settlePluginInstallTransactions(
   transactions: readonly PluginInstallTransaction[],
   action: "commit" | "rollback",
   primaryFailure?: { error: unknown },
-  prepareEffect?: () => void | Promise<void>,
 ): Promise<void> {
   const ordered = action === "rollback" ? transactions.toReversed() : transactions;
   const errors: unknown[] = [];
@@ -218,10 +191,7 @@ export async function settlePluginInstallTransactions(
       let settlement = settlements.get(transaction);
       if (!settlement) {
         settlement = Promise.resolve()
-          .then(async () => {
-            await prepareEffect?.();
-            return transaction[action]();
-          })
+          .then(() => transaction[action]())
           .catch((error: unknown) => {
             // Failed I/O retains the directory owner's retryable rollback progress.
             settlements.delete(transaction);

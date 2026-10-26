@@ -544,23 +544,17 @@ describe("plugin registry runtime config scope", () => {
   });
 
   it("adds plugin context to lazy runtime resolution failures", () => {
-    vi.spyOn(sdkAlias, "resolvePluginRuntimeModulePathWithDiagnostics").mockReturnValue({
-      modulePath: "/tmp/openclaw-loader.js",
-      packageRoot: "/tmp/openclaw-package",
-      candidates: ["/tmp/openclaw-runtime.js"],
-      resolvedPath: null,
-      error: "fixture runtime is missing",
+    const runtime = new Proxy({} as PluginRuntime, {
+      get() {
+        throw new Error("Unable to resolve plugin runtime module; loader=/tmp/openclaw-loader.js");
+      },
     });
-    const runtime = createLazyPluginRuntime({ pluginSdkResolution: "src" });
     const { api } = registered("diagnostic-plugin", { name: "Diagnostic Plugin" }, runtime);
 
-    const read = () => api.runtime.channel;
+    const read = () => api.runtime.version;
     expect(read).toThrowError(Error);
     expect(read).toThrow(
-      /(?=.*Unable to resolve plugin runtime module)(?=.*pluginRuntimeContext=pluginId:diagnostic-plugin)(?=.*property:channel)(?=.*source:\/plugins\/diagnostic-plugin\/index.js)/s,
-    );
-    expect(read).toThrow(
-      "loader=/tmp/openclaw-loader.js; packageRoot=/tmp/openclaw-package; pluginSdkResolution=src; candidates=/tmp/openclaw-runtime.js; resolverError=fixture runtime is missing",
+      /(?=.*Unable to resolve plugin runtime module)(?=.*pluginRuntimeContext=pluginId:diagnostic-plugin)(?=.*property:version)(?=.*source:\/plugins\/diagnostic-plugin\/index.js)/s,
     );
   });
 

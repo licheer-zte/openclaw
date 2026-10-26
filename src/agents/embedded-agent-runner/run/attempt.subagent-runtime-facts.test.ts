@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { Type } from "typebox";
 import { afterEach, beforeAll, beforeEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
@@ -10,7 +11,7 @@ import {
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../../internal-runtime-context.js";
 import type { SubagentRunRecord } from "../../subagents/registry/subagent-registry.types.js";
-import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
+import type { AnyAgentTool } from "../../tools/common.js";
 import { useContextEngineAttemptHarness } from "./attempt-context-engine.test-support.js";
 import { resetEmbeddedAttemptHarness } from "./attempt-spawn-workspace.test-support.js";
 
@@ -23,7 +24,15 @@ async function captureAttempt(sessionStore: string) {
   resetEmbeddedAttemptHarness();
   const config = { session: { store: sessionStore } };
   setRuntimeConfigSnapshot(config);
-  hoisted.createOpenClawCodingToolsMock.mockReturnValue([createStubTool("sessions_spawn")]);
+  hoisted.createOpenClawCodingToolsMock.mockReturnValue([
+    {
+      name: "sessions_spawn",
+      label: "Spawn",
+      description: "Spawn a child agent",
+      parameters: Type.Object({ task: Type.String() }),
+      execute: async () => ({ content: [], details: undefined }),
+    } satisfies AnyAgentTool,
+  ]);
   let captured: { systemPrompt: string | undefined; messages: unknown[] } | undefined;
   const result = await runAttempt({
     attemptOverrides: {
@@ -70,7 +79,10 @@ afterEach(async () => {
 });
 
 it("preserves the complete system prompt across child state in code mode", async () => {
-  const sessionStore = path.join(tempDirs.make("subagent-facts-"), "sessions.json");
+  const sessionStore = path.join(
+    tempDirs.make("openclaw-attempt-subagent-facts-"),
+    "sessions.json",
+  );
   const storePath = resolvePhysicalSessionStorePath({ sessionKey, storePath: sessionStore });
   const run = {
     runId: "run-worker",

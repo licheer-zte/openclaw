@@ -17,7 +17,10 @@ import {
 } from "./pairing-store.js";
 
 const directories = useAutoCleanupTempDirTracker((cleanup) =>
-  afterAll(() => closeOpenClawStateDatabaseAsync().then(cleanup)),
+  afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    cleanup();
+  }),
 );
 let root: string;
 let env: NodeJS.ProcessEnv;
@@ -71,32 +74,40 @@ it("returns no permission without creating a missing store and still validates k
   await expect(readAllowlist("", missingEnv)).rejects.toThrow("invalid pairing channel");
 });
 
-it.each(["__proto__", "constructor"])("rejects inherited account %s", async (accountId) => {
-  expect(() => readAllowlistSync("demo", env, accountId)).toThrow(TypeError);
-  await expect(readAllowlist("demo", env, accountId)).rejects.toBeInstanceOf(TypeError);
-  const ingress = await resolveIngress(accountId);
-  expect(ingress.senderAccess).toMatchObject({ allowed: false, effectiveAllowFrom: [] });
-  expect(ingress.ingress.admission).not.toBe("dispatch");
-  const missing = path.join(root, `missing-${accountId}`);
-  await expect(
-    readAllowlist("demo", { ...env, OPENCLAW_STATE_DIR: missing }, accountId),
-  ).rejects.toBeInstanceOf(TypeError);
-  expect(fs.existsSync(missing)).toBe(false);
+it.each(["__proto__", "constructor"])(
+  "preserves the native refusal for inherited account key %s",
+  async (accountId) => {
+    expect(() => readAllowlistSync("demo", env, accountId)).toThrow(TypeError);
+    await expect(readAllowlist("demo", env, accountId)).rejects.toBeInstanceOf(TypeError);
+    const ingress = await resolveIngress(accountId);
+    expect(ingress.senderAccess).toMatchObject({ allowed: false, effectiveAllowFrom: [] });
+    expect(ingress.ingress.admission).not.toBe("dispatch");
+    const missing = path.join(root, `missing-${accountId}`);
+    await expect(
+      readAllowlist("demo", { ...env, OPENCLAW_STATE_DIR: missing }, accountId),
+    ).rejects.toBeInstanceOf(TypeError);
+    expect(fs.existsSync(missing)).toBe(false);
+  },
+);
+
+it("captures the original store before yielding and preserves normalized persisted account ordering", async () => {
+  writeAllowlist("legacy", { alpha: ["last", "first"] });
+  openOpenClawStateDatabase({ env }).db.exec(
+    "UPDATE channel_pairing_allow_entries SET account_id = ' Alpha ' WHERE channel_key = 'legacy'",
+  );
+  const capturedEnv = { ...env };
+  const result = readAllowlist("legacy", capturedEnv, " ALPHA ");
+  capturedEnv.OPENCLAW_STATE_DIR = path.join(root, "replacement");
+  await expect(result).resolves.toEqual(["last", "first"]);
+  expect(readAllowlistSync("legacy", env, " ALPHA ")).toEqual(["last", "first"]);
+  expect(fs.existsSync(capturedEnv.OPENCLAW_STATE_DIR)).toBe(false);
 });
 
-it("reads current normalized rows from the captured store despite an inherited snapshot", async () => {
+it("reads current approval rows instead of an inherited discovery snapshot", async () => {
   await withOpenClawStateDatabaseReadSnapshot(
     async () => {
-      writeAllowlist("legacy", { alpha: ["last", "first"] });
-      openOpenClawStateDatabase({ env }).db.exec(
-        "UPDATE channel_pairing_allow_entries SET account_id = ' Alpha ' WHERE channel_key = 'legacy'",
-      );
-      const capturedEnv = { ...env };
-      const result = readAllowlist("legacy", capturedEnv, " ALPHA ");
-      capturedEnv.OPENCLAW_STATE_DIR = path.join(root, "replacement");
-      await expect(result).resolves.toEqual(["last", "first"]);
-      expect(readAllowlistSync("legacy", env, " ALPHA ")).toEqual(["last", "first"]);
-      expect(fs.existsSync(capturedEnv.OPENCLAW_STATE_DIR)).toBe(false);
+      writeAllowlist("snapshot", { alpha: ["new-approval"] });
+      await expect(readAllowlist("snapshot", env, "alpha")).resolves.toEqual(["new-approval"]);
     },
     { env },
   );

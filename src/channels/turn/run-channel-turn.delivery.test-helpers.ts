@@ -103,6 +103,10 @@ export function createReplyDispatchReceipt(
 }
 
 export function expectNonVisibleFinalReceipt(result: unknown) {
-  expect(result).toHaveProperty("settledReceipt.anyVisibleDelivered", false);
-  expect(result).toHaveProperty("settledReceipt.counts.final.deliveredNotVisible", 1);
+  expect(result).toMatchObject({
+    settledReceipt: {
+      anyVisibleDelivered: false,
+      counts: { final: { deliveredNotVisible: 1 } },
+    },
+  });
 }

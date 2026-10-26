@@ -1,7 +1,6 @@
 import { once } from "node:events";
 import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
-import { nextEventLoopTurn } from "../../test/helpers/promise.js";
 import * as workerMessageMetrics from "../infra/worker-message-metrics.js";
 import { createRealtimeVoiceAudioPortSender } from "./audio-output-port.js";
 
@@ -31,7 +30,9 @@ describe("worker audio output port", () => {
       Atomics.store(new Int32Array(state), 0, 1);
       sender.sendAudio(Buffer.from([7, 8]));
       port2.postMessage({ type: "ack" });
-      await nextEventLoopTurn();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       expect(receiveMessageOnPort(port2)).toBeUndefined();
       expect(
         recorded.mock.calls

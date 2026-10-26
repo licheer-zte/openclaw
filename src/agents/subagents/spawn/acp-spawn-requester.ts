@@ -14,7 +14,10 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../../routing/session-key.js";
 import { deliveryContextFromSession } from "../../../utils/delivery-context.read.js";
-import { hasDeliveryTargetFields } from "../../../utils/delivery-context.shared.js";
+import {
+  hasDeliveryTargetFields,
+  normalizeDeliveryContext,
+} from "../../../utils/delivery-context.shared.js";
 import {
   resolveRequesterOriginForChild,
   resolveSpawnRequesterConversationTarget,
@@ -30,6 +33,14 @@ type AcpSpawnRequesterContext = SpawnRequesterConversationSource & {
   agentAccountId?: string;
   agentGroupSpace?: string | null;
   agentMemberRoleIds?: string[];
+};
+
+export type AcpSpawnRequesterState = {
+  isSubagentSession: boolean;
+  hasActiveSubagentBinding: boolean;
+  hasThreadContext: boolean;
+  sessionRelayRouteUsable: boolean;
+  origin: ReturnType<typeof normalizeDeliveryContext>;
 };
 
 export async function readAcpSpawnParentDeliveryContext(params: {
@@ -71,7 +82,7 @@ export async function resolveAcpSpawnRequesterState(params: {
   ownerAgentId: string;
   ctx: AcpSpawnRequesterContext;
   assertActive?: () => void;
-}) {
+}): Promise<AcpSpawnRequesterState> {
   const requesterParsedSession = parseAgentSessionKey(params.parentSessionKey);
   const isSubagentSession =
     Boolean(requesterParsedSession) && isSubagentSessionKey(params.parentSessionKey);
@@ -122,7 +133,7 @@ export function shouldStreamAcpSpawnToParent(params: {
   spawnMode: "run" | "session";
   requestThreadBinding: boolean;
   streamToParentRequested: boolean;
-  requester: Awaited<ReturnType<typeof resolveAcpSpawnRequesterState>>;
+  requester: AcpSpawnRequesterState;
 }): boolean {
   // Thread-bound requesters require an explicit request to avoid unsolicited progress chatter.
   const implicitStreamToParent =

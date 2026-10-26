@@ -3,9 +3,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-// Share canonical roots per prefix, avoiding macOS /var symlink mismatches.
-// Private case directories admit secure filesystem helpers under permissive umasks.
-type PrefixRootState = { path: string; activeCount: number };
+// Temp-dir helpers share one mkdtemp root per suite prefix and hand out numbered
+// case dirs. That reduces filesystem churn while preserving per-test cleanup.
+// Roots are canonicalized (realpath) because macOS tmpdir sits behind a symlink
+// (/var -> /private/var) while production code realpaths state/session paths;
+// symlinked roots break tests that compare or intercept fs paths by equality.
+// Keep case directories private even with group-writable host umasks: secure
+// filesystem helpers validate every ancestor of their workspace.
+type PrefixRootState = {
+  path: string;
+  activeCount: number;
+};
 type RootOptions = { prefix: string; parentDir?: string };
 type DirOptions = RootOptions & { subdir?: string };
 const removeOptions = { recursive: true, force: true, maxRetries: 20, retryDelay: 25 };
@@ -27,17 +35,21 @@ async function acquireAsyncPrefixRoot(options: RootOptions): Promise<PrefixRootS
     cached.activeCount += 1;
     return cached;
   }
-  let pending = pendingAsyncPrefixRoots.get(key);
-  if (!pending) {
-    // Concurrent cases acquire the same in-flight root.
-    pending = fs
-      .mkdtemp(path.join(options.parentDir ?? os.tmpdir(), options.prefix))
-      .then((root) => fs.realpath(root))
-      .then((root) => ({ path: root, activeCount: 0 }));
-    pendingAsyncPrefixRoots.set(key, pending);
-  }
-  try {
+  const pending = pendingAsyncPrefixRoots.get(key);
+  if (pending) {
+    // Concurrent tests with the same prefix wait for the same root creation
+    // instead of racing multiple mkdtemp roots.
     const state = await pending;
+    state.activeCount += 1;
+    return state;
+  }
+  const create = fs
+    .mkdtemp(path.join(options.parentDir ?? os.tmpdir(), options.prefix))
+    .then((root) => fs.realpath(root))
+    .then((root) => ({ path: root, activeCount: 0 }));
+  pendingAsyncPrefixRoots.set(key, create);
+  try {
+    const state = await create;
     asyncPrefixRoots.set(key, state);
     state.activeCount += 1;
     return state;
@@ -46,7 +58,25 @@ async function acquireAsyncPrefixRoot(options: RootOptions): Promise<PrefixRootS
   }
 }
 
-function releasePrefixRoot(roots: Map<string, PrefixRootState>, options: RootOptions) {
+function acquireSyncPrefixRoot(options: RootOptions): PrefixRootState {
+  const key = getRootKey(options);
+  const cached = syncPrefixRoots.get(key);
+  if (cached) {
+    cached.activeCount += 1;
+    return cached;
+  }
+  const root = fsSync.realpathSync(
+    fsSync.mkdtempSync(path.join(options.parentDir ?? os.tmpdir(), options.prefix)),
+  );
+  const state = { path: root, activeCount: 1 };
+  syncPrefixRoots.set(key, state);
+  return state;
+}
+
+function releasePrefixRoot(
+  roots: Map<string, PrefixRootState>,
+  options: RootOptions,
+): PrefixRootState | undefined {
   const key = getRootKey(options);
   const state = roots.get(key);
   if (!state || --state.activeCount > 0) {
@@ -56,12 +86,18 @@ function releasePrefixRoot(roots: Map<string, PrefixRootState>, options: RootOpt
   return state;
 }
 
-export async function withTestDir<T>(options: DirOptions, run: (dir: string) => Promise<T>) {
+export async function withTestDir<T>(
+  options: DirOptions,
+  run: (dir: string) => Promise<T>,
+): Promise<T> {
   const root = await acquireAsyncPrefixRoot(options);
   const base = path.join(root.path, `dir-${nextAsyncDirIndex++}`);
   try {
+    await fs.mkdir(base, { recursive: true, mode: 0o700 });
     const dir = options.subdir ? path.join(base, options.subdir) : base;
-    await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+    if (options.subdir) {
+      await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+    }
     return await run(dir);
   } finally {
     await fs.rm(base, removeOptions);
@@ -72,7 +108,8 @@ export async function withTestDir<T>(options: DirOptions, run: (dir: string) => 
   }
 }
 
-// Stable suite root with isolated children.
+// Suite-level tracker for tests that need a stable root across multiple cases
+// while still creating isolated child directories.
 export function createSuiteTempRootTracker(options: RootOptions) {
   let root = "";
   let nextIndex = 0;
@@ -103,19 +140,14 @@ export function createSuiteTempRootTracker(options: RootOptions) {
 }
 
 export function withTempDirSync<T>(options: DirOptions, run: (dir: string) => T): T {
-  const key = getRootKey(options);
-  const root = syncPrefixRoots.get(key) ?? {
-    path: fsSync.realpathSync(
-      fsSync.mkdtempSync(path.join(options.parentDir ?? os.tmpdir(), options.prefix)),
-    ),
-    activeCount: 0,
-  };
-  syncPrefixRoots.set(key, root);
-  root.activeCount += 1;
+  const root = acquireSyncPrefixRoot(options);
   const base = path.join(root.path, `dir-${nextSyncDirIndex++}`);
   try {
+    fsSync.mkdirSync(base, { recursive: true, mode: 0o700 });
     const dir = options.subdir ? path.join(base, options.subdir) : base;
-    fsSync.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    if (options.subdir) {
+      fsSync.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    }
     return run(dir);
   } finally {
     fsSync.rmSync(base, removeOptions);

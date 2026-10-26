@@ -112,8 +112,7 @@ it(
             executablePath: process.execPath,
             argsPrefix: ["dist/index.js"],
             cwd: repoRoot,
-            // Node routing needs no packaged-install repair.
-            usePackagedPlugins: false,
+            usePackagedPlugins: true,
           },
           transportBaseUrl: "http://127.0.0.1",
           controlUiEnabled: false,

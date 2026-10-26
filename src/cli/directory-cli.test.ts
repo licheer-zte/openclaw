@@ -224,10 +224,7 @@ describe("registerDirectoryCli", () => {
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
       sourceConfig: enabledConfig,
       baseHash: "config-1",
-      writeOptions: {
-        assertConfigPathForWrite: expect.any(Function),
-        beforeCommit: expect.any(Function),
-      },
+      writeOptions: {},
     });
     expect(listGroupMembers).toHaveBeenCalledWith(
       expect.objectContaining({ groupId: "group-1", limit: 5 }),
@@ -279,10 +276,7 @@ describe("registerDirectoryCli", () => {
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
       sourceConfig: autoEnabledConfig,
       baseHash: "config-1",
-      writeOptions: {
-        assertConfigPathForWrite: expect.any(Function),
-        beforeCommit: expect.any(Function),
-      },
+      writeOptions: {},
     });
   });
 

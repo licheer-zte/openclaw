@@ -22,7 +22,6 @@ export type ChatRealtimeState = {
   connected: boolean;
   settings: UiSettings;
   sessionKey: string;
-  chatMessages: unknown[];
   lastError?: string | null;
   chatError?: string | null;
   realtimeTalk: ChatRealtimeOwner;

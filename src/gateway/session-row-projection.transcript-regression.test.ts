@@ -1,5 +1,6 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
+import * as registryRead from "../agents/subagents/registry/subagent-registry-read.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import * as transcripts from "../config/sessions/session-accessor.js";
 import * as activeEvents from "../config/sessions/session-accessor.sqlite-active-events.js";
@@ -30,31 +31,50 @@ it("serves describe during a 2,048-session drain without transcript reads in row
         events: [expect.anything(), expect.anything()],
       });
     }
-    let readDuringMaterialization = false;
-    const transcriptReads = [
-      vi.spyOn(transcripts, "readSessionTranscriptMessageEventPage"),
-      vi.spyOn(activeEvents, "readRecentSessionTranscriptMessageEvents"),
-      vi.spyOn(activeEvents, "readSessionTranscriptBoundedMessageTailPage"),
-    ];
-    const counts = () => transcriptReads.map((read) => read.mock.calls.length);
+    let inMaterialization = false;
+    let materializationReads = 0;
+    let describeInFlight = false;
+    let describeMaterializations = 0;
     const readInputs = rowInputs.readSessionRowInputs;
-    const materialize = vi.spyOn(rowInputs, "readSessionRowInputs").mockImplementation((params) => {
-      const before = counts();
+    vi.spyOn(rowInputs, "readSessionRowInputs").mockImplementation((params) => {
+      inMaterialization = true;
+      if (describeInFlight) {
+        describeMaterializations++;
+      }
       try {
         return readInputs(params);
       } finally {
-        readDuringMaterialization ||= counts().some((calls, index) => calls !== before[index]);
+        inMaterialization = false;
       }
     });
+    const observeRead =
+      <Args extends unknown[], Result>(read: (...args: Args) => Result) =>
+      (...args: Args): Result => {
+        if (inMaterialization) {
+          materializationReads++;
+        }
+        return read(...args);
+      };
+    const page = observeRead(readPage);
+    const recent = observeRead(activeEvents.readRecentSessionTranscriptMessageEvents);
+    const tail = observeRead(activeEvents.readSessionTranscriptBoundedMessageTailPage);
+    vi.spyOn(transcripts, "readSessionTranscriptMessageEventPage").mockImplementation(page);
+    vi.spyOn(activeEvents, "readRecentSessionTranscriptMessageEvents").mockImplementation(recent);
+    vi.spyOn(activeEvents, "readSessionTranscriptBoundedMessageTailPage").mockImplementation(tail);
     const context = requestContext(cfg);
+    const indexBuilds = vi.spyOn(registryRead, "buildSubagentSessionListReadIndex");
     const initializing = createTestProjection({ cfg });
     await nextTurn();
     using projection = await initializing;
     bindSessionRowProjection(context, () => projection);
     const describe = async (id: string, includeDerivedTitles?: boolean) => {
-      const respond = vi.fn(() => projection.dirtyRowCount);
+      let remainingAtResponse = 0;
+      const respond = vi.fn().mockImplementation(() => {
+        remainingAtResponse = projection.dirtyRowCount;
+      });
       const releaseForeground = retainSessionListForegroundWork();
-      const before = materialize.mock.calls.length;
+      describeInFlight = true;
+      describeMaterializations = 0;
       try {
         await sessionByKeyReadHandlers["sessions.describe"]!({
           req: { type: "req", id, method: "sessions.describe" },
@@ -65,21 +85,21 @@ it("serves describe during a 2,048-session drain without transcript reads in row
           respond,
         });
       } finally {
+        describeInFlight = false;
         releaseForeground();
       }
       expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
         session: expect.objectContaining({ key: "agent:main:legacy-2047" }),
       });
       // Keyed replies must precede the bulk drain and do only bounded materialization work.
-      expect(respond.mock.results[0]?.value).toBeGreaterThan(0);
-      expect(materialize.mock.calls.length - before).toBeLessThanOrEqual(
-        MAX_SESSION_ROW_FACTS_KEYS + 1,
-      );
+      expect(remainingAtResponse).toBeGreaterThan(0);
+      expect(describeMaterializations).toBeLessThanOrEqual(MAX_SESSION_ROW_FACTS_KEYS + 1);
     };
     await describe("under-drain", true);
     await projection.ensureMaterialized();
+    expect(indexBuilds).toHaveBeenCalledTimes(1);
     sessionChanges.emit({ all: true, scope: "config" });
     await describe("dirty-drain");
-    expect(readDuringMaterialization).toBe(false);
+    expect(materializationReads).toBe(0);
   });
 }, 120_000);

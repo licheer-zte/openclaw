@@ -43,9 +43,9 @@ import {
   withGatewayServer,
 } from "./server-http.test-harness.js";
 import { pluginsControlUiHandlers } from "./server-methods/plugins-control-ui.js";
-import type { RespondFn } from "./server-methods/types.js";
+import type { GatewayRequestHandlerOptions, RespondFn } from "./server-methods/types.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
-import { makeContextParams, makeGatewayClient } from "./server-request-context.test-support.js";
+import { makeContextParams } from "./server-request-context.test-support.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 import { withTempConfig } from "./test-temp-config.js";
@@ -69,16 +69,6 @@ function cookies(response: Response) {
   return response.setHeader.mock.calls
     .filter(([name]) => name === "Set-Cookie")
     .flatMap(([, value]) => (Array.isArray(value) ? value : [value]));
-}
-
-function expectCookie(response: Response, assetPath: string, secure: boolean) {
-  const issued = cookies(response);
-  expect(issued).toHaveLength(1);
-  expect(issued[0]).toContain(`Path=${assetPath};`);
-  expect(issued[0]).toContain("HttpOnly;");
-  expect(issued[0]).toContain("SameSite=Strict;");
-  expect(String(issued[0]).includes("; Secure;")).toBe(secure);
-  return String(issued[0]).split(";", 1)[0]!;
 }
 
 function expectBody(response: Response, source: string) {
@@ -205,7 +195,9 @@ function cookieForGrant(
         ),
     },
   );
-  const [cookie] = String(cookies(response)[0] ?? "").split(";", 1);
+  const value = response.setHeader.mock.calls.find(([name]) => name === "Set-Cookie")?.[1];
+  const header = Array.isArray(value) ? value[0] : value;
+  const [cookie] = typeof header === "string" ? header.split(";", 1) : [];
   if (!cookie) {
     throw new Error("Expected scoped Control UI cookie");
   }
@@ -240,11 +232,19 @@ it("records valid receipts in a mixed batch only from a live Control UI connecti
   activateFixture();
   const [entry] = (await listControlUiPluginCatalog()).plugins;
   const report = activation(entry!.revision);
-  const client = makeGatewayClient({
+  const client: NonNullable<GatewayRequestHandlerOptions["client"]> = {
     connId: "activation-browser",
-    clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
-    mode: "webchat",
-  });
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: {
+        id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+        version: "test",
+        platform: "test",
+        mode: "webchat",
+      },
+    },
+  };
   let connected = false;
   const context = createGatewayRequestContext(makeContextParams());
   context.getClientConnIds = (filter) =>
@@ -366,10 +366,15 @@ it.each([
             ? [{ pluginId: "native-ui", path: assetPath, match: "prefix" }]
             : [],
         });
-        const cookie = requiresAuth ? expectCookie(bootstrap, assetPath, false) : "";
-        if (!requiresAuth) {
-          expect(cookies(bootstrap)).toEqual([]);
+        const cookieHeaders = cookies(bootstrap);
+        expect(cookieHeaders).toHaveLength(requiresAuth ? 1 : 0);
+        for (const header of cookieHeaders) {
+          expect(header).toContain(`Path=${assetPath};`);
+          expect(header).toContain("HttpOnly;");
+          expect(header).toContain("SameSite=Strict;");
+          expect(header).not.toContain("; Secure;");
         }
+        const cookie = cookieHeaders.map((value) => String(value).split(";")[0]).join("; ");
         for (const { assetUrl, source } of [
           { assetUrl: entry.entryUrl, source: firstSource },
           { assetUrl: entry.styles[0]!, source: "body { color: red; }" },
@@ -395,8 +400,14 @@ it.each([
 );
 
 it("limits native asset HTTP cookies to direct loopback origins", async () => {
-  await withConfig(
-    async () => {
+  await withTempConfig({
+    cfg: {
+      gateway: {
+        controlUi: { basePath: "/openclaw" },
+        trustedProxies: ["127.0.0.1", "::1"],
+      },
+    },
+    run: async () => {
       activateFixture();
       const server = assetServer("/openclaw");
       const cases = [
@@ -432,9 +443,11 @@ it("limits native asset HTTP cookies to direct loopback origins", async () => {
           const response = createResponse();
           await dispatchRequest(server, request, response.res);
           expect(response.res.statusCode, JSON.stringify(scenario)).toBe(200);
-          expectCookie(
-            response,
-            "/openclaw/__openclaw__/plugins/control-ui/native-ui/",
+          const issued = cookies(response);
+          expect(issued).toHaveLength(1);
+          expect(issued[0]).toContain("Path=/openclaw/__openclaw__/plugins/control-ui/native-ui/;");
+          expect(issued[0]).toContain("SameSite=Strict;");
+          expect(String(issued[0]).includes("; Secure;"), JSON.stringify(scenario)).toBe(
             scenario.secure,
           );
         } finally {
@@ -443,13 +456,13 @@ it("limits native asset HTTP cookies to direct loopback origins", async () => {
         }
       }
     },
-    { gateway: { controlUi: { basePath: "/openclaw" }, trustedProxies: ["127.0.0.1", "::1"] } },
-  );
+  });
 });
 
 it("keeps native asset cookies Secure for each independently present forwarded header", async () => {
-  await withConfig(
-    async () => {
+  await withTempConfig({
+    cfg: { gateway: { controlUi: { basePath: "/openclaw" } } },
+    run: async () => {
       activateFixture();
       // Exercise the post-authentication issuer, not an earlier proxy-attribution
       // denial. Each header must prevent the HTTP exception on its own.
@@ -486,8 +499,7 @@ it("keeps native asset cookies Secure for each independently present forwarded h
         }
       }
     },
-    { gateway: { controlUi: { basePath: "/openclaw" } } },
-  );
+  });
 });
 
 it("keeps iframe grants Secure when native HTTP grants are allowed", () => {

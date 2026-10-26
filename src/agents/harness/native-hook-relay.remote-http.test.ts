@@ -1,17 +1,25 @@
 import { createServer } from "node:http";
 import { afterEach, expect, it, vi } from "vitest";
-import * as hooks from "../../plugins/hook-runner-global.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { reserveTestPortListener } from "../../test-utils/port-claims.js";
-import * as relays from "./native-hook-relay.js";
-import * as fixture from "./native-hook-relay.test-support.js";
+import {
+  dispatchNativeHookRelayHttpCallback,
+  registerOwnedNativeHookRelay,
+  testing,
+} from "./native-hook-relay.js";
+import { clearNativeHookRelaysForTests } from "./native-hook-relay.test-support.js";
 
 afterEach(async () => {
-  hooks.resetGlobalHookRunner();
+  vi.restoreAllMocks();
+  resetGlobalHookRunner();
   setActivePluginRegistry(createEmptyPluginRegistry());
-  await fixture.clearNativeHookRelaysForTests();
+  await clearNativeHookRelaysForTests();
 });
 
 it("requires a current relay capability and preserves policy denial over HTTP", async () => {
@@ -23,17 +31,20 @@ it("requires a current relay capability and preserves policy denial over HTTP", 
     offsets: [0],
     createListener: () =>
       createServer((req, res) => {
-        void relays.dispatchNativeHookRelayHttpCallback(req, res);
+        void dispatchNativeHookRelayHttpCallback(req, res);
       }),
   });
   const admitExecution = vi.fn();
   const requestApproval = vi.fn(async () => "allow" as const);
-  relays.testing.setNativeHookRelayPermissionApprovalRequesterForTests(requestApproval);
+  testing.setNativeHookRelayPermissionApprovalRequesterForTests(requestApproval);
   const identity = {
+    provider: "codex",
+    sessionId: "session-1",
+    runId: "run-1",
     relayId: "remote-relay",
     preToolUseLoopDetection: false,
   } as const;
-  const relay = fixture.registerOwnedTestNativeHookRelay({
+  const relay = registerOwnedNativeHookRelay({
     ...identity,
     allowedEvents: ["pre_tool_use"],
     generationMismatchGraceMs: 30_000,
@@ -58,9 +69,12 @@ it("requires a current relay capability and preserves policy denial over HTTP", 
     expect((await post("operator-token")).status).toBe(403);
     const { token } = relay.enableRemoteCallback();
     expect((await post("wrong-token")).status).toBe(403);
+    const accepted = await post(token);
+    expect(accepted.status).toBe(200);
+    expect(await accepted.json()).toMatchObject({ ok: true, result: { exitCode: 0 } });
     // Transport authentication grants access to policy evaluation, not permission to execute.
     const deny = vi.fn(async () => ({ block: true, blockReason: "remote policy denied" }));
-    hooks.initializeGlobalHookRunner(
+    initializeGlobalHookRunner(
       createMockPluginRegistry([
         { hookName: "before_tool_call", handler: deny, matcher: ["exec"] },
       ]),
@@ -83,6 +97,7 @@ it("requires a current relay capability and preserves policy denial over HTTP", 
         permissionDecisionReason: "remote policy denied",
       },
     });
+    expect(deny).toHaveBeenCalledOnce();
     expect(admitExecution).not.toHaveBeenCalled();
     expect(requestApproval).not.toHaveBeenCalled();
     expect((await post(token, { relayId: "another-relay" })).status).toBe(403);
@@ -91,7 +106,7 @@ it("requires a current relay capability and preserves policy denial over HTTP", 
     expect((await post(token, { event: "post_tool_use" })).status).toBe(500);
     expect((await post(token, {}, relay.relayId, "GET")).status).toBe(404);
     expect((await post(token, {}, relay.relayId + "?token=ignored")).status).toBe(404);
-    const replacement = fixture.registerOwnedTestNativeHookRelay(identity);
+    const replacement = registerOwnedNativeHookRelay(identity);
     await replacement.ready;
     const next = replacement.enableRemoteCallback();
     expect((await post(token, { generation: replacement.generation })).status).toBe(403);

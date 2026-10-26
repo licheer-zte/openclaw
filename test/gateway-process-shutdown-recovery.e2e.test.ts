@@ -91,17 +91,13 @@ function writeExec(response: ServerResponse, command: string, ordinal: number) {
   );
 }
 
-async function startProvider(
-  scenarios: Scenario[],
-  signal: AbortSignal,
-  expectedRecoveryCount: number,
-) {
+async function startProvider(scenarios: Scenario[], signal: AbortSignal) {
   const toolStarted = createDeferred();
   const toolCheckpoint = createDeferred();
   const toolCancelled = createDeferred();
   const releaseToolCheckpoint = createDeferred();
   const failed = createDeferred<never>();
-  const allRecoveriesSeen = createDeferred();
+  const fourRecoveriesSeen = createDeferred();
   const recoveryStarts = new Set<Scenario>();
   const activeRecoveryResponses = new Map<ServerResponse, Scenario>();
   let peakRecoveryConcurrency = 0;
@@ -187,10 +183,10 @@ async function startProvider(
           response.once("close", () => activeRecoveryResponses.delete(response));
           const activeRecoveries = new Set(activeRecoveryResponses.values()).size;
           peakRecoveryConcurrency = Math.max(peakRecoveryConcurrency, activeRecoveries);
-          expect(activeRecoveries).toBeLessThanOrEqual(expectedRecoveryCount);
+          expect(activeRecoveries).toBeLessThanOrEqual(4);
           recoveryStarts.add(scenario);
-          if (recoveryStarts.size === expectedRecoveryCount) {
-            allRecoveriesSeen.resolve();
+          if (recoveryStarts.size === 4) {
+            fourRecoveriesSeen.resolve();
           }
           scenario.recoverySeen.resolve();
           if (scenario.phase === "held-recovery") {
@@ -243,7 +239,7 @@ async function startProvider(
   return {
     baseUrl: `${origin}/v1`,
     failed: failed.promise,
-    allRecoveriesSeen: allRecoveriesSeen.promise,
+    fourRecoveriesSeen: fourRecoveriesSeen.promise,
     recoveryStarts: () => [...recoveryStarts],
     peakRecoveryConcurrency: () => peakRecoveryConcurrency,
     toolStarted: toolStarted.promise,
@@ -282,7 +278,7 @@ it(
     const managed = createScenario("managed");
     const killed = createScenario("killed");
     const scenarios = [...rawRecoveries, stopped, managed, killed];
-    const provider = await startProvider(scenarios, signal, rawRecoveries.length);
+    const provider = await startProvider(scenarios, signal);
     const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
     const instance = await createOpenClawTestInstance({
       name: "gateway-process-shutdown-recovery",
@@ -506,11 +502,11 @@ it(
         await instance.startGateway();
         expect(instance.child?.pid).not.toBe(predecessor);
         await connect();
-        // Restore the configured working set, not the historical four-slot recovery default.
-        await gate(provider.allRecoveriesSeen);
+        // Four distinct turns must reach the provider while every response is held.
+        await gate(provider.fourRecoveriesSeen);
         const firstRecoveries = provider.recoveryStarts();
-        expect(firstRecoveries).toHaveLength(rawRecoveries.length);
-        expect(provider.peakRecoveryConcurrency()).toBe(rawRecoveries.length);
+        expect(firstRecoveries).toHaveLength(4);
+        expect(provider.peakRecoveryConcurrency()).toBe(4);
         const firstFinished = firstRecoveries.find((scenario) => scenario !== reset);
         if (!firstFinished) {
           throw new Error("Expected a started recovery that is not being reset");
@@ -581,7 +577,7 @@ it(
         for (const scenario of [parallelA, parallelB]) {
           expect(scenario.calls.map((call) => call.phase)).toEqual(["initial", "recovery"]);
         }
-        expect(provider.peakRecoveryConcurrency()).toBe(rawRecoveries.length);
+        expect(provider.peakRecoveryConcurrency()).toBe(4);
         expect(provider.effects()).toBe(1);
         expect(provider.forbiddenEffects()).toBe(0);
       },

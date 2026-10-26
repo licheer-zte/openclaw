@@ -21,7 +21,6 @@ import {
   waitForSessionTranscriptIndexReconcile,
   waitForSessionTranscriptIndexReconcilesInStateDir,
 } from "./session-transcript-reconcile.js";
-import { holdReconcileAck } from "./session-transcript-reconcile.test-support.js";
 import { messageEvent } from "./transcript-message.test-support.js";
 
 vi.mock("node:worker_threads", async () =>
@@ -299,7 +298,7 @@ it("refuses a retired scheduled owner and permits an explicit fresh repair", asy
 
 it("keeps a successor request separate from a retired scheduled owner", async () => {
   const { options, scope } = await fixture();
-  const { paused, release } = holdReconcileAck(observer, "plan-finish");
+  const { paused, release } = fixtures.holdReconcileAck(observer, "plan-finish");
   startSessionTranscriptIndexReconcile(options);
   try {
     await paused;

@@ -10,7 +10,6 @@ import type {
 } from "../types.js";
 import { streamGoogleInteractions, streamSimpleGoogleInteractions } from "./google-interactions.js";
 import { makeProviderModel } from "./provider-model.test-support.js";
-import { makeStallingStream } from "./provider-stream.test-support.js";
 
 const completedSse = (params?: {
   status?: string;
@@ -124,18 +123,20 @@ describe("google-interactions provider", () => {
     const encoder = new TextEncoder();
 
     // ReadableStream that delivers a text delta and [DONE], then hangs forever unless cancelled
-    const stream = makeStallingStream(
-      [
-        encoder.encode(
-          'data: {"event_type":"step.delta","delta":{"type":"text","text":"Hello world"}}\n\n' +
-            completedSse() +
-            "data: [DONE]\n\n",
-        ),
-      ],
-      () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            'data: {"event_type":"step.delta","delta":{"type":"text","text":"Hello world"}}\n\n' +
+              completedSse() +
+              "data: [DONE]\n\n",
+          ),
+        );
+      },
+      cancel() {
         cancelCalled = true;
       },
-    );
+    });
 
     mockSse(stream);
 
@@ -187,7 +188,6 @@ describe("google-interactions provider", () => {
           : streamGoogleInteractions(makeInteractionsModel(provider), basicContext, {})
       ).result();
       expect(capturedHeaders).toBeDefined();
-      expect(new Headers(capturedHeaders).get("x-goog-api-client")).toMatch(/^openclaw\//u);
       expect(new Headers(capturedHeaders).get("x-goog-api-key")).toBe(
         geminiKey || "google-fallback-key",
       );
@@ -316,7 +316,12 @@ describe("google-interactions provider", () => {
         }
         return cancellation.promise;
       });
-      const body = makeStallingStream([encoder.encode(ssePayload)], cancel);
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(ssePayload));
+        },
+        cancel,
+      });
 
       mockSse(body);
 

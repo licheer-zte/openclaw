@@ -1,4 +1,3 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { HookStatusEntry } from "../hooks/hooks-status.js";
@@ -48,11 +47,4 @@ export async function writeCliPluginFixture(
     ...manifest,
   });
   await fs.writeFile(path.join(directory, "index.js"), source);
-}
-
-export function writeFixtureJsonSync(
-  file: Parameters<typeof fsSync.writeFileSync>[0],
-  value: unknown,
-): void {
-  fsSync.writeFileSync(file, JSON.stringify(value));
 }

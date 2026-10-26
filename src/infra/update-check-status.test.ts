@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it as baseIt, vi } from "vitest";
-import { createDeferred, nextEventLoopTurn } from "../../test/helpers/promise.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import * as processExec from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -246,7 +246,9 @@ it.for([
         for (const gate of gates.slice(0, commands === 5 ? 2 : 1)) {
           gate.resolve();
         }
-        await nextEventLoopTurn();
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
       }
       expect(settled).not.toHaveBeenCalled();
       for (const gate of gates) {

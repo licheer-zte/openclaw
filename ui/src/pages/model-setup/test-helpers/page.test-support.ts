@@ -3,6 +3,10 @@ import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { SystemAgentSetupDetectResult } from "../../../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../../../app/context.ts";
 import { createRuntimeConfigCapability } from "../../../lib/config/runtime-config-capability.ts";
+import {
+  createApplicationContextProvider,
+  type ApplicationContextProvider,
+} from "../../../test-helpers/application-context.ts";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
 import type { ModelSetupRouteData } from "../first-run-setup.ts";
 import type { ModelSetupPageState } from "../state.ts";
@@ -69,16 +73,21 @@ export function createContext() {
     subscribeEvents: subscribe,
   } as unknown as ApplicationGateway;
   const runtimeConfig = createRuntimeConfigCapability(gateway);
-  const context = {
-    gateway,
-    agentSelection: selection(),
-    settingsAgentSelection: selection(),
-    basePath: "/openclaw",
-    resourceBasePath: "/openclaw",
-    navigate: vi.fn(),
+  return {
+    client,
+    request,
     runtimeConfig,
-  } as unknown as ApplicationContext;
-  return { client, request, runtimeConfig, snapshot, context };
+    snapshot,
+    context: {
+      gateway,
+      agentSelection: selection(),
+      settingsAgentSelection: selection(),
+      basePath: "/openclaw",
+      resourceBasePath: "/openclaw",
+      navigate: vi.fn(),
+      runtimeConfig,
+    } as unknown as ApplicationContext,
+  };
 }
 
 export async function mountPage(
@@ -87,8 +96,8 @@ export async function mountPage(
     state: Extract<ModelSetupPageState, { phase: "ready" }>;
     client: GatewayBrowserClient;
   },
-) {
-  const provider = document.createElement("div");
+): Promise<{ page: TestModelSetupPage; provider: ApplicationContextProvider }> {
+  const provider = createApplicationContextProvider(context);
   const page = createPage(context);
   vi.spyOn(fixture.client, "request").mockResolvedValueOnce(fixture.state.result);
   page.routeData = { firstRun: fixture.firstRun };

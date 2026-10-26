@@ -363,7 +363,6 @@ export function createSubagentRegistryCompletionRuntime(config: {
     recoveryCurrent?: SubagentCompletionRequest["recoveryCurrent"];
     sessionEffects?: SubagentCompletionRequest["sessionEffects"];
     error: string;
-    terminalStatus?: "failed";
     endedAt?: number;
     suppressSessionEffects?: boolean;
   }): Promise<number> {
@@ -401,7 +400,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
       sendFarewell: true,
       accountId: entry.requesterOrigin?.accountId,
       triggerCleanup: true,
-      recoverInterrupted: params.terminalStatus ?? true,
+      recoverInterrupted: true,
       recoveryCurrent: {
         prepare: async () => (await params.recoveryCurrent?.prepare()) !== false,
         isHostCurrent: () => params.recoveryCurrent?.isHostCurrent() !== false,

@@ -183,13 +183,9 @@ export function hasUnretiredRpcSource(
 
 /** Returns a stable snapshot for Gateway projection, shutdown, and abort iteration. */
 export function listRpcSourceEntries(): Array<[runId: string, ref: RpcSourceRef]> {
-  const entries: Array<[string, RpcSourceRef]> = [];
-  for (const [runId, sources] of rpcSourcesByRunId) {
-    for (const ref of sources) {
-      entries.push([runId, ref]);
-    }
-  }
-  return entries;
+  return [...rpcSourcesByRunId].flatMap(([runId, sources]) =>
+    [...sources].map((ref): [string, RpcSourceRef] => [runId, ref]),
+  );
 }
 
 /** Returns sources owned by the exact physical controller selected by a captured target. */

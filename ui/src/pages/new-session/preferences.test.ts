@@ -39,10 +39,6 @@ const preference = (choice: NewSessionPreference, browser = choice) => ({ choice
 it.each([
   preference(placement),
   preference(
-    { ...placement, cyberAccessProgram: "standard", daybreakAccessProgram: "daybreak_red" },
-    placement,
-  ),
-  preference(
     {
       remoteProject: {
         identity: "acme/private-repo",
@@ -101,7 +97,6 @@ it("keeps a legacy cloud source after unavailable Git clears the stored worktree
 it("drops malformed persisted fields", () => {
   const invalid = {
     fastMode: "on",
-    cyberAccessProgram: "invalid",
     folder: 42,
     where: { kind: "node", id: [] },
     projectId: {},
@@ -148,7 +143,6 @@ it("preserves cleared placement fields without taking over model defaults or one
         model: "do-not-restore",
         thinkingLevel: "high",
         fastMode: true,
-        cyberAccessProgram: "daybreak_blue",
       },
     }),
   ).toEqual({ agentId: "main", selection });

@@ -1,6 +1,5 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import { waitForControlUiGatewayReconnecting } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   installMockGateway,
@@ -156,10 +155,12 @@ suite.define(() => {
         heldMethods: ["sessions.list"],
         sessions: activeRows,
         methodResponses: {
-          "agents.list": makeBootRoster({
+          "agents.list": {
+            defaultId: "main",
+            mainKey: "main",
             scope: "global",
             agents: [{ id: "main" }, { id: "work" }],
-          }),
+          },
           "sessions.list": {
             cases: [
               // Only the held first snapshot predates the completion event.

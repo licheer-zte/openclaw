@@ -6,7 +6,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const loopback = vi.hoisted(() => ({
   baseUrl: "",
   releases: [] as Array<{ bodyIsNull: boolean; bodyUsed: boolean }>,
-  failedStage: "",
+  authStatus: 200,
+  createStatus: 200,
+  settingsStatus: 200,
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
@@ -38,40 +40,41 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
 
 const { FeishuStreamingSession } = await import("./streaming-card.js");
 
+function writeJson(res: import("node:http").ServerResponse, payload: unknown, status = 200): void {
+  res.writeHead(status, { "content-type": "application/json" });
+  res.end(JSON.stringify(payload));
+}
+
 const handleRequest: Parameters<typeof withServer>[0] = (req, res) => {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
-  const stage = url.pathname.includes("/auth/")
-    ? "auth"
+  const [status, payload, error] = url.pathname.includes("/auth/")
+    ? ([
+        loopback.authStatus,
+        { code: 0, msg: "ok", tenant_access_token: "token", expire: 3600 },
+        "tenant token rejected",
+      ] as const)
     : url.pathname.endsWith("/settings")
-      ? "settings"
-      : "create";
-  const responses = {
-    auth: { tenant_access_token: "token", expire: 3600 },
-    settings: {},
-    create: { data: { card_id: "card_1" } },
-  };
-  const errors = {
-    auth: "tenant token rejected",
-    settings: "settings rejected",
-    create: "card create rejected",
-  };
-  const failed = stage === loopback.failedStage;
-  res.writeHead(failed ? 500 : 200, { "content-type": "application/json" });
-  res.end(
-    JSON.stringify(failed ? { error: errors[stage] } : { code: 0, msg: "ok", ...responses[stage] }),
-  );
+      ? ([loopback.settingsStatus, { code: 0, msg: "ok" }, "settings rejected"] as const)
+      : ([
+          loopback.createStatus,
+          { code: 0, msg: "ok", data: { card_id: "card_1" } },
+          "card create rejected",
+        ] as const);
+  writeJson(res, status === 200 ? payload : { error }, status);
 };
 
 beforeEach(() => {
   loopback.releases = [];
-  loopback.failedStage = "";
+  loopback.authStatus = 200;
+  loopback.createStatus = 200;
+  loopback.settingsStatus = 200;
 });
 
 describe("feishu streaming card error-path body release", () => {
   it.each([
-    ["auth", "Token request", 1],
-    ["create", "Create card request", 2],
-    ["settings", "Close streaming card", 3],
+    ["authStatus", "Token request", 1],
+    ["createStatus", "Create card request", 2],
+    ["settingsStatus", "Close streaming card", 3],
   ] as const)("cancels unread %s error body before release", async (stage, operation, releases) => {
     await withServer(handleRequest, async (baseUrl) => {
       loopback.baseUrl = baseUrl;
@@ -82,16 +85,21 @@ describe("feishu streaming card error-path body release", () => {
           },
         },
       };
-      const session = new FeishuStreamingSession((stage === "settings" ? client : {}) as never, {
-        appId: `app_error_${stage}`,
-        appSecret: "secret",
-      });
-      if (stage === "settings") {
+      const session = new FeishuStreamingSession(
+        (stage === "settingsStatus" ? client : {}) as never,
+        {
+          appId: `app_error_${stage}`,
+          appSecret: "secret",
+        },
+      );
+      if (stage === "settingsStatus") {
         await session.start("chat_id", "open_id");
       }
-      loopback.failedStage = stage;
+      loopback[stage] = 500;
       await expect(
-        stage === "settings" ? session.closeWithResult() : session.start("chat_id", "open_id"),
+        stage === "settingsStatus"
+          ? session.closeWithResult()
+          : session.start("chat_id", "open_id"),
       ).rejects.toThrow(`${operation} failed with HTTP 500`);
       expect(loopback.releases).toEqual(
         Array.from({ length: releases }, () => ({ bodyIsNull: false, bodyUsed: true })),

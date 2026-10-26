@@ -34,7 +34,7 @@ import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
-import { loginMcpServer, registerMcpLoginCommand, type McpLoginOptions } from "./mcp-cli-oauth.js";
+import { loginMcpServer } from "./mcp-cli-oauth.js";
 import { probeMcpServers, resolveMcpProbeIssue } from "./mcp-cli-probe.js";
 import {
   offlineMcpAction,
@@ -247,8 +247,8 @@ function applyMcpHttpControls(
     }
     server.sslVerify = sslVerify === "true";
   }
-  setOptionalField(server, "clientCert", readNonBlankString(opts.clientCert));
-  setOptionalField(server, "clientKey", readNonBlankString(opts.clientKey));
+  setOptionalField(server, "clientCert", normalizeStringifiedOptionalString(opts.clientCert));
+  setOptionalField(server, "clientKey", normalizeStringifiedOptionalString(opts.clientKey));
 }
 
 /** Documented `mcp status --json` shape: legacy booleans stay additive to `state`. */
@@ -1087,14 +1087,18 @@ export function registerMcpCli(program: Command) {
       ),
     );
 
-  registerMcpLoginCommand(
-    mcp,
-    offlineMcpAction("login", async (owner, name: string, opts: McpLoginOptions) => {
-      const loaded = await loadMcpConfig();
-      const server = requireMcpServer(loaded, name);
-      await loginMcpServer({ name, server, code: opts.code, issuer: opts.issuer, owner, fail });
-    }),
-  );
+  mcp
+    .command("login")
+    .description("Authorize an OAuth MCP server")
+    .argument("<name>", "MCP server name")
+    .option("--code <code>", "Authorization code from the OAuth redirect")
+    .action(
+      offlineMcpAction("login", async (owner, name: string, opts: { code?: string }) => {
+        const loaded = await loadMcpConfig();
+        const server = requireMcpServer(loaded, name);
+        await loginMcpServer({ name, server, code: opts.code, owner, fail });
+      }),
+    );
 
   mcp
     .command("logout")

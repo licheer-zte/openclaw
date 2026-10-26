@@ -334,33 +334,31 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     },
   );
 
-  it("keeps admitted aliases when their borrowed snapshot retires without rediscovery", () => {
+  it("renders only current supplied aliases without ambient lookup or repeated discovery", () => {
     const config = modelConfig(
       {
         "fixture/current": "Current",
-        "fixture/another": "Another",
         "fixture/unsupported": "Unavailable",
       },
       { model: "fixture/current" },
     );
-    const owner = preparedOwner(config, ["current", "another"], "writer");
+    const owner = preparedOwner(config, ["current"], "writer");
     const lookup = vi
       .spyOn(preparedModelCatalog, "getPreparedModelCatalogOwnerSnapshot")
       .mockImplementation(unexpectedRuntimeWork);
     const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected network"));
     const params = { config, agentId: "writer" };
     expect(buildPrompt(params)).not.toContain("## Model Aliases");
-    let admitted = "";
     for (let index = 0; index < 3; index++) {
       const prompt = buildPrompt({ ...params, preparedModelRuntime: owner });
       expect(prompt).toContain("- Current: fixture/current");
-      expect(prompt).toContain("- Another: fixture/another");
       expect(prompt).not.toContain("Unavailable");
       expect(prompt).not.toContain("fixture/unsupported");
-      admitted = prompt;
     }
     owner.isCurrent.mockReturnValue(false);
-    expect(buildPrompt({ ...params, preparedModelRuntime: owner })).toBe(admitted);
+    expect(buildPrompt({ ...params, preparedModelRuntime: owner })).not.toContain(
+      "## Model Aliases",
+    );
     const replacementConfig = modelConfig({ "fixture/current": "Replacement" });
     expect(
       buildPrompt({

@@ -29,7 +29,6 @@ import {
   installOpenClawPluginSdkNativeResolver,
   resolvePluginNativeAliasForParent,
 } from "./plugin-sdk-native-resolver.js";
-import { writeArtifact as writeFile } from "./public-surface.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { disposePluginRegistryInstances } from "./runtime.js";
 import { preparePluginLoaderAliases } from "./sdk-alias.js";
@@ -39,8 +38,15 @@ beforeEach(() => resetPluginCache());
 const roots: string[] = [];
 const requireFixture = createRequire(import.meta.url);
 
+function writeFile(root: string, name: string, content: string) {
+  const target = path.join(root, name);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, content);
+  return target;
+}
+
 function writeJson(root: string, name: string, value: unknown) {
-  return writeFile(path.join(root, name), JSON.stringify(value));
+  return writeFile(root, name, JSON.stringify(value));
 }
 
 function installResolver(f: ReturnType<typeof fixture>, pluginModulePath = f.entry) {
@@ -64,20 +70,15 @@ function fixture() {
       "./plugin-sdk/unused": "./dist/plugin-sdk/unused.js",
     },
   });
-  const used = writeFile(
-    path.join(root, "dist/plugin-sdk/used.js"),
-    'export const value = "dist";',
-  );
-  const unused = writeFile(
-    path.join(root, "dist/plugin-sdk/unused.js"),
-    'export const value = "unused";',
-  );
-  writeFile(path.join(root, "src/plugin-sdk/used.ts"), 'export const value: string = "source";');
+  const used = writeFile(root, "dist/plugin-sdk/used.js", 'export const value = "dist";');
+  const unused = writeFile(root, "dist/plugin-sdk/unused.js", 'export const value = "unused";');
+  writeFile(root, "src/plugin-sdk/used.ts", 'export const value: string = "source";');
   const entry = writeFile(
-    path.join(root, "dist/extensions/demo/cli-metadata.cjs"),
+    root,
+    "dist/extensions/demo/cli-metadata.cjs",
     'module.exports = { marker: "metadata", load: (name) => require(name), loadEsm: (name) => import(name) };',
   );
-  const write = (name: string, content: string) => writeFile(path.join(root, name), content);
+  const write = (name: string, content: string) => writeFile(root, name, content);
   const json = (name: string, value: unknown) => writeJson(root, name, value);
   const loader = (pluginSdkResolution: "src" | "dist" = "dist") =>
     createPluginModuleLoader({ devSourceRoot: root, pluginSdkResolution });
@@ -195,12 +196,10 @@ describe("native plugin alias preparation", () => {
       );
       const pluginDir = path.join(f.root, "external");
       writeJson(pluginDir, "package.json", { name: "external-fixture" });
-      writeFile(
-        path.join(pluginDir, "lazy.cjs"),
-        'module.exports = require("openclaw/plugin-sdk/used");',
-      );
+      writeFile(pluginDir, "lazy.cjs", 'module.exports = require("openclaw/plugin-sdk/used");');
       const entry = writeFile(
-        path.join(pluginDir, "index.cjs"),
+        pluginDir,
+        "index.cjs",
         'module.exports = { start: () => import("./lazy.cjs") };',
       );
       const owner = externalOwner(entry);
@@ -252,7 +251,8 @@ describe("native plugin alias preparation", () => {
     expect(() => createRequire(outside.entry).resolve("@openclaw/plugin-sdk/used")).toThrow();
     for (const relative of ["./plain.js", "./plugin-sdk/unused.js"]) {
       const target = writeFile(
-        path.join(path.dirname(f.entry), relative),
+        path.dirname(f.entry),
+        relative,
         "export const url = import.meta.url;",
       );
       await expect(metadata.loadEsm(relative)).resolves.toMatchObject({
@@ -313,7 +313,7 @@ describe("native plugin alias preparation", () => {
     const packageName = "@openclaw/llama-cpp-provider";
     const packageRoot = path.join(f.root, "node_modules", packageName);
     const manifest = writeJson(packageRoot, "package.json", { name: "external-fixture" });
-    const entry = writeFile(path.join(packageRoot, "index.cjs"), "module.exports = {};");
+    const entry = writeFile(packageRoot, "index.cjs", "module.exports = {};");
     f.write("dist/plugin-sdk/ssrf-runtime-internal.js", "export const privateValue = true;");
     installOpenClawPluginSdkNativeResolver({ pluginModulePath: entry, devSourceRoot: f.root });
     fs.writeFileSync(manifest, JSON.stringify({ name: packageName }));
@@ -364,7 +364,8 @@ describe("native plugin alias preparation", () => {
       fs.unlinkSync(f.entry);
       const observed = path.join(f.root, "action.json");
       const entry = writeFile(
-        path.join(pluginDir, "index.cjs"),
+        pluginDir,
+        "index.cjs",
         `module.exports = { id: "demo", register(api) {
       api.registerCli(({ program }) => program.command("late").action(async () => {
         const results = await Promise.allSettled([

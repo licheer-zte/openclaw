@@ -96,6 +96,7 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
             role={name() ? "img" : undefined}
             aria-label={name()}
             aria-hidden={name() ? undefined : "true"}
+            title={name()}
           >
             <Show when={name()} fallback={<Icon name="listTree" />}>
               {(tool) => (

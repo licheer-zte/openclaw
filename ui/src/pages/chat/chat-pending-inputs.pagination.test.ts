@@ -463,9 +463,6 @@ describe("server-owned pending input pagination", () => {
 
     expectPage(host, olderPage, 2);
     expect(getChatPendingInputs(host)?.error).toContain("Could not load latest messages");
-    expect(
-      renderChatView({ historyState: host, sessionKey }).querySelector(".chat-footer")?.textContent,
-    ).toContain("Could not load latest messages");
     expect(host.request).toHaveBeenCalledTimes(2);
   });
 });

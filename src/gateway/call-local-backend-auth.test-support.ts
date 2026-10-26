@@ -74,7 +74,9 @@ export function registerGatewayCallLocalBackendAuthTests(fixture: {
     localAuthNone();
     const { callGatewayFromCliRuntime } = await import("../cli/gateway-rpc.runtime.js");
 
-    await callGatewayFromCliRuntime("cron.status", { json: true });
+    await expect(callGatewayFromCliRuntime("cron.status", { json: true })).resolves.toEqual({
+      ok: true,
+    });
 
     expect(getOptions()).toMatchObject({ ...backend, scopes: ["operator.read"] });
     for (const load of [

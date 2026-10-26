@@ -1,3 +1,4 @@
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
 
@@ -18,8 +19,20 @@ type PluginInstallPreflightResult =
       installedVersion: string;
     };
 
+type InstalledClawHubPluginResolution =
+  | { status: "missing" }
+  | { status: "ambiguous"; pluginIds: string[] }
+  | {
+      status: "found";
+      pluginId: string;
+      record: PluginInstallRecord;
+      installedVersion?: string;
+    };
+
 /** Resolves one installed plugin by its stable ClawHub package identity. */
-export async function resolveInstalledClawHubPlugin(params: { clawhubPackage: string }) {
+export async function resolveInstalledClawHubPlugin(params: {
+  clawhubPackage: string;
+}): Promise<InstalledClawHubPluginResolution> {
   const records = await loadInstalledPluginIndexInstallRecords();
   const matches = Object.entries(records).filter(
     ([, record]) =>
@@ -28,17 +41,14 @@ export async function resolveInstalledClawHubPlugin(params: { clawhubPackage: st
         parseClawHubPluginSpec(record.resolvedSpec ?? "")?.name) === params.clawhubPackage,
   );
   if (matches.length === 0) {
-    return { status: "missing" as const };
+    return { status: "missing" };
   }
   if (matches.length > 1) {
-    return {
-      status: "ambiguous" as const,
-      pluginIds: matches.map(([pluginId]) => pluginId).toSorted(),
-    };
+    return { status: "ambiguous", pluginIds: matches.map(([pluginId]) => pluginId).toSorted() };
   }
   const [pluginId, record] = matches[0]!;
   return {
-    status: "found" as const,
+    status: "found",
     pluginId,
     record,
     installedVersion: record.resolvedVersion ?? record.version,

@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Root } from "@openclaw/fs-safe/root";
+import { root } from "@openclaw/fs-safe/root";
 import { openRootFileSync } from "../../infra/boundary-file-read.js";
 
 export async function ensureWritableSkillDirectories(
-  boundary: Root,
+  skillsDir: string,
   relativePath: string,
   assertCurrent?: () => void,
   sourceMode?: number,
@@ -12,9 +12,23 @@ export async function ensureWritableSkillDirectories(
   if (process.platform === "win32") {
     return;
   }
-  const fixedRoot = boundary.rootReal;
+  const fixedRoot = path.join(
+    await fs.promises.realpath(path.dirname(skillsDir)),
+    path.basename(skillsDir),
+  );
+  assertCurrent?.();
+  const boundary = await root(fixedRoot);
+  assertCurrent?.();
+  if (boundary.rootReal !== fixedRoot) {
+    throw new Error("Skill directory root must not be a symbolic link");
+  }
   const visit = async (relativeDir: string, initialMode?: number): Promise<void> => {
     const scopedPath = `.${path.sep}${relativeDir}`;
+    const stat = await boundary.stat(scopedPath);
+    assertCurrent?.();
+    if (stat.isSymbolicLink || !stat.isDirectory) {
+      return;
+    }
     const opened = openRootFileSync({
       absolutePath: path.join(fixedRoot, relativeDir),
       rootPath: fixedRoot,
@@ -35,10 +49,6 @@ export async function ensureWritableSkillDirectories(
       }
     } finally {
       fs.closeSync(opened.fd);
-    }
-    // Copying owns this directory's children; only legacy cleanup walks the tree.
-    if (initialMode !== undefined) {
-      return;
     }
     const children = await boundary.list(scopedPath, { withFileTypes: true });
     assertCurrent?.();

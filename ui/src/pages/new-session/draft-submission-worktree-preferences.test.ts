@@ -56,24 +56,13 @@ it.each([
     });
     controls.onThinkingSelect?.("high", controls.sessionKey);
     controls.onFastModeSelect?.(fastMode === true ? "on" : fastMode, controls.sessionKey);
-    controls.onAccessProgramSelect?.("daybreak_red", controls.sessionKey);
-    const selected = {
-      model: "openai/gpt-5.6-sol",
-      thinkingLevel: "high",
-      fastMode,
-      ...(identified ? { cyberAccessProgram: "daybreak_red" } : {}),
-    };
+    const selected = { model: "openai/gpt-5.6-sol", thinkingLevel: "high", fastMode };
     await expectSaved(prefs, selected);
     admitted.resolve(acceptedWorktreeSession);
     await submitting;
     expectWorktreeName(next.place);
     expect(prefs.stored()).toMatchObject({ ...selected, worktree: true, baseRef: "main" });
-    expect(control).toMatchObject({
-      selected: selected.model,
-      thinkingLevel: "high",
-      fastMode,
-      cyberAccessProgram: "daybreak_red",
-    });
+    expect(control).toMatchObject({ selected: selected.model, thinkingLevel: "high", fastMode });
   },
 );
 

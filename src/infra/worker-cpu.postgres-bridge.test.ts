@@ -12,10 +12,10 @@ import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
 import {
   createCpuTrackedWorker,
   getTrackedWorkerPoolSnapshot,
+  receiveWorkerMemoryPort,
   sampleTrackedWorkerMemory,
   trackNativeWorkerForCpu,
 } from "./worker-cpu.js";
-import { waitForWorkerMemoryPort } from "./worker-memory-port.test-support.js";
 import {
   collectPostgresBridgeCounters,
   countPostgresBridges,
@@ -39,7 +39,14 @@ it("counts four physical services across direct and deeply nested logical bridge
     transferList: [port2, ...postgresPoolTransferList(postgresPool)],
     execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
   });
-  const attached = waitForWorkerMemoryPort(parent);
+  const attached = new Promise<void>((resolve, reject) => {
+    parent.on("message", (message: unknown) => {
+      if (receiveWorkerMemoryPort(parent, message)) {
+        resolve();
+      }
+    });
+    parent.once("error", reject);
+  });
   const command = async (value: "create" | "close" | "nest" | "unnest") => {
     const reply = once(port1, "message");
     port1.postMessage(value);
@@ -97,7 +104,14 @@ it("lets an explicitly declared external worker own four services and reports it
       reported.resolve(data);
     }
   });
-  const attached = waitForWorkerMemoryPort(worker);
+  const attached = new Promise<void>((resolve, reject) => {
+    worker.on("message", (message: unknown) => {
+      if (receiveWorkerMemoryPort(worker, message)) {
+        resolve();
+      }
+    });
+    worker.once("error", reject);
+  });
   const command = async (value: "create" | "close" | "restart" | "snapshot") => {
     const reply = once(port1, "message");
     port1.postMessage(value);

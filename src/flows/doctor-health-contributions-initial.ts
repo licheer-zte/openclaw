@@ -104,7 +104,6 @@ export function resolveInitialDoctorHealthContributions(params: {
       run: params.runGatewayConfigHealth,
     }),
     createDoctorHealthContribution("doctor:database-engine", "Database engines", {
-      updateWork: { kind: "inspection", scope: "agent" },
       healthChecks: {
         description: "Selected database engines, physical store health, and recovery guidance.",
         async detect(ctx) {

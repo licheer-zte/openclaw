@@ -58,6 +58,7 @@ export function registerServiceCollectionTests() {
           environment: { HOME: home },
           sourcePath: path.join(home, ".config", "systemd", "user", "openclaw-gateway.service"),
         };
+        const originalCommand = structuredClone(command);
         const params = {
           ...executionParams("package"),
           root,
@@ -67,10 +68,16 @@ export function registerServiceCollectionTests() {
         const runId = createUpdateRun({ trigger: "cli" }).runId;
         params.opts.run = { runId, env: process.env };
         let running = true;
+        let inspections = 0;
         const service = createMockGatewayService({
           label: "systemd",
           isLoaded: async () => true,
-          readCommand: async () => structuredClone(command),
+          readCommand: async (_env, options) => {
+            if (inspections++ === 0) {
+              expect(options?.loadForInspection).toBeUndefined();
+            }
+            return structuredClone(command);
+          },
           // systemd can collect the stopped unit between command and runtime reads.
           readRuntime: async () =>
             running
@@ -121,6 +128,7 @@ export function registerServiceCollectionTests() {
             mutationStarted: !revoked,
           });
           expect(published).toHaveBeenCalledTimes(revoked ? 0 : 1);
+          expect(command).toEqual(originalCommand);
           for (const operation of [service.install, service.start, service.restart]) {
             expect(operation).not.toHaveBeenCalled();
           }

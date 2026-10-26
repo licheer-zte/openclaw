@@ -2183,9 +2183,9 @@ describe("disposeSession timeout", () => {
   });
 
   it(
-    "waits for expired HTTP session recovery on the next call without replay",
+    "recovers expired stateful HTTP sessions without replay",
     { timeout: 15_000 },
-    async () => {
+    async ({ signal }) => {
       const { runtime, state } = await expiryRuntime(true);
       expect((await runtime.getCatalog()).tools).toHaveLength(1);
       await expect(
@@ -2201,7 +2201,12 @@ describe("disposeSession timeout", () => {
       expect(runtime.peekCatalog()?.diagnostics).toEqual([
         expect.objectContaining({ serverName: "stateful" }),
       ]);
-      // A new explicit call must wait for recovery without a separate catalog warmup.
+      await runtime.getCatalog();
+      await waitForRuntimeState(
+        () => state.initializeCount === 2 && !runtime?.peekCatalog()?.diagnostics?.length,
+        "stateful MCP server to replace its expired HTTP session",
+        signal,
+      );
       await expect(
         runtime.callTool("stateful", "probe", { attempt: "after" }),
       ).resolves.toMatchObject({

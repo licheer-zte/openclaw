@@ -106,11 +106,12 @@ async function runWithFakeTimers<T>(run: () => Promise<T>): Promise<T> {
   vi.useFakeTimers();
   try {
     let settled = false;
-    const pending = run();
-    const markSettled = () => {
-      settled = true;
-    };
-    void pending.then(markSettled, markSettled);
+    const pending = run()
+      .then((value) => ({ ok: true as const, value }))
+      .catch((error: unknown) => ({ ok: false as const, error }))
+      .finally(() => {
+        settled = true;
+      });
     await vi.waitFor(
       async () => {
         await vi.runAllTimersAsync();
@@ -118,7 +119,11 @@ async function runWithFakeTimers<T>(run: () => Promise<T>): Promise<T> {
       },
       { timeout: DEFAULT_VITEST_TEST_TIMEOUT_MS - 1000 },
     );
-    return await pending;
+    const result = await pending;
+    if (!result.ok) {
+      throw result.error;
+    }
+    return result.value;
   } finally {
     vi.useRealTimers();
   }
@@ -253,10 +258,12 @@ describe("launchd uninstall", () => {
     expect(state.files.has(PLIST)).toBe(true);
   });
 
-  it.each(["stopped symlink", "concurrently removed"])(
+  it.each(["missing", "stopped symlink", "concurrently removed"])(
     "keeps removal idempotent for a %s LaunchAgent",
     async (kind) => {
-      state.files.set(PLIST, "RunAtLoad=true");
+      if (kind !== "missing") {
+        state.files.set(PLIST, "RunAtLoad=true");
+      }
       if (kind === "stopped symlink") {
         state.serviceLoaded = false;
         state.bootoutError = "Boot-out failed: 5: Input/output error";
@@ -468,7 +475,13 @@ describe("launchd install", () => {
 
   it("publishes the rewritten plist before restart bootstrap", async () => {
     state.serviceLoaded = false;
-    setGatewayPlist(["node", "gateway.js"], { OPENCLAW_SERVICE_VERSION: "2026.4.24" });
+    setLegacyGatewayLaunchAgentPlist(PLIST, [
+      "    <key>EnvironmentVariables</key>",
+      "    <dict>",
+      "      <key>OPENCLAW_SERVICE_VERSION</key>",
+      "      <string>2026.4.24</string>",
+      "    </dict>",
+    ]);
 
     const execLaunchctl = launchdExec.execLaunchctl;
     using launchctl = vi.spyOn(launchdExec, "execLaunchctl");
@@ -789,10 +802,15 @@ describe("launchd install", () => {
     setLaunchAgentPlist(env, "ai.openclaw.gateway", ["node", "gateway.js"]);
     const plistPath = resolveLaunchAgentPlistPath(env);
     const originalPlist = state.files.get(plistPath);
-    mockPort(19002, "busy", [
-      { pid: 4242, address: "TCP 127.0.0.1:19002 (LISTEN)" },
-      { pid: 5151, address: "TCP [::1]:19002 (LISTEN)" },
-    ]);
+    inspectPortUsage.mockResolvedValue({
+      port: 19002,
+      status: "busy",
+      listeners: [
+        { pid: 4242, address: "TCP 127.0.0.1:19002 (LISTEN)" },
+        { pid: 5151, address: "TCP [::1]:19002 (LISTEN)" },
+      ],
+      hints: ["Another process is listening on this port."],
+    });
     formatPortDiagnostics.mockReturnValue(["Port 19002 is already in use."]);
 
     await expect(restartLaunchAgent(launchAgentControlFixture(env))).rejects.toThrow(

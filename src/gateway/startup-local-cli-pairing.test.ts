@@ -3,7 +3,7 @@ import {
   emptySqliteCounts,
   observeParentSqlite,
 } from "../../test/helpers/sqlite-parent-observer.js";
-import { loadDeviceAuthToken as readDeviceAuthTokenForTest } from "../infra/device-auth-store.js";
+import { readDeviceAuthTokenForTest } from "../infra/device-auth-store.test-support.js";
 import { loadDeviceIdentityIfPresentAsync } from "../infra/device-identity-async.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -44,7 +44,7 @@ describe("startup local CLI pairing", () => {
       });
       platform.mockRestore();
       expect(
-        await readDeviceAuthTokenForTest({ deviceId: identity!.deviceId, role: "operator" }),
+        readDeviceAuthTokenForTest({ deviceId: identity!.deviceId, role: "operator" }),
       ).toMatchObject({
         token: paired?.tokens?.operator?.token,
       });
@@ -71,7 +71,7 @@ describe("startup local CLI pairing", () => {
 
       await expect(ensureStartupLocalCliPairing()).resolves.toBe("unavailable");
       expect(
-        await readDeviceAuthTokenForTest({ deviceId: identity.deviceId, role: "operator" }),
+        readDeviceAuthTokenForTest({ deviceId: identity.deviceId, role: "operator" }),
       ).toBeNull();
       await expect(getPairedDevice(identity.deviceId)).resolves.toMatchObject({
         approvedScopes: [READ_SCOPE],

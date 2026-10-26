@@ -28,8 +28,14 @@ it("retains cached channels through retry and retires feedback with the connecti
   const invalidated = createDeferred<ChannelsStatusSnapshot>();
   const followup = createDeferred<ChannelsStatusSnapshot>();
   const retired = createDeferred<ChannelsStatusSnapshot>();
-  const reads = [failed, recovered, invalidated, followup, retired];
-  const responses = [Promise.resolve(snapshot()), ...reads.map((read) => read.promise)];
+  const responses = [
+    Promise.resolve(snapshot()),
+    failed.promise,
+    recovered.promise,
+    invalidated.promise,
+    followup.promise,
+    retired.promise,
+  ];
   const fixture = createApplicationGateway();
   fixture.publish({
     ...fixture.gateway.snapshot,
@@ -69,44 +75,62 @@ it("retains cached channels through retry and retires feedback with the connecti
   const row = Array.from(mounted.container.querySelectorAll(".settings-row")).find(
     (candidate) => candidate.querySelector(".settings-row__title")?.textContent === "Discord",
   );
-  const expectState = (busy: boolean, title: string | null, error: string | null = null) =>
-    waitForSolid(() => {
-      expect(refresh().disabled).toBe(busy);
-      if (busy) {
-        expect(refresh().textContent).toContain("Refreshing");
-      }
-      expect(mounted.container.querySelector(".callout.danger")?.textContent ?? null).toBe(error);
-      expect(mounted.container.contains(row!)).toBe(title !== null);
-      if (title) {
-        expect(row?.querySelector(".settings-row__title")?.textContent).toBe(title);
-      }
-    });
   try {
     expect(row).toBeDefined();
     await waitForSolid(() => expect(refresh().disabled).toBe(false));
     refresh().click();
-    await expectState(true, "Discord");
+    await waitForSolid(() => {
+      expect(refresh().disabled).toBe(true);
+      expect(refresh().textContent).toContain("Refreshing");
+      expect(mounted.container.contains(row!)).toBe(true);
+    });
     failed.reject(new Error("Synthetic channel status unavailable"));
     await pending;
-    await expectState(false, "Discord", "Synthetic channel status unavailable");
+    await waitForSolid(() => {
+      expect(refresh().disabled).toBe(false);
+      expect(mounted.container.querySelector(".callout.danger")?.textContent).toBe(
+        "Synthetic channel status unavailable",
+      );
+    });
     refresh().click();
-    await expectState(true, "Discord", "Synthetic channel status unavailable");
+    await waitForSolid(() => {
+      expect(refresh().disabled).toBe(true);
+      expect(mounted.container.querySelector(".callout.danger")?.textContent).toBe(
+        "Synthetic channel status unavailable",
+      );
+      expect(mounted.container.contains(row!)).toBe(true);
+    });
     recovered.resolve({
       ...snapshot(),
       channelLabels: { discord: "Discord recovered" },
       channelAccounts: { discord: [{ accountId: "demo", connected: false, configured: true }] },
     });
     await pending;
-    await expectState(false, "Discord recovered");
+    await waitForSolid(() => {
+      expect(refresh().disabled).toBe(false);
+      expect(mounted.container.querySelector(".callout.danger")).toBeNull();
+      expect(mounted.container.contains(row!)).toBe(true);
+      expect(row?.querySelector(".settings-row__title")?.textContent).toBe("Discord recovered");
+    });
     refresh().click();
     const invalidatedRead = channels.state.channelsRead!;
     fixture.publishEvent({ type: "event", event: "config.changed", payload: {} });
     invalidated.resolve(snapshot());
     await invalidatedRead.completion;
-    await expectState(true, "Discord");
+    await waitForSolid(() => {
+      expect(refresh().disabled).toBe(true);
+      expect(refresh().textContent).toContain("Refreshing");
+      expect(mounted.container.contains(row!)).toBe(true);
+      expect(row?.querySelector(".settings-row__title")?.textContent).toBe("Discord");
+    });
     followup.resolve({ ...snapshot(), channelLabels: { discord: "Configuration refreshed" } });
     await pending;
-    await expectState(false, "Configuration refreshed");
+    await waitForSolid(() => {
+      expect(refresh().disabled).toBe(false);
+      expect(row?.querySelector(".settings-row__title")?.textContent).toBe(
+        "Configuration refreshed",
+      );
+    });
     refresh().click();
     const retiredRefresh = pending;
     await waitForSolid(() => expect(refresh().disabled).toBe(true));
@@ -117,7 +141,10 @@ it("retains cached channels through retry and retires feedback with the connecti
         channelLabels: { discord: "Replacement connection" },
       })),
     });
-    await expectState(false, null);
+    await waitForSolid(() => {
+      expect(refresh().disabled).toBe(false);
+      expect(mounted.container.contains(row!)).toBe(false);
+    });
     refresh().click();
     await pending;
     retired.reject(new Error("Retired channel failure"));
@@ -128,9 +155,11 @@ it("retains cached channels through retry and retires feedback with the connecti
       expect(mounted.container.textContent).toContain("Replacement connection");
     });
   } finally {
-    for (const read of reads) {
-      read.resolve(snapshot());
-    }
+    failed.resolve(snapshot());
+    recovered.resolve(snapshot());
+    invalidated.resolve(snapshot());
+    followup.resolve(snapshot());
+    retired.resolve(snapshot());
     mounted.unmount();
     channels.dispose();
   }

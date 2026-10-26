@@ -57,14 +57,12 @@ export function deferImages() {
 
 // Strict dispatch keeps each scenario's permitted requests explicit.
 export function panelScenario(
-  targetId: string | undefined,
+  targetId: string,
   url: string | undefined,
   routes: Record<string, (request: Envelope) => unknown>,
 ) {
   const gateway = createBrowserClient(async (request) => {
-    const route =
-      routes[request.path] ??
-      (request.path === "/act" ? routes[String(request.body?.kind)] : undefined);
+    const route = routes[request.path];
     if (!route) {
       throw new Error(`Unexpected browser route: ${request.path}`);
     }
@@ -72,19 +70,13 @@ export function panelScenario(
   });
   const host = new TestBrowserPanelHost(gateway.client);
   const controller = host.createPanel();
-  if (targetId !== undefined) {
-    controller.activeTargetId = targetId;
-    controller.view = createView(targetId, url);
-  }
+  controller.activeTargetId = targetId;
+  controller.view = createView(targetId, url);
   const calls = (path: string) =>
     gateway.request.mock.calls
       .map(([, envelope]) => envelope as Envelope)
       .filter((envelope) => envelope.path === path);
-  const actions = (kind: string) =>
-    calls("/act")
-      .map(({ body }) => body)
-      .filter((body) => body?.kind === kind);
-  return { ...gateway, host, controller, calls, actions };
+  return { ...gateway, host, controller, calls };
 }
 
 export function streamFixture<Socket extends TestScreencastSocket>(

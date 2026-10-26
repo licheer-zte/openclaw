@@ -69,12 +69,12 @@ function artifactArchiveName(sha256: string): string {
 }
 
 async function withArtifactImports<T>(
-  run: (files: Root, assertCurrent: () => void, prepareEffect: () => Promise<void>) => Promise<T>,
+  run: (files: Root, assertOwned: () => void) => Promise<T>,
 ): Promise<T> {
-  const { withPluginLifecycleLeaseAsync } = await import("../plugins/plugin-lifecycle-lease.js");
-  return await withPluginLifecycleLeaseAsync({}, async (lease) => {
+  const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
+  return await withPluginLifecycleLease({}, async (lease) => {
     const stateDir = resolveStateDir();
-    await lease.assertOwned();
+    lease.assertOwned();
     await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
     const files = await root(stateDir, {
       hardlinks: "reject",
@@ -82,18 +82,16 @@ async function withArtifactImports<T>(
       mode: 0o600,
       maxBytes: MAX_ARTIFACT_BYTES,
     });
-    await lease.assertOwned();
+    lease.assertOwned();
     await files.mkdir(PENDING_ARTIFACT_DIR);
-    return await run(files, lease.assertCurrent, async () => {
-      await lease.assertOwned();
-    });
+    return await run(files, () => lease.assertOwned());
   });
 }
 
 async function prunePendingArtifacts(
   files: Root,
   archiveName: string,
-  prepareEffect: () => Promise<void>,
+  assertOwned: () => void,
 ): Promise<void> {
   const pending = (await files.list(PENDING_ARTIFACT_DIR, { withFileTypes: true }))
     .filter((entry) => entry.isFile && /^[a-f0-9]{64}\.tgz$/u.test(entry.name))
@@ -107,7 +105,7 @@ async function prunePendingArtifacts(
       continue;
     }
     if (entry.mtimeMs <= expiresBefore || entry.size > MAX_ARTIFACT_BYTES || remaining === 0) {
-      await prepareEffect();
+      assertOwned();
       await files.remove(`${PENDING_ARTIFACT_DIR}/${entry.name}`);
     } else {
       remaining -= 1;
@@ -240,11 +238,11 @@ export async function prepareSystemAgentPluginArtifact(
       "This plugin backs OpenClaw's active inference route. Stop OpenClaw and install the artifact from a trusted shell.",
     );
   }
-  return await withArtifactImports(async (files, _assertCurrent, prepareEffect) => {
+  return await withArtifactImports(async (files, assertOwned) => {
     const archiveName = artifactArchiveName(operation.sha256);
     const importPath = `${PENDING_ARTIFACT_DIR}/${archiveName}`;
-    await prunePendingArtifacts(files, archiveName, prepareEffect);
-    await prepareEffect();
+    await prunePendingArtifacts(files, archiveName, assertOwned);
+    assertOwned();
     // A fresh proposal for the same digest renews its review lifetime.
     await files.write(importPath, bytes);
     return {
@@ -269,7 +267,7 @@ export async function executePluginArtifactActivation(
     runtime,
     opts,
     run: async (ctx) =>
-      await withArtifactImports(async (files, assertOwned, prepareEffect) => {
+      await withArtifactImports(async (files, assertOwned) => {
         const archiveName = artifactArchiveName(operation.sha256);
         const pendingPath = `${PENDING_ARTIFACT_DIR}/${archiveName}`;
         if (
@@ -300,7 +298,6 @@ export async function executePluginArtifactActivation(
                 "Artifact activation stopped: this plugin now backs the active inference route. Stop OpenClaw and install it from a trusted shell.",
               );
             }
-            await prepareEffect();
             assertPersistentApply();
           };
           await assertArtifactConfigPublicationSupported();
@@ -315,11 +312,11 @@ export async function executePluginArtifactActivation(
             verifyArtifactDigest(await files.readBytes(importPath), operation.sha256);
           }
           await ctx.commit(async () => {
-            await prepareEffect();
+            assertOwned();
             if (!retained) {
               await files.create(importPath, bytes);
             }
-            await prepareEffect();
+            assertOwned();
             await files.remove(pendingPath);
             try {
               const installed = await installManagedPluginSource({

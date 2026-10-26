@@ -5,11 +5,18 @@ import { sleep } from "../utils/sleep.js";
 import { createPassthroughEngineMethods } from "./context-engine.test-support.js";
 import { delegateCompactionToRuntime } from "./delegate.js";
 import { registerLegacyContextEngine } from "./legacy.registration.js";
-import * as registry from "./registry.js";
-import * as fixtures from "./registry.test-support.js";
+import {
+  registerContextEngineForOwner,
+  resolveContextEngine,
+  resolveLogicalTurnContextEngines,
+} from "./registry.js";
+import {
+  captureContextEngineRegistryStateForTests,
+  contextEngineConfig,
+  resetContextEngineRuntimeQuarantineForTests,
+} from "./registry.test-support.js";
 import type { ContextEngine } from "./types.js";
 
-type StageParams = { abortSignal?: AbortSignal; compactionTimeoutReset?: () => void };
 const { compactEmbeddedAgentSessionOnDemandMock } = vi.hoisted(() => ({
   compactEmbeddedAgentSessionOnDemandMock: vi.fn(),
 }));
@@ -19,79 +26,91 @@ vi.mock("../agents/embedded-agent-runner/compact.runtime.js", () => ({
 }));
 
 const timeoutMs = 60;
-const stageMs = 40; // Each native stage fits the window; their total exceeds it.
-const session = { sessionId: "s1", sessionKey: "agent:main:s1", force: true };
+const stageMs = 40;
+const session = { sessionId: "s1", sessionKey: "agent:main:s1" };
+const forcedSession = { ...session, force: true };
 let engineSequence = 0;
 
-beforeAll(() => fixtures.captureContextEngineRegistryStateForTests());
+beforeAll(() => captureContextEngineRegistryStateForTests());
 
 beforeEach(async () => {
   await registerLegacyContextEngine();
   compactEmbeddedAgentSessionOnDemandMock.mockReset();
-  compactEmbeddedAgentSessionOnDemandMock.mockImplementation(async (params: StageParams) => {
-    for (let stage = 0; stage < 3; stage += 1) {
-      params.compactionTimeoutReset?.();
-      await sleep(stageMs);
-      params.abortSignal?.throwIfAborted();
-    }
-    return { ok: true, compacted: true };
-  });
+  // Native staged compaction: each serial request fits the window; together they exceed it.
+  compactEmbeddedAgentSessionOnDemandMock.mockImplementation(
+    async (params: { abortSignal?: AbortSignal; compactionTimeoutReset?: () => void }) => {
+      for (let stage = 0; stage < 3; stage += 1) {
+        params.compactionTimeoutReset?.();
+        await sleep(stageMs);
+        params.abortSignal?.throwIfAborted();
+      }
+      return { ok: true, compacted: true };
+    },
+  );
   vi.useFakeTimers();
 });
 afterEach(async () => {
   vi.clearAllTimers();
   vi.useRealTimers();
-  await fixtures.resetContextEngineRuntimeQuarantineForTests();
+  await resetContextEngineRuntimeQuarantineForTests();
 });
 
-async function resolveEngine(
-  mode: string,
-  compact: ContextEngine["compact"] = async (params) => {
-    if (mode === "quarantined") {
-      throw new Error("plugin compaction failed");
-    }
-    await sleep(10);
-    return delegateCompactionToRuntime(mode === "logical-turn" ? { ...params } : params);
-  },
+async function resolvePlugin(
+  compact: ContextEngine["compact"],
+  { ownsCompaction = false, logicalTurn = false } = {},
 ) {
-  if (mode === "default") {
-    return registry.resolveContextEngine();
-  }
   const engineId = `delegating-plugin-${++engineSequence}`;
-  const raw: ContextEngine = {
-    info: { id: engineId, name: "Delegating plugin", ownsCompaction: mode === "quarantined" },
+  const createEngine = (): ContextEngine => ({
+    info: { id: engineId, name: "Delegating plugin", ownsCompaction },
     ...createPassthroughEngineMethods(),
     compact,
-  };
-  await registry.registerContextEngineForOwner(engineId, () => raw, "plugin:delegating-plugin");
-  const config = fixtures.contextEngineConfig(engineId, "delegating-plugin");
-  const engine =
-    mode === "logical-turn"
-      ? (await registry.resolveLogicalTurnContextEngines(config)).configured.engine
-      : await registry.resolveContextEngine(config);
-  if (mode === "quarantined") {
-    await expect(engine.compact(session)).rejects.toThrow("plugin compaction failed");
-  }
-  return engine;
+  });
+  await registerContextEngineForOwner(engineId, createEngine, "plugin:delegating-plugin", {
+    allowSameOwnerRefresh: true,
+  });
+  const config = contextEngineConfig(engineId, "delegating-plugin");
+  return logicalTurn
+    ? (await resolveLogicalTurnContextEngines(config)).configured.engine
+    : await resolveContextEngine(config);
 }
 
-const engineModes = ["default", "plugin", "logical-turn", "quarantined"];
-it.each(engineModes)("refreshes the watchdog per native stage for %s", async (mode) => {
-  const engine = await resolveEngine(mode);
-  const pending = compactContextEngineWithSafetyTimeout(engine, session, timeoutMs);
+async function checkpointThenDelegate(params: Parameters<ContextEngine["compact"]>[0]) {
+  await sleep(10);
+  return await delegateCompactionToRuntime(params);
+}
+
+it.each(
+  Object.entries({
+    "the default engine": () => resolveContextEngine(),
+    "a plugin passing params unchanged": () => resolvePlugin(checkpointThenDelegate),
+    "a logical-turn plugin spreading params": () =>
+      resolvePlugin((p) => checkpointThenDelegate({ ...p }), { logicalTurn: true }),
+    "a quarantined plugin's fallback": async () => {
+      const engine = await resolvePlugin(
+        () => Promise.reject(new Error("plugin compaction failed")),
+        { ownsCompaction: true },
+      );
+      await expect(engine.compact(session)).rejects.toThrow("plugin compaction failed");
+      return engine;
+    },
+  }),
+)("refreshes the host watchdog per native stage for %s", async (_name, resolveEngine) => {
+  const engine = await resolveEngine();
+  const pending = compactContextEngineWithSafetyTimeout(engine, forcedSession, timeoutMs);
   const settled = expect(pending).resolves.toMatchObject({ ok: true, compacted: true });
   await vi.advanceTimersByTimeAsync(10 + 3 * stageMs);
   await settled;
+  expect(compactEmbeddedAgentSessionOnDemandMock).toHaveBeenCalledOnce();
 });
 
 it("keeps plugin-owned work after the delegate under one host window", async () => {
   let delegated = false;
-  const engine = await resolveEngine("plugin", async (params) => {
+  const engine = await resolvePlugin(async (params) => {
     await delegateCompactionToRuntime(params);
     delegated = true;
     return await createDeferred<never>().promise;
   });
-  const pending = compactContextEngineWithSafetyTimeout(engine, session, timeoutMs);
+  const pending = compactContextEngineWithSafetyTimeout(engine, forcedSession, timeoutMs);
   const settled = expect(pending).rejects.toThrow("Compaction timed out");
   await vi.advanceTimersByTimeAsync(3 * stageMs);
   expect(delegated).toBe(true);

@@ -18,8 +18,6 @@ import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-str
 import {
   createAnthropicThinkingPrefillPayloadWrapper,
   createOpenAIHostedWebSearchWrapper,
-  mapAssistantMessageStream,
-  transformProviderStreamMessages,
   wrapProviderPayloadHook,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
@@ -237,17 +235,7 @@ function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamF
           },
         }) ?? underlying)
       : underlying;
-    const response = stream({ ...preparedModel, headers }, context, options);
-    if (preparedModel.id === model.id) {
-      return response;
-    }
-    // Upstream IDs belong on the wire; session state needs the resolvable catalog ID.
-    // Keep responseModel intact so genuine upstream reroutes remain observable.
-    return mapAssistantMessageStream(response, (output) =>
-      transformProviderStreamMessages(output, (message) => {
-        message.model = model.id;
-      }),
-    );
+    return stream({ ...preparedModel, headers }, context, options);
   };
   // Evaluate catalog facts before dispatch removes private route metadata.
   return createOpenAIHostedWebSearchWrapper(

@@ -678,7 +678,6 @@ describe("main session recovery store", () => {
           session: { scope: "global", store: opsStorePath },
         },
         gatewayRuntime: {
-          prepareFailedWorkerPlacement: async () => undefined,
           prepareRestartRecovery: () => undefined,
           resumeChatInput: dispatch,
           dispatchSessionMethod: dispatch,

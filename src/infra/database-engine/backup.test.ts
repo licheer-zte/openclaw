@@ -27,7 +27,6 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { pluginBackupPlanInput } from "../backup-resource-plan.test-support.js";
 import { createBackupSqliteSnapshotPlan } from "../backup-sqlite-snapshot.js";
 import { resolveClientCredentialStorePath } from "../client-credential-paths.js";
 import { readClientCredentialReceipt } from "../client-credential-readiness.js";
@@ -149,7 +148,16 @@ it.skipIf(!connection)(
           stateDir: state.stateDir,
         });
         const resources = () =>
-          createBackupResourcePlan(pluginBackupPlanInput(state.stateDir, inventory));
+          createBackupResourcePlan({
+            stateDir: state.stateDir,
+            configPaths: [],
+            oauthDirs: [],
+            workspaceDirs: [],
+            excludedWorkspaceDirs: [],
+            agentRoots: [],
+            pluginResources: inventory.resources,
+            pluginRoots: inventory.pluginRoots,
+          });
         const snapshotPlan = async (name: string, selected = resources()) => {
           const selectedResources = await selected;
           const tempDir = state.path(name);

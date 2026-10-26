@@ -61,24 +61,41 @@ beforeEach(() => {
 });
 afterEach(clearRuntimeConfigSnapshot);
 
-it("excludes unverified publishers and replaces a blank reply with the no-match outcome", async () => {
-  registry.plugins.mockResolvedValue({ items: [{ ...remotePlugin, isOfficial: false }] });
-  registry.skills.mockResolvedValue([skill("WhatsApp", "openclaw")]);
-  const { result, reply, recommendations } = await search({ query: "whatsapp" }, " \t\n");
+it.each([undefined, "", " \t\n"])(
+  "excludes unverified publishers and gives a visible no-match outcome for message=%j",
+  async (message) => {
+    registry.plugins.mockResolvedValue({ items: [{ ...remotePlugin, isOfficial: false }] });
+    registry.skills.mockResolvedValue([skill("WhatsApp", "openclaw")]);
+    const { result, reply, recommendations } = await search({ query: "whatsapp" }, message);
+    expect(recommendations).toEqual([]);
+    expect(reply?.text).toContain("No official ClawHub plugin or skill match");
+    expectNotice(result, "No official ClawHub plugin or skill match");
+  },
+);
+it("preserves an explicit reply when a ClawHub search has no matches", async () => {
+  const message = "Deployment complete.\nAll requested checks passed.";
+  const { result, reply, recommendations } = await search(
+    { query: "unmatched-capability", kind: "skill" },
+    message,
+  );
+  expect(registry.skills).toHaveBeenCalled();
   expect(recommendations).toEqual([]);
-  expect(reply?.text).toContain("No official ClawHub plugin or skill match");
-  expectNotice(result, "No official ClawHub plugin or skill match");
+  expect(reply?.text).toBe(message);
+  expectNotice(result, "No official ClawHub skill match");
 });
 it("matches an official skill to its exact linked publisher instead of its display name", async () => {
   registry.skills.mockResolvedValue([{ ...skill("Calendar", "verified", true), icon: "📆" }]);
-  const link = {
-    valid: true,
-    registry: "https://clawhub.ai",
-    slug: "calendar",
-    ownerHandle: "another",
-  };
   registry.skillStatus.mockReturnValue({
-    skills: [{ clawhub: link }],
+    skills: [
+      {
+        clawhub: {
+          valid: true,
+          registry: "https://clawhub.ai",
+          slug: "calendar",
+          ownerHandle: "another",
+        },
+      },
+    ],
   });
   const message = "Here is your calendar capability.";
   const { result, reply, recommendations } = await search(

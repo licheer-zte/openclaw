@@ -63,12 +63,14 @@ import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.ty
 import type { SessionEventSourcePolicy } from "../auto-reply/reply/session-event-contract.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readScheduledToolOptions } from "../cron/execution-context-registry.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { loadExecApprovalsReadOnlyAsync } from "../infra/exec-approvals-store.js";
 import { resolveExactExecModeFromPolicy } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
 import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
+import { resolveGatewayOwnerOnlyToolDenylist } from "../security/dangerous-tools.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
 import {
   captureGatewayToolResolutionAuthority,
@@ -160,7 +162,7 @@ export async function resolveGatewayScopedTools(
       }).sessionAgentId
     : sessionAgentId;
   const surface = params.surface ?? "http";
-  const { senderIsOwner, scheduledTools } = resolveGatewaySenderAuthority(params, surface);
+  const { senderIsOwner, scheduledOwnerDeny } = resolveGatewaySenderAuthority(params, surface);
   const stableSessionSurface = surface === "loopback" && params.admittedRunContext !== undefined;
   const nodeExecSurface = surface === "loopback" && params.includeNodeExecTool === true;
   const gatewayRequestedTools = params.gatewayRequestedTools ?? [];
@@ -266,7 +268,10 @@ export async function resolveGatewayScopedTools(
     params.admittedRunContext &&
     getAdmittedRunDelegatedAuthority(params.admittedRunContext);
   const ownerOnlyGatewayDeny = [
-    ...scheduledTools.ownerOnlyDeny(senderIsOwner, sessionPortalTarget !== undefined),
+    ...resolveGatewayOwnerOnlyToolDenylist(
+      surface === "http" ? senderIsOwner === true : senderIsOwner,
+    ).filter((name) => name !== "sessions" && (name !== "portal" || !sessionPortalTarget)),
+    ...scheduledOwnerDeny,
     // Attach grants also use loopback; session binding is not run authority.
     ...(senderIsOwner !== true &&
     !assignmentAdmitted &&
@@ -422,7 +427,7 @@ export async function resolveGatewayScopedTools(
     gatewayCallerAccountId: gatewayCaller.accountId,
     gatewayCallerChannel: gatewayCaller.channel,
     gatewayCallerLocal: gatewayCaller.local,
-    ...scheduledTools.toolOptions,
+    ...readScheduledToolOptions(params.admittedRunContext, params.toolsAllow),
     sourceReplyOnly: params.sourceReplyOnly,
     agentTo: params.agentTo,
     agentThreadId: params.agentThreadId,

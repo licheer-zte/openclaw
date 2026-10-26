@@ -8,7 +8,6 @@ const { read, update, context, lease } = vi.hoisted(() => ({
   update: vi.fn(),
   lease: {
     signal: new AbortController().signal,
-    assertCurrent() {},
     async assertOwned() {},
     async renew() {},
   },
@@ -118,29 +117,30 @@ it.each([
   async ({ operation, owner }) => {
     read.mockResolvedValue({});
     const failure = new Error("credential owner ended");
-    const lifetime = new AbortController();
-    const assertCurrent = () => {
-      if (owner === "lease") {
-        lifetime.signal.throwIfAborted();
-      }
-    };
+    const login = new AbortController();
+    let leaseLive = true;
     const provider = await createMcpOAuthClientProvider({
       ...providerParams,
       allowAuthorizationRedirect: true,
       suppressStoredTokens: operation === "tokens",
       lease: {
         ...lease,
-        assertCurrent,
         async assertOwned() {
-          assertCurrent();
+          if (!leaseLive) {
+            throw failure;
+          }
         },
       },
-      login: owner === "login" ? loginLifecycle(lifetime) : undefined,
+      login: owner === "login" ? loginLifecycle(login) : undefined,
     });
     if (operation === "codeVerifier") {
       await provider.saveCodeVerifier("fixture-prepared-verifier");
     }
-    lifetime.abort(failure);
+    if (owner === "login") {
+      login.abort(failure);
+    } else {
+      leaseLive = false;
+    }
     await expect(provider[operation]()).rejects.toBe(failure);
   },
 );

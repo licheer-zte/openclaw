@@ -3,6 +3,7 @@ import {
   generatedImageAssetFromDataUrl,
   imageFileExtensionForMimeType,
   imageSourceUploadFileName,
+  parseImageDataUrl,
   parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,
   resolveImageSourceUrl,
@@ -29,13 +30,16 @@ describe("image asset helpers", () => {
 
   it("converts buffers to image data URLs and parses them back", () => {
     const buffer = Buffer.from("png-bytes");
-    const asset = { buffer, mimeType: "image/png", fileName: "image-2.png" };
-    const dataUrl = toImageDataUrl(asset);
-    expect(dataUrl).toBe("data:image/png;base64,cG5nLWJ5dGVz");
-    expect(generatedImageAssetFromDataUrl({ dataUrl, index: 1 })).toEqual(asset);
+    const base64 = buffer.toString("base64");
+    const dataUrl = toImageDataUrl({ buffer, mimeType: "image/png" });
+    expect(dataUrl).toBe(`data:image/png;base64,${base64}`);
+    expect(parseImageDataUrl(dataUrl)).toEqual({ mimeType: "image/png", base64 });
+    const asset = generatedImageAssetFromDataUrl({ dataUrl, index: 1 });
+    expect(asset).toEqual({ buffer, mimeType: "image/png", fileName: "image-2.png" });
   });
 
   it("rejects malformed base64 image data URLs", () => {
+    expect(parseImageDataUrl(malformedDataUrl)).toBeUndefined();
     expect(generatedImageAssetFromDataUrl({ dataUrl: malformedDataUrl, index: 0 })).toBeUndefined();
   });
 
@@ -47,33 +51,51 @@ describe("image asset helpers", () => {
   });
 
   it("sizes inline image JSON caps from decoded image payload limits", () => {
-    const cap = (count: number) => resolveInlineImageJsonResponseMaxBytes(count, 6 * 1024 * 1024);
-    expect(cap(4)).toBe(34_603_008);
-    expect(cap(Number.NaN)).toBe(9_437_184);
+    const maxBytes = (count: number) =>
+      resolveInlineImageJsonResponseMaxBytes(count, 6 * 1024 * 1024);
+    expect(maxBytes(4)).toBe(34_603_008);
+    expect(maxBytes(Number.NaN)).toBe(9_437_184);
     expect(resolveInlineImageJsonResponseMaxBytes(2, 8 * 1024 * 1024)).toBe(23_418_198);
   });
 
   it("sniffs generated PNG images", () => {
-    const buffer = Buffer.from("89504e4700000000", "hex");
-    expect(sniffImageMimeType(buffer)).toEqual({ mimeType: "image/png", extension: "png" });
+    expect(sniffImageMimeType(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]))).toEqual({
+      mimeType: "image/png",
+      extension: "png",
+    });
   });
 
   it("parses OpenAI-compatible base64 image responses", () => {
-    const buffer = Buffer.from([0xff, 0xd8, 0xff, 0xdb]);
-    const revisedPrompt = "revised";
-    const data = [{ b64_json: "/9j/2w==", revised_prompt: revisedPrompt }, { b64_json: "" }];
-    const options = { defaultMimeType: "image/png", sniffMimeType: true };
-    const images = parseOpenAiCompatibleImageResponse({ data }, options);
+    const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xdb]);
+    const payload = {
+      data: [
+        { b64_json: jpegBytes.toString("base64"), revised_prompt: "revised" },
+        { b64_json: "" },
+      ],
+    };
+    const images = parseOpenAiCompatibleImageResponse(payload, {
+      defaultMimeType: "image/png",
+      sniffMimeType: true,
+    });
     expect(images).toEqual([
-      { buffer, mimeType: "image/jpeg", fileName: "image-1.jpg", revisedPrompt },
+      {
+        buffer: jpegBytes,
+        mimeType: "image/jpeg",
+        fileName: "image-1.jpg",
+        revisedPrompt: "revised",
+      },
     ]);
   });
 
   it("rejects malformed OpenAI-compatible image responses in strict mode", () => {
     const payload = { data: [{ b64_json: "not-base64!" }] };
-    const error = "Sample image response malformed";
-    const options = { malformedResponseError: error };
-    expect(() => parseOpenAiCompatibleImageResponse(payload, options)).toThrow(error);
+    const malformedResponseError = "Sample image response malformed";
+    expect(() =>
+      parseOpenAiCompatibleImageResponse(payload, {
+        defaultMimeType: "image/png",
+        malformedResponseError,
+      }),
+    ).toThrow(malformedResponseError);
   });
 
   it("resolves source upload filenames from explicit names or MIME types", () => {

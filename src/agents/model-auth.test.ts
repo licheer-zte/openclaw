@@ -310,7 +310,7 @@ describe("resolveModelAuthMode", () => {
   });
 
   it("returns oauth for codex when Codex CLI auth is available", () => {
-    using readCodexCliCredentialsCached = vi
+    const readCodexCliCredentialsCached = vi
       .spyOn(cliCredentials, "readCodexCliCredentialsCached")
       .mockReturnValue({
         type: "oauth",
@@ -320,11 +320,15 @@ describe("resolveModelAuthMode", () => {
         expires: Date.now() + 60_000,
       });
 
-    expect(resolveModelAuthMode("codex", undefined, authStore({}))).toBe("oauth");
-    expect(readCodexCliCredentialsCached).toHaveBeenCalledWith({
-      ttlMs: 5_000,
-      allowKeychainPrompt: false,
-    });
+    try {
+      expect(resolveModelAuthMode("codex", undefined, authStore({}))).toBe("oauth");
+      expect(readCodexCliCredentialsCached).toHaveBeenCalledWith({
+        ttlMs: 5_000,
+        allowKeychainPrompt: false,
+      });
+    } finally {
+      readCodexCliCredentialsCached.mockRestore();
+    }
   });
 });
 

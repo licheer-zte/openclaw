@@ -374,10 +374,6 @@ export async function runDoctorSessionSqlite(
         },
       );
       if (conflict) {
-        const error = new DeferredPluginMigrationConflictError(conflict, {
-          expected: pendingPlugins,
-          phase: "session archive publication",
-        });
         for (const owner of archiveTargets) {
           owner.deferredPluginIds = deferredPluginSessionStoreIds({
             target: owner.target,
@@ -387,12 +383,12 @@ export async function runDoctorSessionSqlite(
             owner.retainedImportVerified ||= owner.verifiedSources !== undefined;
             owner.report.issues.push({
               code: "plugin_migration_source_retained",
-              message: `${error.message} Original session migration inputs remain pending for plugin(s): ${owner.deferredPluginIds.join(", ")}.`,
+              message: `Plugin migration obligations changed before archival. Original session migration inputs remain pending for plugin(s): ${owner.deferredPluginIds.join(", ")}. Run openclaw doctor --fix after the plugin is available.`,
             });
           }
         }
         retainDeferredSources();
-        throw error;
+        throw new DeferredPluginMigrationConflictError(conflict);
       }
     };
     retainDeferredSources();
@@ -525,10 +521,7 @@ export async function settleRetainedDoctorSessionSources(
       },
     );
     if (conflict) {
-      throw new DeferredPluginMigrationConflictError(conflict, {
-        expected: expectedPending,
-        phase: "session source retirement",
-      });
+      throw new DeferredPluginMigrationConflictError(conflict);
     }
   };
   const verifyImports = () => {

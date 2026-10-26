@@ -106,30 +106,7 @@ export async function backupNpmPackageRoot(
     await fs.rename(source, destination);
     return;
   }
-  await renamePackageRootWithWindowsRetries(
-    source,
-    destination,
-    retainMutationAuthority(assertCaller ?? (() => {})),
-    {
-      operation: "backup",
-      warn: (message) => warnings.push(message),
-    },
-  );
-}
-
-/**
- * Shared bounded Windows retries for guarded package-root renames: transient
- * AV/indexer denials are retried with authority and path-identity checks while
- * permanent failures stay failures. Package backup and rollback publication/
- * compensation renames share this one implementation; callers keep their own
- * operation-specific diagnostics through `operation` and `warn`.
- */
-async function renamePackageRootWithWindowsRetries(
-  source: string,
-  destination: string,
-  assertCurrent: () => void,
-  options: { operation: string; warn?: (message: string) => void },
-): Promise<void> {
+  const assertCurrent = retainMutationAuthority(assertCaller ?? (() => {}));
   const sourceIdentity = fsSync.lstatSync(source, { bigint: true });
   const parent = path.dirname(source);
   const parentIdentity = fsSync.lstatSync(parent, { bigint: true });
@@ -161,11 +138,9 @@ async function renamePackageRootWithWindowsRetries(
           error === renameFailure &&
           ["EPERM", "EBUSY", "EACCES"].some((code) => hasErrnoCode(error, code)),
         onRetry: ({ err, attempt, maxAttempts, delayMs }) => {
-          if (options.warn) {
-            options.warn(
-              `Windows package ${options.operation} rename ${source} -> ${destination} failed: ${formatErrorMessage(err)}; retry ${attempt + 1}/${maxAttempts} in ${delayMs}ms.`,
-            );
-          }
+          warnings.push(
+            `Windows package backup rename ${source} -> ${destination} failed: ${formatErrorMessage(err)}; retry ${attempt + 1}/${maxAttempts} in ${delayMs}ms.`,
+          );
         },
       },
     );
@@ -175,7 +150,7 @@ async function renamePackageRootWithWindowsRetries(
     }
     throw Object.assign(
       new Error(
-        `Windows package ${options.operation} rename failed after ${attempts} attempts: ${source} -> ${destination}: ${formatErrorMessage(error)}. Close processes holding this installation and check its permissions before retrying.`,
+        `Windows package backup rename failed after ${attempts} attempts: ${source} -> ${destination}: ${formatErrorMessage(error)}. Close processes holding this installation and check its permissions before retrying.`,
         { cause: error },
       ),
       { code: isErrno(error) ? error.code : undefined },
@@ -510,44 +485,21 @@ export async function restoreNpmPackageRoot(params: {
   displacedRoot: string;
   candidatePresent: boolean;
   assertCurrent?: () => void;
-  platform?: NodeJS.Platform;
 }): Promise<void> {
   const assertCurrent = retainMutationAuthority(params.assertCurrent ?? (() => {}));
-  const restoreRename =
-    (params.platform ?? process.platform) === "win32"
-      ? (from: string, to: string) =>
-          renamePackageRootWithWindowsRetries(from, to, assertCurrent, { operation: "restore" })
-      : (from: string, to: string) => fs.rename(from, to);
   if (params.candidatePresent) {
     assertCurrent();
-    await restoreRename(params.liveRoot, params.displacedRoot);
+    await fs.rename(params.liveRoot, params.displacedRoot);
   }
   try {
     assertCurrent();
-    await restoreRename(params.backupRoot, params.liveRoot);
+    await fs.rename(params.backupRoot, params.liveRoot);
   } catch (error) {
     // A denied rename must leave the candidate available. Never substitute a
     // copied old tree for the exact object whose identity was verified.
     assertCurrent();
     if (params.candidatePresent) {
-      try {
-        await restoreRename(params.displacedRoot, params.liveRoot);
-      } catch (compensationError) {
-        assertCurrent();
-        if (await packagePathEntryExists(params.liveRoot)) {
-          throw compensationError;
-        }
-        throw new Error(
-          `${formatErrorMessage(compensationError)}; ${params.liveRoot} is missing. Restore a bootable installation by moving ${params.backupRoot} (the previous package) or ${params.displacedRoot} (the rejected update) to ${params.liveRoot} after closing processes that hold them.`,
-          { cause: compensationError },
-        );
-      }
-    } else if (!(await packagePathEntryExists(params.liveRoot))) {
-      assertCurrent();
-      throw new Error(
-        `${formatErrorMessage(error)}; ${params.liveRoot} is missing. Restore the previous package by moving ${params.backupRoot} to ${params.liveRoot} after closing processes that hold it.`,
-        { cause: error },
-      );
+      await fs.rename(params.displacedRoot, params.liveRoot);
     }
     throw error;
   }

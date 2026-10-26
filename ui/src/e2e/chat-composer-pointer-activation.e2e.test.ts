@@ -57,14 +57,14 @@ async function expectComposerFocus(page: Page): Promise<void> {
 }
 
 async function expectSafeArea(page: Page): Promise<void> {
-  // Keep the composer above the injected safe area without fixing its visual gap.
+  // The injected 34px safe area plus the native composer's 10px bottom gap.
   await expect
     .poll(() =>
       page
         .locator(".agent-chat__composer-shell")
         .evaluate((node) => window.innerHeight - node.getBoundingClientRect().bottom),
     )
-    .toBeGreaterThanOrEqual(34);
+    .toBe(44);
 }
 
 async function streamReply(gateway: Gateway, afterRequest?: () => Promise<void>): Promise<string> {

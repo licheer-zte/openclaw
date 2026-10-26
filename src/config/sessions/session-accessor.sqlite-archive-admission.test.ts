@@ -4,20 +4,14 @@ import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runExclusiveSqliteTranscriptArchiveWorker as enqueue } from "./session-accessor.sqlite-archive.js";
 
-async function holdArchive(onRelease: () => unknown = () => {}, signal?: AbortSignal) {
+it("bounds outstanding archive claims until their FIFO slots physically settle", async () => {
   const entered = createDeferredCore();
   const release = createDeferredCore();
   const holder = enqueue(async () => {
     entered.resolve();
     await release.promise;
-    return onRelease();
-  }, signal);
+  });
   await entered.promise;
-  return { holder, release: () => release.resolve() };
-}
-
-it("bounds outstanding archive claims until their FIFO slots physically settle", async () => {
-  const { holder, release } = await holdArchive();
   const controller = new AbortController();
   const queued = Array.from({ length: DEFAULT_WORKER_PENDING_TASKS - 1 }, () =>
     enqueue(async () => undefined, controller.signal),
@@ -39,7 +33,7 @@ it("bounds outstanding archive claims until their FIFO slots physically settle",
     canceledOverflow = enqueue(overflow);
     await expect(canceledOverflow).rejects.toMatchObject({ code: "overloaded" });
   } finally {
-    release();
+    release.resolve();
     await Promise.allSettled([holder, ...queued, rejected, canceledOverflow]);
   }
   await expect(enqueue(async () => "recovered")).resolves.toBe("recovered");
@@ -48,8 +42,15 @@ it("bounds outstanding archive claims until their FIFO slots physically settle",
 it.each(["before-enqueue", "queued"] as const)(
   "drops a revoked %s request while preserving surviving FIFO order",
   async (when) => {
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
     const order: string[] = [];
-    const { holder, release } = await holdArchive(() => order.push("holder"));
+    const holder = enqueue(async () => {
+      entered.resolve();
+      await release.promise;
+      order.push("holder");
+    });
+    await entered.promise;
     const controller = new AbortController();
     const reason = new Error("request retired");
     const revoked = vi.fn(async () => "revoked");
@@ -71,12 +72,12 @@ it.each(["before-enqueue", "queued"] as const)(
       await refusal;
       expect(order).toEqual([]);
       expect(revoked).not.toHaveBeenCalled();
-      release();
+      release.resolve();
       await expect(Promise.all([first, second])).resolves.toEqual([1, 2]);
       expect(order).toEqual(["holder", "first", "second"]);
       expect(revoked).not.toHaveBeenCalled();
     } finally {
-      release();
+      release.resolve();
       await Promise.allSettled([holder, first, canceled, second]);
     }
   },
@@ -85,19 +86,23 @@ it.each(["before-enqueue", "queued"] as const)(
 it.each(["fulfills", "rejects"] as const)(
   "joins admitted work that %s even when its request is revoked",
   async (outcome) => {
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
     const controller = new AbortController();
     const failure = new Error("operation failed");
     let settled = false;
-    const { holder, release } = await holdArchive(() => {
+    const active = enqueue(async () => {
+      entered.resolve();
+      await release.promise;
       if (outcome === "rejects") {
         throw failure;
       }
       return "finished";
-    }, controller.signal);
-    const active = holder.finally(() => {
+    }, controller.signal).finally(() => {
       settled = true;
     });
     void active.catch(() => {});
+    await entered.promise;
     const next = vi.fn(async () => "next");
     const following = enqueue(next);
     controller.abort(new Error("request retired"));
@@ -105,7 +110,7 @@ it.each(["fulfills", "rejects"] as const)(
       await nextTurn();
       expect(settled).toBe(false);
       expect(next).not.toHaveBeenCalled();
-      release();
+      release.resolve();
       if (outcome === "rejects") {
         await expect(active).rejects.toBe(failure);
       } else {
@@ -114,7 +119,7 @@ it.each(["fulfills", "rejects"] as const)(
       await expect(following).resolves.toBe("next");
       expect(next).toHaveBeenCalledOnce();
     } finally {
-      release();
+      release.resolve();
       await Promise.allSettled([active, following]);
     }
   },

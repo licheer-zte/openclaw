@@ -19,7 +19,6 @@ import { createReplyOperation } from "./session-controller.operation.js";
 import { testing } from "./session-controller.test-support.js";
 
 let diagnosticsEnabled: boolean;
-const ref = { sessionKey: "agent:main:source", sessionId: "source-session" };
 beforeEach(() => {
   diagnosticsEnabled = areDiagnosticsEnabledForProcess();
   setDiagnosticsEnabledForProcess(true);
@@ -30,32 +29,26 @@ afterEach(() => {
   setDiagnosticsEnabledForProcess(diagnosticsEnabled);
 });
 
-function recover(expectedState: "waiting" | "processing", queueDepth: number) {
-  return recoverStuckDiagnosticSession({
-    ...ref,
-    ageMs: 600_000,
-    expectedState,
-    stateGeneration: getDiagnosticSessionState(ref).generation,
-    queueDepth,
-  });
-}
-
 it("retires the source's processing state when a queued operation moves to an existing destination", () => {
-  const dest = { sessionKey: "agent:main:destination", sessionId: "destination-session" };
-  const operation = createReplyOperation({ ...ref, resetTriggered: false });
-  logSessionStateChange({ ...ref, state: "processing" });
-  logSessionStateChange({ ...dest, state: "idle" });
+  const source = { sessionKey: "agent:main:source", sessionId: "source-session" };
+  const destination = { sessionKey: "agent:main:destination", sessionId: "destination-session" };
+  const operation = createReplyOperation({ ...source, resetTriggered: false });
+  logSessionStateChange({ ...source, state: "processing" });
+  logSessionStateChange({ ...destination, state: "idle" });
 
-  operation.updateSessionKey(dest.sessionKey);
-  expect(peekDiagnosticSessionState({ sessionKey: ref.sessionKey })).toBeUndefined();
-  expect(peekDiagnosticSessionState({ sessionKey: dest.sessionKey })?.state).toBe("processing");
+  operation.updateSessionKey(destination.sessionKey);
+  expect(peekDiagnosticSessionState({ sessionKey: source.sessionKey })).toBeUndefined();
+  expect(peekDiagnosticSessionState({ sessionKey: destination.sessionKey })?.state).toBe(
+    "processing",
+  );
   operation.complete();
 
-  expect(peekDiagnosticSessionState({ sessionKey: ref.sessionKey })).toBeUndefined();
-  expect(peekDiagnosticSessionState({ sessionKey: dest.sessionKey })?.state).toBe("idle");
+  expect(peekDiagnosticSessionState({ sessionKey: source.sessionKey })).toBeUndefined();
+  expect(peekDiagnosticSessionState({ sessionKey: destination.sessionKey })?.state).toBe("idle");
 });
 
 it("shows input waiting behind retained cleanup instead of resurrecting processing", async () => {
+  const ref = { sessionKey: "agent:main:cleanup", sessionId: "cleanup-session" };
   const message = createDiagnosticMessageLifecycle({
     ...ref,
     enabled: true,
@@ -72,7 +65,14 @@ it("shows input waiting behind retained cleanup instead of resurrecting processi
   try {
     message.markProcessing();
     expect(getDiagnosticSessionState(ref)).toMatchObject({ state: "waiting", queueDepth: 1 });
-    await recover("waiting", 1);
+    const state = getDiagnosticSessionState(ref);
+    await recoverStuckDiagnosticSession({
+      ...ref,
+      ageMs: 600_000,
+      expectedState: "waiting",
+      stateGeneration: state.generation,
+      queueDepth: 1,
+    });
     expect(getDiagnosticSessionState(ref)).toMatchObject({ state: "waiting", queueDepth: 1 });
   } finally {
     cleanup.resolve();
@@ -80,12 +80,22 @@ it("shows input waiting behind retained cleanup instead of resurrecting processi
   }
 });
 
-it.each([0, 1])("reconciles ownerless processing with %i queued inputs", async (queued) => {
-  if (queued) {
-    logMessageQueuedWithBacklogPolicy({ ...ref, source: "dispatch" }, true);
-  }
-  logSessionStateChange({ ...ref, state: "processing" });
-  const state = getDiagnosticSessionState(ref);
-  await recover("processing", queued);
-  expect(state).toMatchObject({ state: queued ? "waiting" : "idle", queueDepth: queued });
-});
+it.each([0, 1])(
+  "reconciles ownerless processing without discarding %i queued inputs",
+  async (queued) => {
+    const ref = { sessionKey: "agent:main:orphan", sessionId: "orphan-session" };
+    if (queued) {
+      logMessageQueuedWithBacklogPolicy({ ...ref, source: "dispatch" }, true);
+    }
+    logSessionStateChange({ ...ref, state: "processing" });
+    const state = getDiagnosticSessionState(ref);
+    await recoverStuckDiagnosticSession({
+      ...ref,
+      ageMs: 600_000,
+      expectedState: "processing",
+      stateGeneration: state.generation,
+      queueDepth: queued,
+    });
+    expect(state).toMatchObject({ state: queued ? "waiting" : "idle", queueDepth: queued });
+  },
+);

@@ -94,6 +94,7 @@ export function prepareSessionRowPublicationView(
         // A new selection cannot make frozen, previously served rows unsafe to compare.
         for (const list of publication.lists.values()) {
           list.selection = undefined;
+          list.partitions = undefined;
           publication.lists.update(list);
         }
       }

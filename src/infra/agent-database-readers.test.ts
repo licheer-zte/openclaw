@@ -23,16 +23,12 @@ function expectRoundTrip(request: AgentDatabaseReaderRequest) {
   expect(decodeRequest(encodeRequest(request))).toEqual(request);
 }
 function deleteDatabase(pathname = databasePath, agentId = "alpha") {
-  return applyRequest({ kind: "close", candidates: [{ path: pathname }], deleted: true, agentId });
-}
-function completedClose(error?: Error) {
-  const completion = createRetainedOperation<void>(() => {});
-  if (error) {
-    completion.reject(error);
-  } else {
-    completion.resolve();
-  }
-  return completion.operation;
+  return applyRequest({
+    kind: "close",
+    candidates: [{ path: pathname }],
+    deleted: true,
+    agentId,
+  });
 }
 
 describe("agent database reader requests", () => {
@@ -73,8 +69,16 @@ describe("agent database reader requests", () => {
     const seen: string[][] = [];
     const pool = liveWorkerTaskPools.register({
       startCloseResources: vi
-        .fn(() => completedClose())
-        .mockImplementationOnce(() => completedClose(new Error("worker close failed"))),
+        .fn(() => {
+          const completion = createRetainedOperation<void>(() => {});
+          completion.resolve();
+          return completion.operation;
+        })
+        .mockImplementationOnce(() => {
+          const completion = createRetainedOperation<void>(() => {});
+          completion.reject(new Error("worker close failed"));
+          return completion.operation;
+        }),
     });
     const unregister = registerAgentDatabaseReaderCloser((selected) => {
       seen.push(selected.map((candidate) => candidate.path));

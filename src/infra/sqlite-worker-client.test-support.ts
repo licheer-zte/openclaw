@@ -11,14 +11,10 @@ export function createSqliteWorkerClientActor(): Actor {
     markNativeStopped() {},
     id: 1,
     key: "client-fixture",
-    identity: { key: "client-fixture", canonicalPath: "/fixture/state.sqlite" },
     databasePath: "/fixture/state.sqlite",
     stateAccess: {
       canonicalPath: "/fixture/state.sqlite",
-      processOwner: undefined,
-      async prepareAccess() {
-        return () => {};
-      },
+      assertAccessAllowed() {},
       assertReadAllowed() {},
     },
     pathReferences: new Map([["/fixture/state.sqlite", 1]]),

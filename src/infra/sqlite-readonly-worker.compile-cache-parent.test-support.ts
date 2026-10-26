@@ -19,11 +19,14 @@ assert.ok(root, "SQLite compile-cache fixture requires its temporary directory")
 const installRoot = path.join(root, "installed");
 fs.mkdirSync(installRoot);
 fs.writeFileSync(path.join(installRoot, "package.json"), '{"version":"2026.9.6"}');
+assert.equal(getCompileCacheDir(), undefined);
 process.env.NODE_COMPILE_CACHE = path.join(root, "native-cache");
+const beforeEnable = { ...process.env };
 enableOpenClawCompileCache({
   currentFile: path.join(installRoot, "dist", "entry.js"),
   installRoot,
 });
+assert.deepEqual({ ...process.env }, beforeEnable);
 delete process.env.NODE_COMPILE_CACHE;
 const activeDirectory = getCompileCacheDir();
 assert.ok(activeDirectory);
@@ -60,7 +63,9 @@ const source = path.join(root, "source.sqlite");
 }
 const before = fs.readFileSync(source);
 const cacheEntries = () =>
-  listDirectoryTreeStrictSync(activeDirectory).filter(({ dirent }) => dirent.isFile()).length;
+  listDirectoryTreeStrictSync(activeDirectory)
+    .map((walkEntry) => walkEntry.dirent)
+    .filter((entry) => entry.isFile()).length;
 let retainedLocation: string | undefined;
 const worker = createScopedSqliteReadOnlyWorker(captureSqliteReadOnlyWorkerLaunch());
 const directory = await worker.run(stagingRoot, { mode: "staging-create" });

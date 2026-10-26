@@ -2,7 +2,6 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
-import { makeConfiguredModel } from "../agents/test-helpers/provider-model-fixture.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -52,11 +51,15 @@ it("keeps recovered system events and agent turns on the ordinary execution budg
               baseUrl: "https://openai.example.test/v1",
               apiKey: "synthetic-fixture-key",
               models: [
-                makeConfiguredModel({
+                {
+                  id: "gpt-5.4",
                   name: "Recovery fixture model",
                   reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
                   maxTokens: 8_192,
-                }),
+                },
               ],
             },
           },

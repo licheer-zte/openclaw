@@ -48,9 +48,6 @@ import { getPreparedModelRuntimeStartupStatus as startupStatus } from "./prepare
 
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime" });
 const { mocks } = fixture;
-const configWithPrefix = (responsePrefix: string): OpenClawConfig => ({
-  messages: { responsePrefix },
-});
 
 function holdNextCatalogWrite() {
   const started = createDeferred();
@@ -134,13 +131,16 @@ it.for(["success", "preserved admission", "failure before retired cleanup"] as c
     const fails = outcome === "failure before retired cleanup";
     mocks.configuredAgentIds = ["default", "deferred"];
     const initial: OpenClawConfig = {
-      ...configWithPrefix("initial"),
       agents: { entries: { default: {}, deferred: {} } },
       models: {
         providers: { fixture: { baseUrl: "https://provider.example.test/v1", models: [] } },
       },
+      messages: { responsePrefix: "initial" },
     };
-    const latest = { ...configWithPrefix("latest"), agents: initial.agents };
+    const latest: OpenClawConfig = {
+      agents: initial.agents,
+      messages: { responsePrefix: "latest" },
+    };
     setRuntimeConfigSnapshot(initial);
     const pruning = createDeferred();
     const releasePruning = createDeferred();
@@ -361,21 +361,24 @@ it("retires only the deleted agent's physical owners", async () => {
       await expect(retireAgentDeleteRuntime(deletion, [input.agentDir])).rejects.toThrow(
         "no longer owns",
       );
-      expect([deleted.isCurrent(), sharing.isCurrent()]).toEqual([true, true]);
+      expect(deleted.isCurrent()).toBe(true);
+      expect(sharing.isCurrent()).toBe(true);
 
       replaceJournal.run(deletion.entry.operationId, input.agentId);
       await deletion.rollback();
       await expect(retireAgentDeleteRuntime(deletion, [input.agentDir])).rejects.toThrow(
         "no longer owns",
       );
-      expect([deleted.isCurrent(), sharing.isCurrent()]).toEqual([true, true]);
+      expect(deleted.isCurrent()).toBe(true);
+      expect(sharing.isCurrent()).toBe(true);
     },
     options,
   );
 
   await retireAgent({ agentId: input.agentId, agentDirs: [input.agentDir] });
 
-  expect([deleted.isCurrent(), sharing.isCurrent()]).toEqual([false, true]);
+  expect(deleted.isCurrent()).toBe(false);
+  expect(sharing.isCurrent()).toBe(true);
   await expect(loadDispatch({ agentId: "worker" })).resolves.toBe(separate);
 });
 
@@ -408,7 +411,14 @@ it.each([
     }
   } else {
     let claimCurrent = true;
-    void work.track(refresh({}, { isPublicationCurrent: () => claimCurrent }));
+    void work.track(
+      refresh(
+        {},
+        {
+          isPublicationCurrent: () => claimCurrent,
+        },
+      ),
+    );
     if (boundary === "lost claim") {
       claimCurrent = false;
     } else {
@@ -426,10 +436,10 @@ it("lets a published read follow the reload that supersedes its replacement gate
   invalidate("operator replacement gate", { waitForReplacement: true });
   const read = prepare(fixture.agentInput("default", {}), { readPublished: true });
   // The reload resolves the operator gate first, then publishes behind its own gate.
-  await refresh(configWithPrefix("replacement"), options);
+  await refresh({ messages: { responsePrefix: "replacement" } }, options);
   const snapshot = await read;
   expect(snapshot.isCurrent()).toBe(true);
-  expect(snapshot.config).toEqual(configWithPrefix("replacement"));
+  expect(snapshot.config).toEqual({ messages: { responsePrefix: "replacement" } });
 });
 
 it("joins the latest of multiple replacements without rebuilding skipped config", async () => {
@@ -438,25 +448,31 @@ it("joins the latest of multiple replacements without rebuilding skipped config"
   await using work = pendingWork(release);
   const first = work.track(refresh({}, { joinSupersedingPublication: true }));
   await started.promise;
-  const skipped = work.track(refresh(configWithPrefix("skipped")));
-  const latest = work.track(refresh(configWithPrefix("latest")));
+  const skipped = work.track(refresh({ messages: { responsePrefix: "skipped" } }));
+  const latest = work.track(refresh({ messages: { responsePrefix: "latest" } }));
   release.resolve();
   await expect(first).resolves.toBeUndefined();
   await Promise.all([skipped, latest]);
   expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
-  expect(mocks.ensureOpenClawModelsJson.mock.calls.at(-1)?.[0]).toEqual(configWithPrefix("latest"));
+  expect(mocks.ensureOpenClawModelsJson.mock.calls.at(-1)?.[0]).toEqual({
+    messages: { responsePrefix: "latest" },
+  });
 });
 
 it("finishes config replacement after a second adopted auth mutation", async () => {
   mocks.configuredAgentIds = ["default"];
   const config = {};
-  const nextConfig = configWithPrefix("updated");
+  const nextConfig = { messages: { responsePrefix: "updated" } };
   await refresh(config, { gatewayLifecycle: true });
   const input = fixture.agentInput("default", config);
   const configWrite = holdNextCatalogWrite();
   const authWrite = holdNextCatalogWrite();
   await using work = pendingWork(configWrite.release, authWrite.release);
-  const replacement = work.track(refresh(nextConfig, { gatewayLifecycle: true }));
+  const replacement = work.track(
+    refresh(nextConfig, {
+      gatewayLifecycle: true,
+    }),
+  );
   const result = expect(replacement).resolves.toBeUndefined();
   void result.catch(() => undefined);
   await configWrite.started.promise;
@@ -484,7 +500,7 @@ it("keeps logged-out reply dispatch after the config operation cache retires", a
 }) => {
   mocks.configuredAgentIds = ["default"];
   const config = {};
-  const nextConfig = configWithPrefix("updated");
+  const nextConfig = { messages: { responsePrefix: "updated" } };
   const metadata = { ...(await pluginMetadata.resolvePluginMetadataSnapshotAsync({ config })) };
   bindPluginMetadataSnapshotCache(metadata, getProcessPluginCache());
   await refresh(config, {

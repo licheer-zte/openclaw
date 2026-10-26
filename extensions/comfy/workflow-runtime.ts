@@ -95,6 +95,18 @@ type ComfyMode = "local" | "cloud";
 type ComfyCapability = "image" | "music" | "video";
 type ComfyWorkflow = Record<string, unknown>;
 type ComfyProviderConfig = Record<string, unknown>;
+type ComfyApiKeyResolution =
+  | {
+      status: "available";
+      apiKey: string;
+    }
+  | {
+      status: "missing";
+    }
+  | {
+      status: "configured_unavailable";
+    };
+
 type ComfySourceImage = {
   buffer: Buffer;
   mimeType: string;
@@ -138,7 +150,10 @@ function resolveComfyMode(config: ComfyProviderConfig): ComfyMode {
   return normalizeOptionalString(config.mode) === "cloud" ? "cloud" : "local";
 }
 
-function resolveComfyApiKey(config: ComfyProviderConfig, cfg?: OpenClawConfig) {
+function resolveComfyApiKey(
+  config: ComfyProviderConfig,
+  cfg?: OpenClawConfig,
+): ComfyApiKeyResolution {
   const resolved = resolveSecretInputString({
     value: config.apiKey,
     path: "plugins.entries.comfy.config.apiKey",
@@ -149,14 +164,14 @@ function resolveComfyApiKey(config: ComfyProviderConfig, cfg?: OpenClawConfig) {
     const apiKey = normalizeSecretInputString(resolved.value);
     return apiKey
       ? {
-          status: "available" as const,
+          status: "available",
           apiKey,
         }
-      : { status: "missing" as const };
+      : { status: "missing" };
   }
   if (resolved.status === "configured_unavailable") {
     if (resolved.ref.source !== "env") {
-      return { status: "configured_unavailable" as const };
+      return { status: "configured_unavailable" };
     }
     const envVarName = resolved.ref.id.trim();
     if (
@@ -166,17 +181,17 @@ function resolveComfyApiKey(config: ComfyProviderConfig, cfg?: OpenClawConfig) {
         id: envVarName,
       })
     ) {
-      return { status: "configured_unavailable" as const };
+      return { status: "configured_unavailable" };
     }
     const apiKey = normalizeSecretInputString(process.env[envVarName]);
     return apiKey
       ? {
-          status: "available" as const,
+          status: "available",
           apiKey,
         }
-      : { status: "configured_unavailable" as const };
+      : { status: "configured_unavailable" };
   }
-  return { status: "missing" as const };
+  return { status: "missing" };
 }
 
 async function loadComfyWorkflow(config: ComfyProviderConfig): Promise<ComfyWorkflow> {

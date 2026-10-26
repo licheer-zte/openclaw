@@ -1,15 +1,15 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import type { PreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.types.js";
 import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.fingerprint.js";
 
 function fingerprintPreparedModelCatalogPlugins(
   snapshot: PreparedModelCatalogWorkerInput["pluginMetadataSnapshot"],
-  installedIndexFingerprint: string,
 ): string {
   return fingerprintPreparedRuntimeFacts({
     config: snapshot.configFingerprint ?? null,
-    index: installedIndexFingerprint,
+    index: resolveInstalledManifestRegistryIndexFingerprint(snapshot.index),
     pluginIds: snapshot.pluginIds ?? null,
     policy: snapshot.policyHash,
     workspaceDir: snapshot.workspaceDir ?? null,
@@ -47,17 +47,6 @@ export function fingerprintPreparedModelCatalogPluginContext(
     workspaceDir: value.pluginMetadataSnapshot.workspaceDir ?? value.input.workspaceDir,
     allowGatewaySubagentBinding: value.input.allowGatewaySubagentBinding === true,
     preferBuiltPluginArtifacts: value.preferBuiltPluginArtifacts,
-    pluginFingerprint: fingerprintPreparedModelCatalogPlugins(
-      value.pluginMetadataSnapshot,
-      value.installedIndexFingerprint,
-    ),
+    pluginFingerprint: fingerprintPreparedModelCatalogPlugins(value.pluginMetadataSnapshot),
   });
-}
-
-/** The worker's workspace slot and registration identity travel together. */
-export function prepareModelCatalogWorkerContext(value: PreparedModelCatalogWorkerInput) {
-  return {
-    workspaceDir: value.pluginMetadataSnapshot.workspaceDir ?? value.input.workspaceDir,
-    fingerprint: fingerprintPreparedModelCatalogPluginContext(value),
-  };
 }

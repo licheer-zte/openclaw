@@ -28,7 +28,10 @@ const account = {
 };
 const constructors = {
   setup: (context: MatrixQaScenarioContext) =>
-    createMatrixQaCliE2eeSetupRuntime({ context, artifactLabel: "setup" }),
+    createMatrixQaCliE2eeSetupRuntime({
+      context,
+      artifactLabel: "setup",
+    }),
   "self-verification": (context: MatrixQaScenarioContext) =>
     createMatrixQaCliSelfVerificationRuntime({ context, ...account }),
   recovery: (context: MatrixQaScenarioContext) =>

@@ -27,12 +27,16 @@ it("updates retained automation labels and schedule without reloading its jobs",
     schedule: { kind: "every", everyMs: 300_000 },
   });
   const request = createGatewayRequestMock(async () => cronJobsListResponse([job], { limit: 20 }));
-  const source = createApplicationGateway();
-  source.publish({
-    ...source.gateway.snapshot,
-    phase: "connected",
-    client: createTestGatewayClient(request),
-  });
+  const connect = () => {
+    const source = createApplicationGateway();
+    source.publish({
+      ...source.gateway.snapshot,
+      phase: "connected",
+      client: createTestGatewayClient(request),
+    });
+    return source;
+  };
+  const source = connect();
   const [automation, setAutomation] = createSignal<SessionHovercardAutomation>({
     gateway: source.gateway,
     sessionKey: "agent:main:example",
@@ -51,9 +55,11 @@ it("updates retained automation labels and schedule without reloading its jobs",
     expect(find("automation-name")?.textContent).toBe("Example automation");
     expect(view.container.textContent).toContain("Every 5m");
   });
+  const tooltip = view.container.querySelector("openclaw-tooltip");
   const content = find("automations");
   const expectStatus = (textContent: string) =>
     expect(content?.querySelector('[role="status"]')).toMatchObject({ textContent });
+  const link = find("automation-open")!;
   expect(content?.getAttribute("aria-label")).toBe("Automations");
   const trigger = find("automation-link")!;
   trigger.focus();
@@ -64,6 +70,8 @@ it("updates retained automation labels and schedule without reloading its jobs",
     expect(content?.textContent).toContain(
       `Every ${new Intl.NumberFormat("de", { style: "unit", unit: "minute", unitDisplay: "narrow" }).format(5)}`,
     );
+    expect(trigger.closest("openclaw-tooltip")).toBe(tooltip);
+    expect(content?.querySelector(".session-hovercard__automation-open")).toBe(link);
     expect(document.activeElement).toBe(trigger);
     expect(request).toHaveBeenCalledTimes(1);
   });
@@ -81,4 +89,16 @@ it("updates retained automation labels and schedule without reloading its jobs",
     expect(find("automations")).toBe(content);
     expect(request).toHaveBeenCalledTimes(1);
   });
+
+  const replacement = connect();
+  setAutomation((previous) => ({ ...previous, gateway: replacement.gateway }));
+  await waitForSolid(() => {
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(find("automation-name")?.textContent).toBe("Example automation");
+  });
+  source.publishEvent({ type: "event", event: "cron", payload: {} });
+  expect(request).toHaveBeenCalledTimes(2);
+  view.unmount();
+  replacement.publishEvent({ type: "event", event: "cron", payload: {} });
+  expect(request).toHaveBeenCalledTimes(2);
 });

@@ -4,36 +4,46 @@ import { afterEach, expect, it, vi } from "vitest";
 import { PRESENTATION_CHANGED_EVENT, type PresentationValue } from "../lib/presentation.ts";
 import { renderSolidRef } from "../test-helpers/render-solid-ref.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import { markdownBlocksRef } from "./markdown-element-refs-solid.ts";
+import { linkReaderPrefetchRef, markdownBlocksRef } from "./markdown-element-refs-solid.ts";
 
 afterEach(() => vi.unstubAllGlobals());
 
 it("parks native thread work on hide and releases replaced roots and unmounted owners", async () => {
-  const observers: Set<Element>[] = [];
+  const observed = new Set<Element>();
   vi.stubGlobal(
     "ResizeObserver",
     class {
       private readonly targets = new Set<Element>();
-      constructor() {
-        observers.push(this.targets);
+      observe(target: Element) {
+        this.targets.add(target);
+        observed.add(target);
       }
-      observe = (target: Element) => this.targets.add(target);
-      unobserve = (target: Element) => this.targets.delete(target);
-      disconnect = () => this.targets.clear();
+      unobserve(target: Element) {
+        this.targets.delete(target);
+        observed.delete(target);
+      }
+      disconnect() {
+        for (const target of this.targets) {
+          observed.delete(target);
+        }
+        this.targets.clear();
+      }
     },
   );
-  const notify = (owner: EventTarget, active: boolean) => {
-    owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
-    expectWork(active);
-  };
+  const idleScans = new Map<number, IdleRequestCallback>();
   const expectWork = (active: boolean, target = code) => {
-    const observed = observers.flatMap((targets) => [...targets]);
-    if (active) {
-      expect(observed).toContain(target);
-    } else {
-      expect(observed).toHaveLength(0);
+    expect(observed.has(target)).toBe(active);
+    if (!active) {
+      expect(observed.size).toBe(0);
     }
+    expect(idleScans.size).toBe(active ? 1 : 0);
   };
+  let idleId = 0;
+  vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) => {
+    idleScans.set(++idleId, callback);
+    return idleId;
+  });
+  vi.stubGlobal("cancelIdleCallback", (id: number) => idleScans.delete(id));
 
   const root = document.createElement("div");
   root.className = "chat-thread";
@@ -51,21 +61,25 @@ it("parks native thread work on hide and releases replaced roots and unmounted o
     () => {
       const [presented, setPresented] = createSignal<PresentationValue>(binding);
       updatePresentation = (value) => setPresented(() => value);
-      replaceRoot = markdownBlocksRef(presented);
-      return replaceRoot;
+      const refs = [
+        markdownBlocksRef(presented),
+        linkReaderPrefetchRef(() => ["session", presented(), true]),
+      ];
+      replaceRoot = (element) => refs.forEach((ref) => ref(element));
+      return refs;
     },
     { targetElement: root },
   );
-  const present = async (value: PresentationValue) => {
-    updatePresentation(value);
-    await waitForSolid(() => expectWork(true));
-  };
 
   try {
     await waitForSolid(() => expectWork(true));
+    const viewport = root.querySelector(".code-block-viewport")!;
+    expect(root.querySelector("button")!.getAttribute("aria-controls")).toBe(viewport.id);
+    expect(viewport.id).not.toBe("");
 
     visible = false;
-    notify(presentationOwner, false);
+    presentationOwner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    expectWork(false);
     expect(root.querySelector("code")).toBe(code);
 
     visible = true;
@@ -73,16 +87,22 @@ it("parks native thread work on hide and releases replaced roots and unmounted o
     await Promise.resolve();
     expectWork(false);
 
-    await present({ ...binding });
+    updatePresentation({ ...binding });
+    await waitForSolid(() => expectWork(true));
     const nextOwner = new EventTarget();
     let nextVisible = true;
-    await present({ owner: nextOwner, isPresented: () => nextVisible });
+    updatePresentation({ owner: nextOwner, isPresented: () => nextVisible });
+    await waitForSolid(() => expect(observed.has(code)).toBe(true));
     visible = false;
-    notify(presentationOwner, true);
+    presentationOwner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    expectWork(true);
     nextVisible = false;
-    notify(nextOwner, false);
-    await present(true);
-    notify(nextOwner, true);
+    nextOwner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    expectWork(false);
+    updatePresentation(true);
+    await waitForSolid(() => expect(observed.has(code)).toBe(true));
+    nextOwner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    expectWork(true);
 
     const nextRoot = document.createElement("div");
     nextRoot.className = root.className;
@@ -90,7 +110,7 @@ it("parks native thread work on hide and releases replaced roots and unmounted o
     root.replaceWith(nextRoot);
     replaceRoot(nextRoot);
     await waitForSolid(() => {
-      expect(observers.some((targets) => targets.has(code))).toBe(false);
+      expect(observed.has(code)).toBe(false);
       expectWork(true, nextRoot.querySelector("code")!);
     });
     view.unmount();

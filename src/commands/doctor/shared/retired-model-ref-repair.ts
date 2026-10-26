@@ -44,12 +44,6 @@ import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-sn
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import { readModelConfigPrimaryRef } from "./codex-route-model-ref.js";
 import { rewriteModelReferenceSlot } from "./codex-route-model-slots.js";
-import { repairModelRefAuthProfile } from "./model-ref-auth-profile-repair.js";
-import {
-  resolveExplicitModelReplacement,
-  withReplacementAccessProgram,
-} from "./model-replacement-config.js";
-import type { DoctorModelReplacement } from "./model-replacement.js";
 import type {
   ModelRefRepair,
   ModelRefRepairResolver,
@@ -65,7 +59,16 @@ import { resolveSuccessorModelRepair } from "./retired-model-successor-guard.js"
 
 export type { ModelRefRepair, ModelRefRepairResolver, SessionModelRetirement };
 
-export { repairModelRefAuthProfile } from "./model-ref-auth-profile-repair.js";
+export function repairModelRefAuthProfile(
+  modelRef: string,
+  profileIdMap: ReadonlyMap<string, string> | undefined,
+): ModelRefRepair {
+  const parsed = splitTrailingAuthProfile(modelRef);
+  const profile = parsed.profile ? profileIdMap?.get(parsed.profile) : undefined;
+  return profile && profile !== parsed.profile
+    ? { kind: "replace", modelRef: `${parsed.model}@${profile}`, reason: "reference-preservation" }
+    : { kind: "unchanged" };
+}
 
 /** Metadata and exact profile views stay scoped to Doctor's pre-transaction planning. */
 export function createRetiredModelRefRepairResolver(params: {
@@ -78,7 +81,6 @@ export function createRetiredModelRefRepairResolver(params: {
   authProfileIdMap?: ReadonlyMap<string, string>;
   /** Persisted overrides cannot grant successor permissions by changing their owner's config. */
   checkModelPolicy?: boolean;
-  modelReplacements?: readonly DoctorModelReplacement[];
 }): ModelRefRepairResolver {
   const warn = (message: string) => {
     if (params.warnings && !params.warnings.includes(message)) {
@@ -266,26 +268,6 @@ export function createRetiredModelRefRepairResolver(params: {
             modelRef: parsed.profile ? `${canonical}@${parsed.profile}` : canonical,
             reason: "reference-preservation",
           };
-    const explicit = params.modelReplacements?.find((choice) => choice.from === canonical);
-    if (explicit) {
-      return resolveExplicitModelReplacement({
-        choice: explicit,
-        cfg: params.cfg,
-        env,
-        guard: {
-          owner,
-          provider,
-          canonical,
-          agentId,
-          modelRefInput: input.modelRef,
-          authProfileId: input.authProfileId,
-          authProfileSource: input.authProfileSource,
-          preserved,
-          validatePolicy,
-          warn,
-        },
-      });
-    }
     if (!owner.suppression().hasRetirementCandidate({ provider, id })) {
       return validatePolicy(preserved);
     }
@@ -558,7 +540,7 @@ export function repairRetiredModelSlots(params: RetiredModelSlotRepair): void {
     }
     models ??= {};
     params.owner.models = models;
-    models[decision.modelRef] = withReplacementAccessProgram(settings, decision);
+    models[decision.modelRef] = settings;
     params.changes.push(
       `Preserved inherited ${modelRef} settings in ${params.path}.models.${decision.modelRef}.`,
     );
@@ -589,7 +571,7 @@ export function repairRetiredModelSlots(params: RetiredModelSlotRepair): void {
     if (retain && JSON.stringify(settings) === JSON.stringify(existing)) {
       continue;
     }
-    models[replacement] = withReplacementAccessProgram(settings, decision);
+    models[replacement] = settings;
     if (!retain) {
       delete models[modelRef];
     }

@@ -54,10 +54,6 @@ const metadata = createPluginMetadataSnapshotFixture({
   plugins: [{ id: "codex", providers: ["codex"], syntheticAuthRefs: ["codex"] }],
 });
 type DecisionParams = Parameters<typeof createModelCatalogDecisions>[0];
-type Evaluation = ReturnType<ReturnType<typeof createModelCatalogDecisions>["evaluateEntry"]>;
-function expectAvailable(evaluation: Evaluation, selectedProfileId: string) {
-  expect(evaluation).toMatchObject({ availability: true, selectedProfileId });
-}
 const emptyAuth = authStore();
 const tokenStore = (...ids: string[]) =>
   authStore(Object.fromEntries(ids.map((id) => [id, token(`synthetic-${id}`)])));
@@ -215,7 +211,10 @@ describe("captured model decisions", () => {
     expect(prepared.snapshot.providerOutcomes?.[0]?.modelServiceTiers?.[0]?.serviceTiers).toEqual([
       "ultrafast",
     ]);
-    expectAvailable(prepared.evaluateEntry(entry, undefined, "codex"), "openai:selected");
+    expect(prepared.evaluateEntry(entry, undefined, "codex")).toMatchObject({
+      selectedProfileId: "openai:selected",
+      availability: true,
+    });
   });
 
   it("does not publish a selected-account result after its generation expires", async () => {
@@ -274,7 +273,10 @@ describe("captured model decisions", () => {
       isCurrent: () => true,
     });
     const choices = owner.runtimeChoices(copilotEntry);
-    expectAvailable(owner.evaluateEntry(copilotEntry, undefined, "copilot"), "github-copilot:work");
+    expect(owner.evaluateEntry(copilotEntry, undefined, "copilot")).toMatchObject({
+      availability: true,
+      selectedProfileId: "github-copilot:work",
+    });
     expect(choices).toContain("copilot");
   });
 
@@ -351,10 +353,9 @@ describe("captured model decisions", () => {
         "openai:platform": apiKey("openai"),
       }),
     });
-    expectAvailable(
+    expect(
       owner.evaluateEntry({ provider: entry.provider, id: entry.id }, undefined, "openclaw"),
-      "openai:platform",
-    );
+    ).toMatchObject({ availability: true, selectedProfileId: "openai:platform" });
     expect(
       owner.evaluateEntry(
         { ...entry, api: subscriptionRoute.api, baseUrl: subscriptionRoute.baseUrl },
@@ -407,7 +408,10 @@ describe("captured model decisions", () => {
       expect(unlisted).toMatchObject({ availability: false });
       // The account is signed in; a missing-auth reason would render sign-in guidance.
       expect(unlisted.unavailableReason).toBeUndefined();
-      expectAvailable(evaluate([ready], "gpt-5.5"), "openai:chatgpt");
+      expect(evaluate([ready], "gpt-5.5")).toMatchObject({
+        availability: true,
+        selectedProfileId: "openai:chatgpt",
+      });
     });
 
     it.each([
@@ -463,7 +467,10 @@ describe("captured model decisions", () => {
         "openai:chosen": apiKey("openai"),
       }),
     });
-    expectAvailable(owner.evaluateEntry(entry, [entry], "openclaw"), "openai:chosen");
+    expect(owner.evaluateEntry(entry, [entry], "openclaw")).toMatchObject({
+      availability: true,
+      selectedProfileId: "openai:chosen",
+    });
   });
 
   it("retains native provenance and mode without blessing a same-name bearer credential", () => {
@@ -702,7 +709,7 @@ describe("catalog decisions with prepared CLI auth directories", () => {
       const account = menu(true);
       const mythos = { provider: "anthropic", id: "claude-mythos-5" };
       const host = account.evaluateEntry(mythos);
-      expectAvailable(host, "anthropic:work");
+      expect(host).toMatchObject({ availability: true, selectedProfileId: "anthropic:work" });
       expect(
         account.evaluateNative({ ...mythos, name: "Claude Mythos 5" }, host).availability,
       ).toBe(true);

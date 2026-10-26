@@ -1,31 +1,42 @@
-import { assert, expect, it, vi } from "vitest";
+import { assert, expect, it, onTestFinished, vi } from "vitest";
 import { memoryStore, sampleUpload } from "./beam-store.test-support.js";
 import { beamTestServiceContext } from "./beam.test-support.js";
 import { createBeamSessionCatalog } from "./session-catalog.js";
 import type { BeamStoredSession } from "./types.js";
 
-it("shares inventory until expiry and invalidates it on upload and delete", async () => {
+it("shares one inventory read across concurrent and repeated catalog lists", async () => {
   const store = memoryStore();
   await store.upload(sampleUpload(), { receivedAt: 100 });
-  const rows = (await store.keyedStore.entries()).map((row) =>
-    Object.assign(row, { expiresAt: 200 }),
-  );
-  const entries = vi.spyOn(store.keyedStore, "entries").mockResolvedValueOnce(rows);
-  const clock = vi.spyOn(Date, "now").mockReturnValue(199);
+  const entries = vi.spyOn(store.keyedStore, "entries");
   const catalog = createBeamSessionCatalog(store);
   const pages = await Promise.all(
     Array.from({ length: 16 }, () => catalog.list({ agentId: "main" })),
   );
   expect(pages.every(([host]) => host?.sessions[0]?.name === "Fix the upload flow")).toBe(true);
+  expect(entries).toHaveBeenCalledTimes(1);
   await catalog.list({ agentId: "main", search: "upload" });
-  clock.mockReturnValue(200);
-  expect(await store.list()).toEqual([]);
   expect(entries).toHaveBeenCalledTimes(1);
 
   await store.upload(sampleUpload({ title: "Updated title" }), { receivedAt: 200 });
   expect((await catalog.list({ agentId: "main" }))[0]?.sessions[0]?.name).toBe("Updated title");
+  expect(entries).toHaveBeenCalledTimes(2);
   await store.delete(sampleUpload().beamId);
   expect((await catalog.list({ agentId: "main" }))[0]?.sessions).toEqual([]);
+});
+
+it("expires cached summaries at storage expiry without rereading transcripts", async () => {
+  const store = memoryStore();
+  await store.upload(sampleUpload(), { receivedAt: 1 });
+  const rows = (await store.keyedStore.entries()).map((row) =>
+    Object.assign(row, { expiresAt: 200 }),
+  );
+  const entries = vi.spyOn(store.keyedStore, "entries").mockResolvedValue(rows);
+  const clock = vi.spyOn(Date, "now").mockReturnValue(199);
+  onTestFinished(() => clock.mockRestore());
+  expect(await store.list()).toHaveLength(1);
+  clock.mockReturnValue(200);
+  expect(await store.list()).toEqual([]);
+  expect(entries).toHaveBeenCalledTimes(1);
 });
 
 it("refreshes foreign changes in the background and drains its service on stop", async () => {
@@ -46,12 +57,11 @@ it("refreshes foreign changes in the background and drains its service on stop",
       createdAt: 100,
       receivedAt: 200,
     });
-    const foreignRows = await readEntries();
     const delayed = Promise.withResolvers<Awaited<ReturnType<typeof readEntries>>>();
     entries.mockReturnValueOnce(delayed.promise);
     await vi.advanceTimersByTimeAsync(30_000);
     expect((await store.list())[0]?.title).toBe("Fix the upload flow");
-    delayed.resolve(foreignRows);
+    delayed.resolve(await readEntries());
     await vi.advanceTimersByTimeAsync(0);
     expect((await store.list())[0]?.title).toBe("Foreign update");
 
@@ -68,7 +78,9 @@ it("refreshes foreign changes in the background and drains its service on stop",
     entries.mockReturnValueOnce(stoppingRead.promise);
     await vi.advanceTimersByTimeAsync(30_000);
     const stopped = stop();
-    stoppingRead.resolve(foreignRows);
+    stoppingRead.resolve([
+      { key: "late", value: { ...sampleUpload(), createdAt: 1, receivedAt: 1 }, createdAt: 1 },
+    ]);
     await stopped;
     await expect(store.list()).rejects.toThrow("inventory is stopped");
     const callsAtStop = entries.mock.calls.length;

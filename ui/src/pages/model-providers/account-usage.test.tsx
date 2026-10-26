@@ -13,18 +13,18 @@ import { AccountLimits, type AccountUsageScope } from "./account-usage.tsx";
 
 registerSettingsEnglish();
 
-const snapshot = (usedPercent = 25, amount = 12): UsageSummary => ({
+const snapshot: UsageSummary = {
   updatedAt: 1,
   providers: [
     {
       provider: "openai",
       displayName: "OpenAI",
       plan: "Pro",
-      windows: [{ label: "5h", usedPercent }],
-      billing: [{ type: "balance", amount, unit: "credits" }],
+      windows: [{ label: "5h", usedPercent: 25 }],
+      billing: [{ type: "balance", amount: 12, unit: "credits" }],
     },
   ],
-});
+};
 
 function mount(request: ReturnType<typeof createGatewayRequestMock>) {
   const client = createTestGatewayClient(request);
@@ -38,12 +38,17 @@ function mount(request: ReturnType<typeof createGatewayRequestMock>) {
 }
 
 it("loads automatically, renders remaining quota and balance, and re-reads on a new revision", async () => {
-  let nextResult: UsageSummary | Promise<UsageSummary> = snapshot();
+  let nextResult: UsageSummary | Promise<UsageSummary> = structuredClone(snapshot);
   const request = createGatewayRequestMock(async () => nextResult);
   const view = mount(request);
   await waitForSolid(() => expect(view.container.textContent).toContain("12 credits"));
   expect(view.container.textContent).toContain("Pro");
   expect(view.container.querySelector('[role="meter"]')?.getAttribute("aria-valuenow")).toBe("75");
+  expect(request).toHaveBeenCalledExactlyOnceWith(
+    "codex.accountUsage",
+    { agentId: "main", profileId: "openai:account" },
+    { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
+  );
   // A rebuilt scope with the same fields is the same account read.
   view.setScope({ ...view.scope() });
   flush();
@@ -56,7 +61,10 @@ it("loads automatically, renders remaining quota and balance, and re-reads on a 
   expect(request.mock.lastCall?.[1]).toEqual({ agentId: "main", profileId: "openai:account" });
   expect(view.container.querySelector(".provider-usage__window")).toBe(window);
   expect(view.container.textContent).toContain("12 credits");
-  refresh.resolve(snapshot(90, 14));
+  const refreshed = structuredClone(snapshot);
+  refreshed.providers[0]!.windows[0]!.usedPercent = 90;
+  refreshed.providers[0]!.billing = [{ type: "balance", amount: 14, unit: "credits" }];
+  refresh.resolve(refreshed);
   await waitForSolid(() => expect(view.container.textContent).toContain("14 credits"));
   expect(view.container.querySelector(".provider-usage__window")).toBe(window);
   expect(view.container.querySelector('[role="meter"]')?.getAttribute("aria-valuenow")).toBe("10");
@@ -67,7 +75,7 @@ it("loads automatically, renders remaining quota and balance, and re-reads on a 
   await waitForSolid(() => expect(request.mock.calls.length).toBe(3));
   expect(view.container.textContent).not.toContain("14 credits");
   expect(view.container.querySelector(".provider-usage__window")).toBeNull();
-  otherAccount.resolve(snapshot());
+  otherAccount.resolve(structuredClone(snapshot));
   await waitForSolid(() => expect(view.container.textContent).toContain("12 credits"));
 });
 
@@ -76,7 +84,7 @@ it("drops a pending response when the selected agent changes and shows the curre
   const request = createGatewayRequestMock(async (_method, params) => {
     if ((params as { agentId: string }).agentId === "main") {
       await stale.promise;
-      return snapshot();
+      return snapshot;
     }
     throw new Error("Account usage unavailable");
   });

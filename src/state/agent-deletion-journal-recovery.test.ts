@@ -9,8 +9,8 @@ import {
   resolveAgentDeletionRecoveryHolds as resolve,
 } from "./agent-deletion-journal-recovery.js";
 import {
-  AGENT_DELETION_RECOVERY_SOURCE_KEY as SOURCE_KEY,
-  AGENT_DELETION_RECONSTRUCTION_DESCRIPTION as RECONSTRUCTION,
+  AGENT_DELETION_RECOVERY_SOURCE_KEY,
+  AGENT_DELETION_RECONSTRUCTION_DESCRIPTION,
   readAgentDeletionMissingJournalHolds as missingHolds,
   readAgentDeletionRecoveryHolds as holds,
   readReport,
@@ -44,11 +44,7 @@ const transaction = (operation: () => unknown) =>
 function updateReport(patch: Record<string, unknown>, report = readReport(database)) {
   database.db
     .prepare("UPDATE migration_sources SET report_json = ? WHERE source_key = ?")
-    .run(JSON.stringify({ ...report, ...patch }), SOURCE_KEY);
-}
-function expectHolds(held: ReturnType<typeof holds>, missing = held) {
-  expect(holds(database)).toEqual(held);
-  expect(missingHolds(database)).toEqual(missing);
+    .run(JSON.stringify({ ...report, ...patch }), AGENT_DELETION_RECOVERY_SOURCE_KEY);
 }
 
 it("records and revokes missing-journal provenance", () => {
@@ -58,39 +54,49 @@ it("records and revokes missing-journal provenance", () => {
   transaction(() => reconstruct(database, [other]));
   expect(holds(database)).toEqual([main]);
   transaction(() => record(database, [other], { description: quarantineDescription }));
-  expectHolds([main, other], [main]);
+  expect(holds(database)).toEqual([main, other]);
+  expect(missingHolds(database)).toEqual([main]);
   transaction(() => record(database, [main], { excludeMissingJournal: [main] }));
   expect(missingHolds(database)).toEqual([]);
 });
 
-it.each([true, false])("retains only legacy reserved holds (reconstruct: %s)", (reconstruction) => {
-  const reserved = [target("openclaw"), target("crestodian")];
-  if (reconstruction) {
-    database.db.exec("DROP TABLE agent_deletion_journal");
-    transaction(() => reconstruct(database, [main, ...reserved]));
-  } else {
-    transaction(() => record(database, [main, ...reserved]));
-  }
-  expectHolds([main], reconstruction ? [main] : []);
-  // Legacy persisted format predates reserved-agent exclusion.
-  updateReport({ held: [...readReport(database)!.held, ...reserved] });
-  transaction(() => record(database, reserved));
-  expect(holds(database)).toEqual([main, ...reserved]);
-});
+it.each(["reconstruction", "quarantine"])(
+  "%s excludes new reserved holds but retains legacy holds",
+  (source) => {
+    const reserved = [target("openclaw"), target("crestodian")];
+    if (source === "reconstruction") {
+      database.db.exec("DROP TABLE agent_deletion_journal");
+      transaction(() => reconstruct(database, [main, ...reserved]));
+    } else {
+      transaction(() => record(database, [main, ...reserved]));
+    }
+    expect(holds(database)).toEqual([main]);
+    expect(missingHolds(database)).toEqual(source === "reconstruction" ? [main] : []);
+    // Legacy persisted format predates reserved-agent exclusion.
+    updateReport({ held: [...readReport(database)!.held, ...reserved] });
+    transaction(() => record(database, reserved));
+    expect(holds(database)).toEqual([main, ...reserved]);
+  },
+);
 
 it("does not upgrade quarantine provenance after journal loss", () => {
   transaction(() => record(database, [main]));
   database.db.exec("DROP TABLE agent_deletion_journal");
   transaction(() => reconstruct(database, [main, other]));
-  expectHolds([main, other], [other]);
+  expect(holds(database)).toEqual([main, other]);
+  expect(missingHolds(database)).toEqual([other]);
 });
 
 const quarantineDescription =
   "Quarantined unusable agent deletion records; stores remain held for explicit recovery.";
 it.each([
-  [RECONSTRUCTION, true],
+  [AGENT_DELETION_RECONSTRUCTION_DESCRIPTION, true],
   [quarantineDescription, false],
-] as const)("recognizes legacy reconstruction: %s", (description, missing) => {
+  [
+    "Preserved unusable agent deletion records in place; stores remain held for explicit recovery.",
+    false,
+  ],
+] as const)("recognizes only the legacy reconstruction description: %s", (description, missing) => {
   transaction(() => record(database, [main]));
   updateReport({ missingJournal: undefined, description });
   expect(missingHolds(database)).toEqual(missing ? [main] : []);
@@ -103,7 +109,8 @@ it("resolves selected holds without changing metadata or immutable runs", () => 
   const originalRuns = runs();
   updateReport({ backup: { path: "verified-backup" } });
   transaction(() => resolve(database, "main", [main.path]));
-  expectHolds([other]);
+  expect(holds(database)).toEqual([other]);
+  expect(missingHolds(database)).toEqual([other]);
   expect(readReport(database)?.backup).toEqual({ path: "verified-backup" });
   transaction(() => resolve(database, "other", [other.path]));
   expect(readReport(database)?.missingJournal).toEqual([]);

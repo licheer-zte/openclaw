@@ -19,18 +19,22 @@ export function createRpcSourceForTest(
   } & Partial<rpc.RpcSourceIdentity> = {},
 ): rpc.RpcSourceRef {
   const { projectSessionActive, ...adapter } = metadata;
-  const sessionId = options.sessionId ?? "fixture-session";
+  const identity = {
+    sessionKey: options.sessionKey ?? "agent:main:fixture",
+    sessionId: options.sessionId ?? "fixture-session",
+    agentId: options.agentId,
+  };
   const target = lifecycle.captureSessionTarget({
     storeScope: options.storeScope ?? `/synthetic/rpc-source-fixture/${randomUUID()}/sessions`,
-    sessionKey: options.sessionKey ?? "agent:main:fixture",
-    agentId: options.agentId,
-    incarnation: sessionId,
+    sessionKey: identity.sessionKey,
+    agentId: identity.agentId,
+    incarnation: identity.sessionId,
   });
   const input = mailbox.reserveSessionControllerSource(target.sessionKey, {
     target,
     adapter,
     protocolRunId: options.runId,
-    sourceSessionId: sessionId,
+    sourceSessionId: identity.sessionId,
     policy: { mode: "followup" },
   });
   input.custody.rpcAccepted = options.accepted === true ? true : undefined;
@@ -40,7 +44,7 @@ export function createRpcSourceForTest(
       { prompt: "queued RPC fixture", abortSignal: input.abortSignal },
       {
         sessionKey: target.sessionKey,
-        sessionId,
+        sessionId: identity.sessionId,
         ...(target.agentId == null ? {} : { agentId: target.agentId }),
         config: { session: { store: target.storeScope } },
       },

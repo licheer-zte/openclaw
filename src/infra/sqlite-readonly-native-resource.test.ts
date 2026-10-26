@@ -388,7 +388,7 @@ it("rejects lost-port RPCs without declaring child death and joins outstanding w
   });
   const copy = client.runOnce(
     "/fixture/source",
-    { mode: "sync", stagingRoot: "/fixture/allocated" },
+    { mode: "sync" },
     { env: launch.env, cwd: launch.cwd, deadlineOwnedByCaller: false },
   );
   const rejected = expect(copy).rejects.toThrow("child cleanup is not acknowledged");

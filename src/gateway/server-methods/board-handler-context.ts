@@ -4,7 +4,6 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { BoardSessionTarget } from "../../boards/board-store.js";
 import { respondBoardError } from "../board-host-tools.js";
-import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { sessionObserverScopeKey } from "../session-observer-model.js";
 import { resolveRequestedSessionStoreTarget } from "../session-store-key.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
@@ -17,10 +16,6 @@ export function defineBoardMethod<Method extends keyof GatewayCoreRequestParams>
     try {
       await handler(invocation);
     } catch (error) {
-      if (error instanceof SessionMutationAuthorizationChangedError) {
-        invocation.respond(false, undefined, error.error);
-        return;
-      }
       respondBoardError(error, invocation.respond);
     }
   });

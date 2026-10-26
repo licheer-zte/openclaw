@@ -16,14 +16,18 @@ const runtimeStub = {
   },
 } as unknown as PluginRuntime;
 
-const auth = {
-  homeserver: "https://matrix.example.org",
-  userId: "@bot:example.org",
-  accessToken: "token",
-};
 function matrixConfig(overrides: Partial<MatrixConfig> = {}): CoreConfig {
-  const matrix = { enabled: true, ...auth, ...overrides };
-  return { channels: { matrix } };
+  return {
+    channels: {
+      matrix: {
+        enabled: true,
+        homeserver: "https://matrix.example.org",
+        userId: "@bot:example.org",
+        accessToken: "token",
+        ...overrides,
+      },
+    },
+  };
 }
 
 function discover(overrides: Partial<MatrixConfig> = {}) {
@@ -49,7 +53,8 @@ describe("matrixMessageActions", () => {
     });
     credentials.resolve({
       accountId: "default",
-      ...auth,
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
       accessToken: "stored-token",
       createdAt: "2026-03-19T00:00:00.000Z",
     });
@@ -61,36 +66,53 @@ describe("matrixMessageActions", () => {
       mediaSourceParams: { "set-profile": ["avatarUrl", "avatarPath"] },
     });
     const schemas = listSchemas(resolved?.schema);
-    expect(schemas.find((s) => s.actions?.includes("set-profile"))?.properties).toHaveProperty(
-      "avatarUrl",
+    expect(
+      schemas.find((schema) => schema?.actions?.includes("set-profile"))?.properties,
+    ).toHaveProperty("avatarUrl");
+  });
+
+  it("advertises custom-emote discovery and its reaction hint only when reactions are enabled", () => {
+    const enabled = discover();
+    const disabled = discover({ actions: { reactions: false } });
+
+    expect(enabled?.actions).toContain("emoji-list");
+    expect(matrixMessageActions.supportsAction?.({ action: "emoji-list" } as never)).toBe(true);
+    expect(listSchemas(enabled?.schema)).toContainEqual({
+      actions: ["react", "reactions"],
+      properties: {
+        emoji: expect.objectContaining({
+          description: expect.stringContaining('action:"emoji-list"'),
+        }),
+      },
+    });
+    expect(disabled?.actions).not.toContain("emoji-list");
+    expect(disabled?.actions).not.toContain("react");
+    expect(listSchemas(disabled?.schema).some((schema) => "emoji" in schema.properties)).toBe(
+      false,
     );
   });
 
-  it.each([
-    ["reactions", ["emoji"], 'action:"emoji-list"'],
-    ["messages", ["before", "after"], "nextBatch/prevBatch, not an event id"],
-  ] as const)("gates %s actions and schema hints", (gate, keys, hint) => {
-    const actions = gate === "reactions" ? (["emoji-list", "react"] as const) : (["read"] as const);
+  it("adds metadata-only pagination-token guidance for read cursors", () => {
     const enabled = discover();
-    const disabled = discover({ actions: { [gate]: false } });
-    const property = expect.objectContaining({ description: expect.stringContaining(hint) });
-    expect(listSchemas(enabled?.schema)).toContainEqual({
-      actions: gate === "reactions" ? ["react", "reactions"] : [],
-      properties: Object.fromEntries(keys.map((key) => [key, property])),
+    const readDisabled = discover({ actions: { messages: false } });
+
+    const cursor = expect.objectContaining({
+      description: expect.stringContaining("nextBatch/prevBatch, not an event id"),
     });
-    for (const action of actions) {
-      expect(enabled?.actions).toContain(action);
-      expect(disabled?.actions).not.toContain(action);
-    }
-    expect(listSchemas(disabled?.schema).some((s) => keys[0] in s.properties)).toBe(false);
-    if (gate === "reactions") {
-      expect(matrixMessageActions.supportsAction?.({ action: "emoji-list" } as never)).toBe(true);
-    }
+    expect(listSchemas(enabled?.schema)).toContainEqual({
+      actions: [],
+      properties: { before: cursor, after: cursor },
+    });
+    expect(readDisabled?.actions).not.toContain("read");
+    expect(listSchemas(readDisabled?.schema).some((schema) => "before" in schema.properties)).toBe(
+      false,
+    );
   });
 
   it("hides actions until defaultAccount is set for ambiguous multi-account configs", () => {
+    const account = { homeserver: "https://matrix.example.org", accessToken: "token" };
     const discovery = matrixMessageActions.describeMessageTool({
-      cfg: { channels: { matrix: { accounts: { assistant: auth, ops: auth } } } },
+      cfg: { channels: { matrix: { accounts: { assistant: account, ops: account } } } },
     } as never);
     expect(discovery).toStrictEqual({ actions: [], capabilities: [] });
   });

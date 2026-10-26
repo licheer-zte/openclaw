@@ -12,7 +12,10 @@ import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
-import * as stateDb from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { runGatewayLoop } from "./run-loop.js";
 import {
   createGatewayServer,
@@ -33,7 +36,7 @@ vi.mock("../../infra/gateway-lock.js", async (original) => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(async () => {
-  await stateDb.closeOpenClawStateDatabaseAsync();
+  await closeOpenClawStateDatabaseAsync();
   resetGatewayRestartStateForInProcessRestart();
   resetGatewayWorkAdmission();
   vi.unstubAllEnvs();
@@ -54,7 +57,6 @@ it("reacquires state after SIGUSR2 retires its emitting scope and asynchronously
   const closing = createLifecycleGate();
   let starts = 0;
   let closeContext: string | undefined;
-  const requestRestart = () => requestGatewayRestartWithSignalAdmission("config reload: fixture");
 
   await withIsolatedSignals(async ({ captureSignal }) => {
     const loop = context.run("gateway-loop", () =>
@@ -62,7 +64,7 @@ it("reacquires state after SIGUSR2 retires its emitting scope and asynchronously
         // This port is lease metadata only; the fixture opens no listener.
         lockPort: 43821,
         start: async () => {
-          stateDb.openOpenClawStateDatabase();
+          openOpenClawStateDatabase();
           const owner = readGatewayOwnerLease({ current: true })?.owner;
           (starts++ === 0 ? initialOwner : restartedOwner).resolve(owner);
           return createGatewayServer(async () => {
@@ -80,9 +82,11 @@ it("reacquires state after SIGUSR2 retires its emitting scope and asynchronously
     const stop = captureSignal("SIGINT");
     try {
       expect(first).toBeTruthy();
-      expect(context.run("config-reload", () => reloadWork.run(requestRestart))).toEqual({
-        status: "emitted",
-      });
+      expect(
+        context.run("config-reload", () =>
+          reloadWork.run(() => requestGatewayRestartWithSignalAdmission("config reload: fixture")),
+        ),
+      ).toEqual({ status: "emitted" });
       await waitFor(closing.entered, "closing");
       expect({ aborted: reloadWork.signal.aborted, starts }).toEqual({ aborted: true, starts: 1 });
       // Delayed close retains real custody; another startup cannot enter it.
@@ -97,8 +101,9 @@ it("reacquires state after SIGUSR2 retires its emitting scope and asynchronously
     } finally {
       closing.release();
       stop();
-      await expect(loop).resolves.toBe(0);
+      await loop;
     }
+    await expect(loop).resolves.toBe(0);
     expect(readGatewayOwnerLease({ current: true })).toBeUndefined();
   });
 });

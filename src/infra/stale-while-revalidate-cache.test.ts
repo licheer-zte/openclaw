@@ -15,8 +15,8 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it.each([true, false])("coalesces stale refreshes (cacheable=%s)", async (cacheable) => {
-  const cache = cacheFor<string>({ cacheable: (value) => value !== "uncacheable" });
+it("returns expired success immediately while coalescing one background refresh", async () => {
+  const cache = cacheFor<string>();
   await expect(cache.read("item", async () => "first")).resolves.toEqual(fresh("first"));
   const pending = createDeferredCore<string>();
   const refresh = vi.fn(() => pending.promise);
@@ -28,15 +28,10 @@ it.each([true, false])("coalesces stale refreshes (cacheable=%s)", async (cachea
   await expect(cache.read("item", refresh)).resolves.toEqual(stale("first"));
   const waiting = cache.read("item", refresh, { allowStale: false });
   expect(refresh).toHaveBeenCalledExactlyOnceWith("first");
-  const result = cacheable ? "second" : "uncacheable";
-  pending.resolve(result);
-  await expect(waiting).resolves.toEqual(fresh(result));
-  refresh.mockResolvedValue("second");
+  pending.resolve("second");
+  await expect(waiting).resolves.toEqual(fresh("second"));
   await expect(cache.read("item", refresh)).resolves.toEqual(fresh("second"));
-  expect(refresh).toHaveBeenCalledTimes(cacheable ? 1 : 2);
-  if (!cacheable) {
-    expect(refresh).toHaveBeenLastCalledWith(undefined);
-  }
+  expect(refresh).toHaveBeenCalledOnce();
 });
 
 it("retires exact cached facts while sharing a replacement load", async () => {
@@ -113,5 +108,19 @@ it("evicts failed stale data and honors error cooldown before retrying", async (
   expect(replacement).not.toHaveBeenCalled();
   now += 50;
   await expect(cache.read("item", replacement)).resolves.toEqual(fresh("recovered"));
+  expect(replacement).toHaveBeenCalledExactlyOnceWith(undefined);
+});
+
+it("does not retain an expired success after a noncacheable replacement", async () => {
+  const cache = cacheFor<number>({ cacheable: (value) => value > 0 });
+  await cache.read("item", async () => 1);
+  now += 100;
+  const pending = createDeferredCore<number>();
+  await expect(cache.read("item", () => pending.promise)).resolves.toEqual(stale(1));
+  const replacement = vi.fn(async () => 2);
+  const waiting = cache.read("item", replacement, { allowStale: false });
+  pending.resolve(0);
+  await expect(waiting).resolves.toEqual(fresh(0));
+  await expect(cache.read("item", replacement)).resolves.toEqual(fresh(2));
   expect(replacement).toHaveBeenCalledExactlyOnceWith(undefined);
 });

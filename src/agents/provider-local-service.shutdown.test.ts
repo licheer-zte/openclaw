@@ -6,7 +6,6 @@ import http from "node:http";
 import path from "node:path";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred, withinTest, withTestTimeout } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -153,7 +152,13 @@ describe("provider local service shutdown", () => {
         stopping.resolve();
         void gate.promise.then(() => response.end("continue"));
       });
-      const controlUrl = `${await listenLoopback(control)}/stopping`;
+      control.listen(0, "127.0.0.1");
+      await once(control, "listening");
+      const address = control.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Expected local service control listener");
+      }
+      const controlUrl = `http://127.0.0.1:${address.port}/stopping`;
       const target = serviceTarget(
         port,
         "local-idle-stop-join",

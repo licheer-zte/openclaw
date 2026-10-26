@@ -62,7 +62,6 @@ describe("createLazyGatewayCronState", () => {
     await lazy.stopStreamWatchers();
     expect(buildGatewayCronService).not.toHaveBeenCalled();
     expect(lazy.cron.getJob("demo")).toBeUndefined();
-    expect(lazy.cron.getLoadedJobs()).toBeUndefined();
     expect(lazy.cron.getDefaultAgentId()).toBeUndefined();
     try {
       await runInDetachedAsyncContext(() => lazy.cron.status());
@@ -70,9 +69,6 @@ describe("createLazyGatewayCronState", () => {
       await readers.close();
     }
     expect(buildGatewayCronService).toHaveBeenCalledTimes(1);
-    const residentJobs: CronJob[] = [];
-    cron.getLoadedJobs.mockReturnValue(residentJobs);
-    expect(lazy.cron.getLoadedJobs()).toBe(residentJobs);
     expect(lazy.readHeartbeatSummary).toBe(state.readHeartbeatSummary);
     expect(observedBroker === broker).toBe(true);
     expect(observedReadOnlyScope).toBe(true);
@@ -318,7 +314,6 @@ function createCronService() {
     runEvent: vi.fn<GatewayCronServiceContract["runEvent"]>(async () => ({ kind: "invalidated" })),
     waitForManualRun: vi.fn(async () => true),
     getJob: vi.fn(() => undefined),
-    getLoadedJobs: vi.fn<GatewayCronServiceContract["getLoadedJobs"]>(() => undefined),
     readJob: vi.fn(async () => undefined),
     readScratch: vi.fn(async () => ({ currentRevision: 0 })),
     writeScratch: vi.fn(async () => ({ ok: true, currentRevision: 1 }) as never),

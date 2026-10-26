@@ -82,13 +82,13 @@ export async function acquireCompactHooksPreparedModelRuntime(
   };
 }
 
-export function createCompactHooksPreparedModelRuntime(
-  input: Required<
-    Pick<PreparedModelRuntimeInput, "agentId" | "agentDir" | "config" | "workspaceDir">
-  > & {
-    metadataSnapshot: PluginMetadataSnapshot;
-  },
-) {
+export function createCompactHooksPreparedModelRuntime(input: {
+  agentId: string;
+  agentDir: string;
+  config: PreparedModelRuntimeInput["config"];
+  workspaceDir: string;
+  metadataSnapshot: PluginMetadataSnapshot;
+}) {
   return withEmptyRuntimeStores(input);
 }
 

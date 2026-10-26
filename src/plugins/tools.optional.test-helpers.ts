@@ -90,20 +90,9 @@ export function createToolRegistry(
       Omit<MockRegistryToolEntry, "declaredNames"> & { declaredNames?: ReadonlySet<string> }
     >;
   } = builder.registry;
-  registry.plugins = entries.map(({ pluginId: id, source, origin = "bundled" }) => {
-    const artifact = {
-      source,
-      rootDir: path.dirname(source),
-      origin,
-      preferBuiltPluginArtifacts: false,
-    };
-    const record = createLoaderPluginRecord({ id, ...artifact, enabled: true, configSchema: true });
-    bindPluginRuntimeArtifactSelection(record, {
-      preferBuiltPluginArtifacts: false,
-      runtimeEntry: resolvePluginRuntimeArtifactSelection({ ...artifact, entryKind: "runtime" }),
-    });
-    return record;
-  });
+  registry.plugins = entries.map((entry) =>
+    createToolRuntimeRecord(entry.pluginId, entry.source, entry.origin),
+  );
   registry.tools = entries.map((entry, index) => {
     const record = registry.plugins[index]!;
     const api = builder.createApi(record, { config: {}, registrationMode });
@@ -119,4 +108,19 @@ export function createToolRegistry(
     };
   });
   return registry;
+}
+
+function createToolRuntimeRecord(
+  id: string,
+  source = `/tmp/${id}.js`,
+  origin: MockRegistryToolEntry["origin"] = "bundled",
+) {
+  const rootDir = path.dirname(source);
+  const artifact = { source, rootDir, origin, preferBuiltPluginArtifacts: false };
+  const record = createLoaderPluginRecord({ id, ...artifact, enabled: true, configSchema: true });
+  bindPluginRuntimeArtifactSelection(record, {
+    preferBuiltPluginArtifacts: false,
+    runtimeEntry: resolvePluginRuntimeArtifactSelection({ ...artifact, entryKind: "runtime" }),
+  });
+  return record;
 }

@@ -1,61 +1,76 @@
-import assert from "node:assert/strict";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import bedrockMantlePlugin from "./index.js";
 
 const env = { AWS_BEARER_TOKEN_BEDROCK: "test-token", AWS_REGION: "us-east-1" };
 
 describe("amazon-bedrock-mantle provider plugin", () => {
-  let provider: Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.restoreAllMocks();
-    provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
   });
-  afterEach(() => vi.useRealTimers());
-  const catalog = (config = {}, bearerToken = env.AWS_BEARER_TOKEN_BEDROCK) =>
-    provider.catalog?.run({
-      config,
-      env: { ...env, AWS_BEARER_TOKEN_BEDROCK: bearerToken },
-    } as never);
-  const mockModels = (data: unknown[]) =>
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ data }));
 
   it("uses live plugin config to disable catalog discovery", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected fetch"));
-    const result = await catalog({
-      plugins: {
-        entries: {
-          "amazon-bedrock-mantle": { config: { discovery: { enabled: false } } },
-        },
-      },
-    });
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("unexpected fetch"));
+    const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
+    if (!provider.catalog) {
+      throw new Error("catalog registration missing");
+    }
 
-    expect(result).toBeNull();
-    expect(fetchSpy).not.toHaveBeenCalled();
-  });
-
-  it("returns raw discovery for the host to merge with materialized config", async () => {
-    const fetchMock = mockModels([
-      { id: "anthropic.claude-opus-4-7", object: "model", input_modalities: ["text", "image"] },
-    ]);
-    const result = await catalog({
-      models: {
-        providers: {
-          "amazon-bedrock-mantle": {
-            baseUrl: "https://explicit.example.test/v1",
-            models: [{ id: "anthropic.claude-opus-4-7", input: ["text"] }],
+    const result = await provider.catalog.run({
+      config: {
+        plugins: {
+          entries: {
+            "amazon-bedrock-mantle": {
+              config: {
+                discovery: { enabled: false },
+              },
+            },
           },
         },
       },
-    });
+      env,
+    } as never);
 
-    assert(result && "provider" in result, "expected single provider catalog result");
+    expect(result).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns raw discovery for the host to merge with materialized config", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        data: [
+          { id: "anthropic.claude-opus-4-7", object: "model", input_modalities: ["text", "image"] },
+        ],
+      }),
+    );
+    const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
+
+    const result = await provider.catalog?.run({
+      config: {
+        models: {
+          providers: {
+            "amazon-bedrock-mantle": {
+              baseUrl: "https://explicit.example.test/v1",
+              models: [{ id: "anthropic.claude-opus-4-7", input: ["text"] }],
+            },
+          },
+        },
+      },
+      env,
+    } as never);
+
+    if (!result || !("provider" in result)) {
+      throw new Error("expected single provider catalog result");
+    }
     expect(result.provider.baseUrl).toBe("https://bedrock-mantle.us-east-1.api.aws/v1");
     expect(result.provider.models[0]?.input).toEqual(["text", "image"]);
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
-  it("classifies rate limit errors for failover", () => {
+  it("classifies rate limit errors for failover", async () => {
+    const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
     const classify = (errorMessage: string) =>
       provider.classifyFailoverReason?.({ errorMessage } as never);
     expect(classify("rate_limit exceeded")).toBe("rate_limit");
@@ -65,9 +80,19 @@ describe("amazon-bedrock-mantle provider plugin", () => {
   });
 
   it("registers discovered OpenAI GPT models on the Responses route", async () => {
-    mockModels([{ id: "openai.gpt-5.6-luna" }, { id: "openai.gpt-oss-120b" }]);
-    const result = await catalog({}, "test-openai-route-token");
-    assert(result && "provider" in result, "expected single provider catalog result");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        data: [{ id: "openai.gpt-5.6-luna" }, { id: "openai.gpt-oss-120b" }],
+      }),
+    );
+    const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
+    const result = await provider.catalog?.run({
+      config: {},
+      env: { ...env, AWS_BEARER_TOKEN_BEDROCK: "test-openai-route-token" },
+    } as never);
+    if (!result || !("provider" in result)) {
+      throw new Error("expected single provider catalog result");
+    }
     expect(
       result.provider.models.find((model) => model.id === "openai.gpt-5.6-luna"),
     ).toMatchObject({
@@ -79,7 +104,9 @@ describe("amazon-bedrock-mantle provider plugin", () => {
     expect(oss).not.toHaveProperty("baseUrl");
   });
 
-  it("provides a custom stream only for Mantle Anthropic models", () => {
+  it("provides a custom stream only for Mantle Anthropic models", async () => {
+    const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
+
     const createStream = (modelId: string, api: string) =>
       provider.createStreamFn?.({
         provider: "amazon-bedrock-mantle",
@@ -103,16 +130,21 @@ describe("amazon-bedrock-mantle provider plugin", () => {
     },
   ])(
     "restores missing or stale $id pricing during runtime normalization",
-    ({ id, staleCost, expectedCost }) => {
+    async ({ id, staleCost, expectedCost }) => {
       vi.useFakeTimers();
       vi.setSystemTime(Date.UTC(2026, 8, 1));
-      for (const cost of [undefined, staleCost]) {
-        const normalized = provider.normalizeResolvedModel?.({
-          provider: "amazon-bedrock-mantle",
-          modelId: `anthropic.${id}`,
-          model: { params: { canonicalModelId: id }, cost },
-        } as never);
-        expect(normalized?.cost).toEqual(expectedCost);
+      try {
+        const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
+        for (const cost of [undefined, staleCost]) {
+          const normalized = provider.normalizeResolvedModel?.({
+            provider: "amazon-bedrock-mantle",
+            modelId: `anthropic.${id}`,
+            model: { params: { canonicalModelId: id }, cost },
+          } as never);
+          expect(normalized?.cost).toEqual(expectedCost);
+        }
+      } finally {
+        vi.useRealTimers();
       }
     },
   );

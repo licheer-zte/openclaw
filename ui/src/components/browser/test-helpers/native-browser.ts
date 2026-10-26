@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import type * as Bridge from "../../../app/native-browser-bridge.ts";
-import { createFrameClock } from "../../../test-helpers/animation-frame-clock.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { stubResizeObserver } from "../../../test-helpers/resize-observer.ts";
 import { createStorageMock } from "../../../test-helpers/storage.ts";
 import {
   createBrowserClient,
@@ -76,7 +74,8 @@ export function setupNativeBrowserPanelTests() {
   const controllers: BrowserPanel[] = [];
   const cleanups: (() => void)[] = [];
   let hit: Element | null;
-  let clock: ReturnType<typeof createFrameClock>;
+  let frames: Map<number, FrameRequestCallback>;
+  let nextFrame: number;
 
   function controllerFixture(screencast = false, sessionKey = "") {
     let remoteOpen = true;
@@ -115,15 +114,30 @@ export function setupNativeBrowserPanelTests() {
     return { controller, host, request };
   }
 
+  function flushFrames() {
+    const pending = [...frames.values()];
+    frames.clear();
+    pending.forEach((frame) => frame(0));
+  }
+
   beforeEach(() => {
-    clock = createFrameClock();
+    frames = new Map();
+    nextFrame = 0;
     hit = null;
     vi.stubGlobal("localStorage", createStorageMock());
     // Geometry and hit testing below own this no-layout native presentation.
-    stubResizeObserver();
-    vi.stubGlobal("IntersectionObserver", ResizeObserver);
-    vi.stubGlobal("requestAnimationFrame", clock.request);
-    vi.stubGlobal("cancelAnimationFrame", clock.cancel);
+    class GeometryObserver {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal("ResizeObserver", GeometryObserver);
+    vi.stubGlobal("IntersectionObserver", GeometryObserver);
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.set(++nextFrame, callback);
+      return nextFrame;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
     Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => hit });
     stubScreenshotMedia();
   });
@@ -140,7 +154,7 @@ export function setupNativeBrowserPanelTests() {
 
   return {
     controllerFixture,
-    flushFrames: () => clock.flush(0),
+    flushFrames,
     setHit: (element: Element | null) => {
       hit = element;
     },

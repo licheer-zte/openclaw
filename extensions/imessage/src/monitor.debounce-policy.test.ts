@@ -31,7 +31,10 @@ vi.mock("./monitor/inbound-processing.js", async (importOriginal) => ({
     reason: "dmPolicy disabled",
   })),
 }));
-vi.mock("./monitor/ingress.js", { spy: true });
+vi.mock("./monitor/ingress.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./monitor/ingress.js")>();
+  return { ...actual, createIMessageDurableIngress: vi.fn(actual.createIMessageDurableIngress) };
+});
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
   return { ...actual, createChannelInboundDebouncer: vi.fn(actual.createChannelInboundDebouncer) };

@@ -52,7 +52,7 @@ type ManagedCronJobCreate = {
   };
 };
 
-type ManagedCronJobPatch = Partial<Omit<ManagedCronJobCreate, "declarationKey" | "enabled">>;
+type ManagedCronJobPatch = Partial<Omit<ManagedCronJobCreate, "declarationKey">>;
 
 type ManagedCronJobLike = {
   id: string;
@@ -140,6 +140,9 @@ function buildManagedDreamingPatch(
   }
   if (normalizeOptionalString(job.description) !== desired.description) {
     patch.description = desired.description;
+  }
+  if (job.enabled !== true) {
+    patch.enabled = true;
   }
 
   const scheduleKind = normalizeLowercaseStringOrEmpty(job.schedule?.kind);

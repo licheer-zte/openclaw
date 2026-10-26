@@ -15,14 +15,15 @@ export const createCommitTurn = () =>
   vi.fn<NonNullable<ContextEngine["commitTurn"]>>(async () => ({ status: "committed" }));
 
 type FinalizeParams = Parameters<typeof finalizeHarnessContextEngineTurn>[0];
-const successFlags = { promptError: false, aborted: false, yieldAborted: false };
 export function finalizeTurn(
   params: Pick<FinalizeParams, "sessionFile" | "sessionIdUsed"> & Partial<FinalizeParams>,
 ) {
   return finalizeHarnessContextEngineTurn({
     messagesSnapshot: [],
     prePromptMessageCount: 0,
-    ...successFlags,
+    promptError: false,
+    aborted: false,
+    yieldAborted: false,
     warn: vi.fn(),
     ...params,
   });
@@ -34,17 +35,24 @@ export function createTurnBoundary(
   sessionId = "session-a",
   sequence = 1,
 ): TranscriptTurnBoundary {
-  const anchor = (role: "user" | "assistant", rawSeq: number) => ({
-    ...createTurnTarget(storePath, sessionId),
+  const anchor = (
+    role: "user" | "assistant",
+    rawSeq: number,
+    effectiveParentId: string | null,
+  ) => ({
+    agentId: "main",
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
+    storePath,
     generation: "generation-1",
     entryId: `${logicalTurnId}:${role}`,
     rawSeq,
     activeMessagePosition: rawSeq,
-    effectiveParentId: role === "user" ? null : `${logicalTurnId}:user`,
+    effectiveParentId,
   });
   return {
-    admission: { ...anchor("user", sequence), logicalTurnId, role: "user" },
-    terminal: anchor("assistant", sequence + 1),
+    admission: { ...anchor("user", sequence, null), logicalTurnId, role: "user" },
+    terminal: anchor("assistant", sequence + 1, `${logicalTurnId}:user`),
   };
 }
 
@@ -64,7 +72,9 @@ export const createTurnFacts = (
   sessionTarget,
   sessionIdUsed: boundary.admission.sessionId,
   sessionKey: boundary.admission.sessionKey,
-  ...successFlags,
+  promptError: false,
+  aborted: false,
+  yieldAborted: false,
 });
 
 export function createTurnEngine<T extends NonNullable<ContextEngine["commitTurn"]>>(

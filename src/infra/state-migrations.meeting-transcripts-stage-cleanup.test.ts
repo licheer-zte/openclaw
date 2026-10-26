@@ -17,10 +17,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const removalWarning = "Could not remove the disposable meeting transcript migration file";
 const stagePath = () =>
   path.join(tempDirs.make("openclaw-meeting-transcripts-cleanup-"), "stage.sqlite");
-afterEach(() => {
-  vi.restoreAllMocks();
-  closeOpenClawStateDatabaseForTest();
-});
+afterEach(() => closeOpenClawStateDatabaseForTest());
 
 async function seedLegacySession(stateDir: string, sessionId: string): Promise<string> {
   const sessionDir = path.join(stateDir, "transcripts", "2026-07-01", sessionId);
@@ -33,6 +30,7 @@ async function seedLegacySession(stateDir: string, sessionId: string): Promise<s
     startedAt: "2026-07-01T10:00:00.000Z",
   });
   await writeJson("transcript.jsonl", { text: "First line" });
+  await fs.writeFile(path.join(sessionDir, "summary.md"), "# Design review\n\nFirst line.\n");
   return sessionDir;
 }
 
@@ -61,35 +59,43 @@ it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
     );
     expect(result.warnings).toContainEqual(expect.stringContaining(removalWarning));
     await expect(fs.stat(sourceDir)).rejects.toMatchObject({ code: "ENOENT" });
+    // Otherwise Doctor refuses this step and every later repair.
     expect(result.warningDisposition).toBe("recoverable");
   },
 );
 
 it("retains the live stage files when close fails and removes them after a successful close", () => {
   const databasePath = stagePath();
-  using database = openLegacyMeetingTranscriptStage(databasePath);
+  const database = openLegacyMeetingTranscriptStage(databasePath);
   const files = [databasePath, `${databasePath}-shm`, `${databasePath}-wal`];
   const filesExist = () => files.map((file) => fsSync.existsSync(file));
-  using close = vi.spyOn(database, "close").mockImplementationOnce(() => {
+  const close = vi.spyOn(database, "close").mockImplementationOnce(() => {
     throw new Error("native close failed");
   });
-  expect(filesExist()).toEqual([true, true, true]);
+  try {
+    expect(filesExist()).toEqual([true, true, true]);
 
-  const warnings = disposeLegacyMeetingTranscriptStage({ database, databasePath });
+    const warnings = disposeLegacyMeetingTranscriptStage({ database, databasePath });
 
-  expect(warnings).toEqual([
-    expect.stringContaining("Could not close the meeting transcript migration stage database"),
-  ]);
-  expect(filesExist()).toEqual([true, true, true]);
-  expect(warnings[0]).toContain(`Left stage files in place at ${databasePath}`);
-  expect(database.prepare("SELECT COUNT(*) AS count FROM staged_utterances").get()).toEqual({
-    count: 0,
-  });
+    expect(warnings).toEqual([
+      expect.stringContaining("Could not close the meeting transcript migration stage database"),
+    ]);
+    expect(filesExist()).toEqual([true, true, true]);
+    expect(warnings[0]).toContain(`Left stage files in place at ${databasePath}`);
+    const row = database.prepare("SELECT COUNT(*) AS count FROM staged_utterances").get();
+    expect(row).toEqual({ count: 0 });
 
-  close.mockRestore();
-  expect(disposeLegacyMeetingTranscriptStage({ database, databasePath })).toEqual([]);
-  expect(database.isOpen).toBe(false);
-  expect(filesExist()).toEqual([false, false, false]);
+    close.mockRestore();
+    expect(disposeLegacyMeetingTranscriptStage({ database, databasePath })).toEqual([]);
+    expect(database.isOpen).toBe(false);
+    expect(filesExist()).toEqual([false, false, false]);
+  } finally {
+    close.mockRestore();
+    // Do not let test cleanup unlink a database whose native close was skipped.
+    if (database.isOpen) {
+      database.close();
+    }
+  }
 });
 
 it("turns a failed stage removal into a warning", () => {

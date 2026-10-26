@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { defineCodexBuildState } from "../build-state.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
@@ -24,13 +23,6 @@ import { isJsonObject, type CodexConfigReadResponse, type JsonObject } from "./p
 import { CODEX_RESPONSES_OAUTH_PROVIDER, type CodexResponsesOAuth } from "./responses-oauth.js";
 import type { CodexBindingAuthority, CodexAppServerThreadBinding } from "./session-binding.js";
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
-
-const loadSsrfRuntime = createLazyRuntimeModule(() => import("openclaw/plugin-sdk/ssrf-runtime"));
-const loadInferenceProxy = createLazyRuntimeModule(() => import("./inference-proxy.js"));
-const loadNativeSubagentMonitor = createLazyRuntimeModule(
-  () => import("./native-subagent-monitor.js"),
-);
-const loadInferenceDispatch = createLazyRuntimeModule(() => import("./inference-dispatch.js"));
 
 export type CodexInferenceProviderRoutes = ReadonlyMap<string, CodexInferenceProxy>;
 type ThreadRoutes = {
@@ -293,7 +285,7 @@ async function prepareCodexInferenceRoute(params: {
     configured ||
       (type === "apiKey" ? "https://api.openai.com/v1" : "https://chatgpt.com/backend-api/codex"),
   );
-  const { isBlockedHostnameOrIp } = await loadSsrfRuntime();
+  const { isBlockedHostnameOrIp } = await import("openclaw/plugin-sdk/ssrf-runtime");
   assertCurrent();
   if (isBlockedHostnameOrIp(target.hostname)) {
     return unsupported();
@@ -345,9 +337,9 @@ async function prepareCodexInferenceRoute(params: {
         );
       }
       pending = Promise.all([
-        loadInferenceProxy(),
-        loadNativeSubagentMonitor(),
-        loadInferenceDispatch(),
+        import("./inference-proxy.js"),
+        import("./native-subagent-monitor.js"),
+        import("./inference-dispatch.js"),
       ]).then(([{ createCodexInferenceProxy }, native, { createCodexInferenceModelBinding }]) => {
         assertClient();
         return createCodexInferenceProxy({

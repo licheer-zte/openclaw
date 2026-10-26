@@ -13,7 +13,6 @@ import { isBetaTag } from "../infra/update-channels.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
-import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 import * as assert from "./update-cli-assertions.test-support.js";
 import { registerUpdateCliLifecycle } from "./update-cli-lifecycle.test-support.js";
 import * as mocks from "./update-cli-mocks.test-support.js";
@@ -33,10 +32,10 @@ export function createUpdateCliFixture() {
   for (const directory of [".git", "src", "extensions"]) {
     fsSync.mkdirSync(path.join(checkoutRoot, directory));
   }
-  writeFixtureJsonSync(path.join(checkoutRoot, "package.json"), {
-    name: "openclaw",
-    version: VERSION,
-  });
+  fsSync.writeFileSync(
+    path.join(checkoutRoot, "package.json"),
+    JSON.stringify({ name: "openclaw", version: VERSION }),
+  );
   const globalNpmConfig = path.join(fixtureRoot, "global-npmrc");
   fsSync.writeFileSync(globalNpmConfig, "");
 
@@ -141,7 +140,11 @@ export function createUpdateCliFixture() {
       const packageJsonPath = path.join(packageRoot, "package.json");
       fsSync.mkdirSync(path.dirname(entrypoint), { recursive: true });
       fsSync.writeFileSync(entrypoint, "// test entrypoint\n", "utf8");
-      writeFixtureJsonSync(packageJsonPath, { name: "openclaw", version: targetVersion });
+      fsSync.writeFileSync(
+        packageJsonPath,
+        JSON.stringify({ name: "openclaw", version: targetVersion }),
+        "utf8",
+      );
       tempDirsToCleanup.add(packageRoot);
     }
     mocks.pathExists.mockImplementation(

@@ -49,7 +49,9 @@ export function panelTestStorage(
   afterUnmount: () => void | Promise<void> = () => {},
   beforeUnmount = () => {},
 ) {
-  beforeAll(async () => void (await import("@openclaw/libterminal/browser")));
+  beforeAll(async () => {
+    await import("@openclaw/libterminal/browser");
+  });
   beforeEach(async () => {
     if (timers) {
       vi.useFakeTimers();
@@ -62,7 +64,10 @@ export function panelTestStorage(
     beforeUnmount();
     document.body.replaceChildren();
     await Promise.resolve();
-    await afterUnmount();
+    const cleanup = afterUnmount();
+    if (cleanup) {
+      await cleanup;
+    }
     create.mockReset();
     vi.unstubAllGlobals();
     if (timers) {

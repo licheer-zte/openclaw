@@ -41,7 +41,6 @@ export function createCodexAttemptLifecycleController(
   // Raw model-call receipts precede dispatch; item/started and request registration
   // can lag. Only rawResponse/completed closes the model's call inventory.
   let modelResponse: ModelResponse | undefined;
-  let independentTerminalRelease: TerminalToolRelease | undefined;
   let lastClosedResponseId: string | undefined;
   let terminalSteeringDrainPending = false;
   const resolveAuthoredResponse = () => {
@@ -58,13 +57,7 @@ export function createCodexAttemptLifecycleController(
     const payloads = results.flatMap((result) =>
       result.response.toolAuthoredSourceReply ? [result.response.toolAuthoredSourceReply] : [],
     );
-    // An authored sibling cannot restore a delivered reply's terminal authority
-    // after steering. An explicit yield still owns its independent release.
-    const value =
-      results.some(({ response }) => response.finalSourceReplyDelivered) &&
-      turnRuntime.steeringQueueRef.current?.hasSubmittedMessages()
-        ? independentTerminalRelease
-        : results[0];
+    const value = results[0];
     return value && payloads.length > 0 ? { value, payloads } : undefined;
   };
   const scheduleTerminalDynamicToolReleaseCheck = () => {
@@ -90,21 +83,6 @@ export function createCodexAttemptLifecycleController(
       ) {
         return;
       }
-      if (
-        state.pendingTerminalDynamicToolRelease?.response.finalSourceReplyDelivered === true &&
-        turnRuntime.steeringQueueRef.current?.hasSubmittedMessages()
-      ) {
-        // This reply may answer the input preceding a steer. Native scheduling
-        // must consume and answer the new input before the turn ends; even a
-        // consumption receipt does not prove the model has answered it.
-        // Discard only that reply's terminal authority. An independent terminal
-        // sibling (for example sessions_yield) still owns its existing release.
-        state.pendingTerminalDynamicToolRelease = [...(modelResponse?.calls.values() ?? [])].some(
-          (call) => call.result?.response.toolAuthoredSourceReply,
-        )
-          ? undefined
-          : independentTerminalRelease;
-      }
       const deliveredFinal =
         state.pendingTerminalDynamicToolRelease?.response.finalSourceReplyDelivered === true;
       const authored = deliveredFinal ? undefined : resolveAuthoredResponse();
@@ -128,7 +106,6 @@ export function createCodexAttemptLifecycleController(
       }
       if (!authored && !deliveredFinal && state.currentTurnHadNonTerminalDynamicToolResult) {
         state.pendingTerminalDynamicToolRelease = undefined;
-        independentTerminalRelease = undefined;
         state.currentTurnHadNonTerminalDynamicToolResult = false;
         return;
       }
@@ -151,7 +128,6 @@ export function createCodexAttemptLifecycleController(
         return;
       }
       state.pendingTerminalDynamicToolRelease = undefined;
-      independentTerminalRelease = undefined;
       modelResponse = undefined;
       if (authored) {
         prompt.context.attemptTools.toolBridge.telemetry.messagingToolSourceReplyPayloads.push(
@@ -182,15 +158,6 @@ export function createCodexAttemptLifecycleController(
     immediate.unref?.();
   };
   const recordDynamicToolResult = (value: TerminalToolRelease) => {
-    if (
-      value.response.success &&
-      value.response.terminate === true &&
-      !value.response.finalSourceReplyDelivered &&
-      !value.response.toolAuthoredSourceReply
-    ) {
-      // Nested Code Mode calls are absent from the outer raw-call inventory.
-      independentTerminalRelease = value;
-    }
     const modelCall = modelResponse?.calls.get(value.call.callId);
     if (modelCall) {
       modelCall.result = value;
@@ -228,7 +195,6 @@ export function createCodexAttemptLifecycleController(
       state.currentTurnHadNonTerminalDynamicToolResult = true;
       if (!state.pendingTerminalDynamicToolRelease?.response.finalSourceReplyDelivered) {
         state.pendingTerminalDynamicToolRelease = undefined;
-        independentTerminalRelease = undefined;
       }
     }
   };
@@ -244,7 +210,6 @@ export function createCodexAttemptLifecycleController(
       }
       lastClosedResponseId = responseId;
       if (!modelResponse || modelResponse.closed) {
-        independentTerminalRelease = undefined;
         modelResponse = { closed: false, calls: new Map() };
       }
       modelResponse.closed = true;
@@ -269,7 +234,6 @@ export function createCodexAttemptLifecycleController(
     // Tool output receipts are deliberately excluded: they arrive after the raw
     // response closes and must not reopen or retire that response's admission.
     if (!modelResponse || modelResponse.closed) {
-      independentTerminalRelease = undefined;
       modelResponse = { closed: false, calls: new Map() };
     }
     if (callId && !modelResponse.calls.has(callId)) {

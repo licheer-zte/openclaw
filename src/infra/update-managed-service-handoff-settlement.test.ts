@@ -103,6 +103,7 @@ socket.end(); process.disconnect?.(); process.stdin.destroy();
       expect(updaterStart).not.toBeNull();
       let state = "pending";
       const join = handoff.waitForSystemServiceUpdateHandoffs();
+      expect(join).toBeInstanceOf(Promise);
       const result = join!.then(
         () => (state = "settled"),
         (error: unknown) => error,
@@ -123,6 +124,10 @@ socket.end(); process.disconnect?.(); process.stdin.destroy();
       expect(await result).toBe("settled");
       expect(isPidAlive(updaterPid)).toBe(false);
       expect(handoff.waitForSystemServiceUpdateHandoffs()).toBeUndefined();
+      const code = outcome === "SIGTERM" ? 143 : outcome === "failed" ? 7 : 0;
+      expect(await fs.readFile(started.logPath, "utf8")).toContain(
+        `managed update helper completed code=${code}`,
+      );
     } finally {
       // Captured start identities prevent test cleanup from signalling reused PIDs.
       if (updaterPid && sameProcess(updaterPid, updaterStart)) {

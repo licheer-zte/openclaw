@@ -16,7 +16,6 @@ import {
 const suite = createChatFlowE2eSuite();
 const largePngBytes = 2_404_765;
 const smallPngBytes = 25_536;
-
 async function expectImages(images: Locator, count: number) {
   await expect.poll(() => images.count()).toBe(count);
   await expect
@@ -28,15 +27,6 @@ async function expectImages(images: Locator, count: number) {
       ),
     )
     .toBe(true);
-}
-
-function expectExactImageBytes(actual: string[] | null, expected: string[]) {
-  assert(actual, "Expected attachment bytes");
-  expect(actual).toHaveLength(expected.length);
-  // Compare every byte without sending multi-megabyte Base64 diffs to the reporter.
-  expected.forEach((bytes, index) => {
-    expect(actual[index] === bytes, `Attachment ${index + 1} exact bytes`).toBe(true);
-  });
 }
 
 async function readImageBytes(images: Locator) {
@@ -185,36 +175,22 @@ suite.define(() => {
             const payload = (await readOutboxQueue(page))[0]?.attachmentPayload;
             assert(payload, "Expected admitted payload reference");
             expect(await countOutboxPayloads(page)).toBe(1);
-            expectExactImageBytes(await readOutboxPayloadBytes(page, payload.key), expectedBytes);
+            expect(await readOutboxPayloadBytes(page, payload.key)).toEqual(expectedBytes);
             expect(requests[0]?.params).toMatchObject({
               message,
               queueMode: "steer",
               sessionKey: "agent:main:main",
               idempotencyKey: sends[0]?.runId,
             });
-            const params = requests[0]?.params;
-            assert(params && typeof params === "object" && "attachments" in params);
-            const attachments = params.attachments;
-            expect(attachments).toMatchObject(
+            expect(requests[0]?.params).toHaveProperty(
+              "attachments",
               files.map((file) => ({
                 type: "image",
                 origin: "file",
                 mimeType: file.mimeType,
                 fileName: file.name,
+                content: file.buffer.toString("base64"),
               })),
-            );
-            assert(Array.isArray(attachments));
-            expectExactImageBytes(
-              attachments.map((attachment: unknown) => {
-                assert(
-                  attachment &&
-                    typeof attachment === "object" &&
-                    "content" in attachment &&
-                    typeof attachment.content === "string",
-                );
-                return attachment.content;
-              }),
-              expectedBytes,
             );
             expect(sends).toEqual([
               {
@@ -249,7 +225,7 @@ suite.define(() => {
               .locator(".chat-group.user", { hasText: message })
               .locator(".chat-message-image");
             await expectImages(deliveredImages, files.length);
-            expectExactImageBytes(await readImageBytes(deliveredImages), expectedBytes);
+            expect(await readImageBytes(deliveredImages)).toEqual(expectedBytes);
             await expect.poll(() => countOutboxPayloads(page)).toBe(0);
             await expectRequestCountStable(gateway, "chat.send", 1);
           } finally {

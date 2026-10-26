@@ -98,9 +98,9 @@ import { beginContextEngineLogicalTurn } from "../harness/context-engine-turn-be
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import { loadManifestModelCatalog, overlayConfiguredModelCatalog } from "../model-catalog.js";
 import { resolveModelContextWindowProfile } from "../model-context-window.js";
+import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { recordAdmittedModelRoutingDecision } from "../model-routing-decision.js";
 import { resolveRuntimeChannelPromptContext } from "../runtime-capabilities.js";
-import { createUnrecordedScheduledAccountRefusal } from "../scheduled-unrecorded-account.js";
 import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
@@ -429,11 +429,12 @@ async function prepareCliRunContextWithinReadFence(
     effectiveAuthProfileId = undefined;
     authCredential = undefined;
   } else if (params.nativeAuthOnly && effectiveAuthProfileId) {
-    throw createUnrecordedScheduledAccountRefusal({
-      runtime: backendResolved.id,
-      modelRef: `${params.modelProvider ?? params.provider}/${params.model ?? "default"}`,
-      profileId: effectiveAuthProfileId,
-    });
+    const refusal = new Error(
+      "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
+    );
+    // Another model would only bypass the operator's account choice.
+    recordModelFallbackStop(refusal);
+    throw refusal;
   } else if (
     effectiveAuthProfileId &&
     backendAuthPolicy &&
@@ -1663,7 +1664,7 @@ async function prepareCliRunContextWithinReadFence(
       contextWindowInfo,
       systemPrompt,
       systemPromptReport,
-      claudeSkillsPlugin,
+      claudeSkillsPluginArgs: claudeSkillsPlugin.args,
       ...(cliHistoryWriter ? { cliHistoryWriter } : {}),
       resumeContext: sessionPromptContext?.resumeContext,
       transcriptCursor: sessionPromptContext?.transcriptCursor,

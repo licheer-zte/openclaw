@@ -1,9 +1,7 @@
 import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import type { NativeHookRelayBridgeRecord } from "../agents/harness/native-hook-relay-bridge-record.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   openOpenClawStateDatabase,
@@ -282,16 +280,7 @@ export function registerSharedStateWorkerAdmissionTests(
       const canceled = new AbortController();
       const stopped = new Error("synthetic caller stopped");
       let current = true;
-      const posted = createDeferredCore();
-      const postMessage = worker.postMessage.bind(worker);
-      const posts = vi
-        .spyOn(worker, "postMessage")
-        .mockImplementation((request: SqliteWorkerRequest, transfers) => {
-          postMessage(request, transfers);
-          if (request.type === "execute") {
-            posted.resolve();
-          }
-        });
+      const posts = vi.spyOn(worker, "postMessage");
       try {
         await runOpenClawStateWorkerOperation(
           captured,
@@ -301,7 +290,6 @@ export function registerSharedStateWorkerAdmissionTests(
             const pending = scope.execute(relayWrite(1), { signal: canceled.signal });
             const outcome = rejection(pending);
             try {
-              await awaitGateBeforeSettlement(posted.promise, head, "Head write was not posted");
               if (stop === "abort") {
                 canceled.abort(stopped);
               } else if (stop === "revoke") {

@@ -312,8 +312,6 @@ export function createMusicGenerateTool(
                   musicGenerationTaskLifecycle.recordTaskProgress({
                     handle: taskHandle,
                     progressSummary: "Saving generated music",
-                    provider: result.provider,
-                    model: result.model,
                   });
                   const savedTracks = await persistGeneratedMediaBuffers({
                     assets: result.tracks,

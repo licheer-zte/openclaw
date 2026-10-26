@@ -11,6 +11,7 @@ import {
   createdSources,
   getUserMedia,
   MockAudioContext,
+  createSession,
   defaultRelayResponse,
   createClient,
   createConsultClient,
@@ -29,7 +30,8 @@ import {
   requestCallsFor,
   installGatewayRelayTestFixture,
 } from "./gateway-relay.test-support.ts";
-import { createGatewayRelaySession } from "./session.test-support.ts";
+import { GatewayRelayRealtimeTalkTransport } from "./gateway-relay.ts";
+import { prepareRealtimeTalkTestInput } from "./input.test-support.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
@@ -204,7 +206,12 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     vi.mocked(client).request.mockImplementation(async (method) =>
       method === "talk.session.close" ? await closed.promise : defaultRelayResponse(method),
     );
-    const transport = await createTransport({ client });
+    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
+      input: await prepareRealtimeTalkTestInput(),
+      callbacks: {},
+      client,
+      sessionKey: "main",
+    });
 
     await startTransport(transport);
 
@@ -275,9 +282,14 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
           resolveCatalog = resolve;
         }),
     );
-    const transport = await createTransport(
-      { client },
-      { ...createGatewayRelaySession(), model: "gpt-live-1" },
+    const transport = new GatewayRelayRealtimeTalkTransport(
+      { ...createSession(), model: "gpt-live-1" },
+      {
+        input: await prepareRealtimeTalkTestInput(),
+        callbacks: {},
+        client,
+        sessionKey: "main",
+      },
     );
     const startup = transport.start();
     expect(requestCallsFor(client, "talk.catalog")).toEqual([

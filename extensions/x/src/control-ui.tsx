@@ -1,33 +1,19 @@
 /** @jsxImportSource @solidjs/web */
 import { render } from "@solidjs/web";
 import { defineControlUiPlugin, type ControlUiView } from "openclaw/plugin-sdk/control-ui";
-import {
-  createMemo,
-  createSignal,
-  createStore,
-  Errored,
-  For,
-  Loading,
-  reconcile,
-  Show,
-} from "solid-js";
+import { createMemo, createSignal, createStore, Errored, For, Loading, Show } from "solid-js";
 import type { XAllowlistSnapshot } from "./admin.js";
 import "./control-ui.css";
 
 type RepliesState = {
   accountId: string | undefined;
   snapshot: XAllowlistSnapshot | undefined;
+  github: XAllowlistSnapshot["verifiedFromGitHub"];
   username: string;
   busy: boolean;
   notice: string;
   connected: boolean;
   canAdmin: boolean;
-};
-
-type SnapshotIdentityFields = {
-  accountId?: XAllowlistSnapshot["accountId"];
-  userId?: XAllowlistSnapshot["entries"][number]["userId"];
-  xUserId?: NonNullable<XAllowlistSnapshot["verifiedFromGitHub"]>["entries"][number]["xUserId"];
 };
 
 const mountXReplies: ControlUiView = (container, initialContext) => {
@@ -46,6 +32,7 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
   const [view, setView] = createStore<RepliesState>({
     accountId,
     snapshot,
+    github: undefined,
     username,
     busy,
     notice,
@@ -74,9 +61,8 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
     notice = "";
     publish();
     const pending = (async () => {
-      let result: XAllowlistSnapshot | undefined;
       try {
-        result = await host.request<XAllowlistSnapshot>(method, {
+        const result = await host.request<XAllowlistSnapshot>(method, {
           ...(selectedAccount ? { accountId: selectedAccount } : {}),
           ...params,
         });
@@ -104,7 +90,7 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
       } finally {
         if (isCurrent(id)) {
           busy = false;
-          publish(result);
+          publish();
         }
       }
     })();
@@ -323,34 +309,34 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                           </tr>
                         </thead>
                         <tbody>
-                          <For each={currentSnapshot().entries}>
+                          <For each={currentSnapshot().entries} keyed={(row) => row.userId}>
                             {(entry) => (
                               <tr>
                                 <td>
                                   <strong>
-                                    {entry.username ? `@${entry.username}` : entry.userId}
+                                    {entry().username ? `@${entry().username}` : entry().userId}
                                   </strong>
-                                  {entry.name ? <span>{entry.name}</span> : null}
-                                  {entry.username ? <small>{entry.userId}</small> : null}
+                                  {entry().name ? <span>{entry().name}</span> : null}
+                                  {entry().username ? <small>{entry().userId}</small> : null}
                                 </td>
                                 <td>
-                                  {entry.configured
-                                    ? entry.editable
+                                  {entry().configured
+                                    ? entry().editable
                                       ? "Config + stored"
                                       : "Config"
                                     : "Stored"}
                                 </td>
-                                <td>{entry.addedBy ?? "—"}</td>
+                                <td>{entry().addedBy ?? "—"}</td>
                                 <td>
-                                  {entry.editable ? (
+                                  {entry().editable ? (
                                     <button
                                       class="btn"
                                       type="button"
-                                      aria-label={`Remove stored entry for ${entry.username ? `@${entry.username}` : entry.userId}`}
+                                      aria-label={`Remove stored entry for ${entry().username ? `@${entry().username}` : entry().userId}`}
                                       disabled={view.busy}
                                       onClick={() =>
                                         request("x.allowlist.remove", {
-                                          userId: entry.userId,
+                                          userId: entry().userId,
                                         })
                                       }
                                     >
@@ -372,7 +358,7 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                       </p>
                     )}
                   </div>
-                  <Show when={currentSnapshot().verifiedFromGitHub}>
+                  <Show when={view.github}>
                     {(github) => {
                       const lastSync = createMemo(() => {
                         const timestamp = github().lastSyncAt;
@@ -442,26 +428,26 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  <For each={github().entries}>
+                                  <For each={github().entries} keyed={(row) => row.xUserId}>
                                     {(entry) => (
                                       <tr>
                                         <td>
-                                          <strong>@{entry.xHandle}</strong>
-                                          <small>{entry.xUserId}</small>
+                                          <strong>@{entry().xHandle}</strong>
+                                          <small>{entry().xUserId}</small>
                                         </td>
                                         <td>
                                           <a
-                                            href={`https://github.com/${encodeURIComponent(entry.githubLogin)}`}
+                                            href={`https://github.com/${encodeURIComponent(entry().githubLogin)}`}
                                             target="_blank"
                                             rel="noreferrer"
                                           >
-                                            @{entry.githubLogin}
+                                            @{entry().githubLogin}
                                           </a>
                                         </td>
-                                        <td>{entry.permission}</td>
+                                        <td>{entry().permission}</td>
                                         <td>
-                                          <time datetime={new Date(entry.syncedAt).toISOString()}>
-                                            {dateTime.format(entry.syncedAt)}
+                                          <time datetime={new Date(entry().syncedAt).toISOString()}>
+                                            {dateTime.format(entry().syncedAt)}
                                           </time>
                                         </td>
                                       </tr>
@@ -493,26 +479,18 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
     );
   }
 
-  function publish(nextSnapshot?: XAllowlistSnapshot) {
+  function publish() {
     if (!disposed) {
-      setView((current) => {
-        if (nextSnapshot && current.snapshot?.accountId === nextSnapshot.accountId) {
-          // These are the identities of account, manual, and GitHub rows in this snapshot.
-          reconcile(
-            nextSnapshot,
-            (row: SnapshotIdentityFields) => row.accountId ?? row.userId ?? row.xUserId,
-          )(current.snapshot);
-        }
-        return {
-          accountId,
-          snapshot,
-          username,
-          busy,
-          notice,
-          connected: host.connection.connected,
-          canAdmin: host.connection.canAdmin,
-        };
-      });
+      setView(() => ({
+        accountId,
+        snapshot,
+        github: snapshot?.verifiedFromGitHub,
+        username,
+        busy,
+        notice,
+        connected: host.connection.connected,
+        canAdmin: host.connection.canAdmin,
+      }));
     }
   }
 

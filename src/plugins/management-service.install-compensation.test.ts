@@ -259,11 +259,7 @@ describe("managed plugin install transactions", () => {
           const transactionRequest = resolvePluginInstallTransactionRequest(params);
           const copied = await installPackageDir(
             transactionRequest
-              ? requestDeferredPackageDirInstall(
-                  copy,
-                  transactionRequest.assertOwned,
-                  transactionRequest.prepareSettlement,
-                )
+              ? requestDeferredPackageDirInstall(copy, transactionRequest.assertOwned)
               : copy,
           );
           if (!copied.ok) {

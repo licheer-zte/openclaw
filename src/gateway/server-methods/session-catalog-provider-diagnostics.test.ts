@@ -5,6 +5,7 @@ import {
   areDiagnosticsEnabledForProcess,
   setDiagnosticsEnabledForProcess,
 } from "../../infra/diagnostic-events.js";
+import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { catalogLog } from "./session-catalog-log.test-support.js";
@@ -14,7 +15,7 @@ import { catalogHost, catalogProvider } from "./session-catalog.fixtures.test-su
 const privateText = "synthetic-private-catalog-label-and-content";
 let clock = 0;
 let previousDiagnostics: boolean;
-let records: Record<string, unknown>[];
+let records: { fields: Record<string, unknown>; trace: unknown }[];
 
 function listCatalog(id: string, list: SessionCatalogProvider["list"], signal?: AbortSignal) {
   return listSessionCatalogProvider(catalogProvider(id, { label: privateText, list }), { signal });
@@ -30,7 +31,7 @@ beforeEach(() => {
   catalogLog.debug.mockReset();
   catalogLog.warn.mockReset().mockImplementation((message, fields) => {
     if (message === "slow session catalog provider list") {
-      records.push(fields ?? {});
+      records.push({ fields: fields ?? {}, trace: getActiveDiagnosticTraceContext() });
     }
   });
 });
@@ -40,39 +41,47 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("reports queued cancellation separately from active provider completion", async () => {
+it("reports cancelled waiters without releasing an aborted active provider", async () => {
   const gate = createDeferredCore<SessionCatalogHost[]>();
   const activeOwner = new AbortController();
   const active = Array.from({ length: 16 }, (_, index) =>
     listCatalog(`active-catalog-${index}`, () => gate.promise, activeOwner.signal),
   );
   const queuedOwner = new AbortController();
+  const list = vi.fn(async () => []);
   const reason = new Error(privateText);
-  const cancelled = listCatalog("cancelled-catalog", async () => [], queuedOwner.signal).catch(
+  const cancelled = listCatalog("cancelled-catalog", list, queuedOwner.signal).catch(
     (error: unknown) => error,
   );
+  let successor: Promise<SessionCatalogHost[]> | undefined;
   try {
     clock = 1_500;
     queuedOwner.abort(reason);
     await expect(cancelled).resolves.toBe(reason);
+    expect(list).not.toHaveBeenCalled();
     expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({
+    expect(records[0]?.fields).toMatchObject({
       elapsedMs: 1_500,
       admitted: false,
       providerInvoked: false,
       outcome: "rejected",
       signalAborted: true,
     });
-    for (const key of ["admissionWaitMs", "providerElapsedMs", "completionDelayMs"]) {
-      expect(records[0]).not.toHaveProperty(key);
-    }
+    expect(records[0]?.fields).not.toHaveProperty("admissionWaitMs");
+    expect(records[0]?.fields).not.toHaveProperty("providerElapsedMs");
+    expect(records[0]?.fields).not.toHaveProperty("completionDelayMs");
     activeOwner.abort(reason);
+    successor = listCatalog("successor-catalog", list);
+    await Promise.resolve();
+    expect(list).not.toHaveBeenCalled();
+    expect(records).toHaveLength(1);
     clock = 2_300;
     gate.resolve([]);
-    await Promise.all(active);
-    expect(records).toHaveLength(17);
+    await Promise.all([...active, successor]);
+    expect(list).toHaveBeenCalledOnce();
+    expect(records.filter(({ fields }) => fields.providerInvoked)).toHaveLength(16);
     for (const record of records.slice(1)) {
-      expect(record).toMatchObject({
+      expect(record.fields).toMatchObject({
         outcome: "resolved",
         signalAborted: true,
         providerInvoked: true,
@@ -82,7 +91,7 @@ it("reports queued cancellation separately from active provider completion", asy
     expect(JSON.stringify(records)).not.toContain(privateText);
   } finally {
     gate.resolve([]);
-    await Promise.allSettled([...active, cancelled]);
+    await Promise.allSettled([...active, cancelled, ...(successor ? [successor] : [])]);
   }
 });
 
@@ -96,6 +105,7 @@ it("preserves a synchronous failure when its diagnostic sink throws", async () =
     throw failure;
   };
   await expect(listCatalog("failed-catalog", list)).rejects.toBe(failure);
+  expect(catalogLog.warn).toHaveBeenCalledOnce();
   expect(vi.mocked(catalogLog.warn).mock.calls[0]?.[1]).toMatchObject({
     providerInvoked: true,
     outcome: "rejected",
@@ -124,12 +134,13 @@ it("bounds host inspection and omits oversized provider identity", async () => {
     }),
   ).resolves.toBe(hosts);
   expect(records).toHaveLength(1);
-  expect(records[0]).toMatchObject({
+  expect(records[0]?.trace).toBeUndefined();
+  expect(records[0]?.fields).toMatchObject({
     returnedHostCount: 513,
     hostCountsComplete: false,
     returnedGatewayHostCount: 512,
     returnedNodeHostCount: 0,
   });
-  expect(records[0]).not.toHaveProperty("providerIdHash");
+  expect(records[0]?.fields).not.toHaveProperty("providerIdHash");
   expect(JSON.stringify(records)).not.toContain(privateText);
 });

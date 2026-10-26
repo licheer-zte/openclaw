@@ -47,29 +47,24 @@ export function recordLifecycleFence(
 }
 
 export function isMainRestartRecoveryCandidate(
-  entry: {
-    spawnDepth?: unknown;
-    subagentRole?: unknown;
-    mainRestartRecovery?: unknown;
-    restartRecoverySourceIngress?: unknown;
-    restartRecoveryDeliverySourceRunId?: unknown;
-  },
+  entry: { spawnDepth?: unknown; subagentRole?: unknown; mainRestartRecovery?: unknown },
   sessionKey: string,
 ): boolean {
-  // An admitted requester wake continues the existing session, even when that
-  // session is a child. Its saved input and receipt belong to session recovery.
-  const requesterSettle =
-    entry.restartRecoverySourceIngress === "internal" &&
-    typeof entry.restartRecoveryDeliverySourceRunId === "string" &&
-    entry.restartRecoveryDeliverySourceRunId.startsWith("announce:requester-settle:");
-  return Boolean(
+  // A child can run independent turns after its registry task has finished.
+  // The interruption owner assigns those turns the ordinary session recovery cycle.
+  if (entry.mainRestartRecovery && !isCronSessionKey(sessionKey) && !isAcpSessionKey(sessionKey)) {
+    return true;
+  }
+  if (typeof entry.spawnDepth === "number" && entry.spawnDepth > 0) {
+    return false;
+  }
+  if (entry.subagentRole != null) {
+    return false;
+  }
+  return (
+    !isSubagentSessionKey(sessionKey) &&
     !isCronSessionKey(sessionKey) &&
-    !isAcpSessionKey(sessionKey) &&
-    (entry.mainRestartRecovery ||
-      requesterSettle ||
-      (!(typeof entry.spawnDepth === "number" && entry.spawnDepth > 0) &&
-        entry.subagentRole == null &&
-        !isSubagentSessionKey(sessionKey))),
+    !isAcpSessionKey(sessionKey)
   );
 }
 

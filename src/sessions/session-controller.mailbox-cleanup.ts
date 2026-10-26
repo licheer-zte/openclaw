@@ -130,11 +130,7 @@ export function clearSessionControllerMailbox(
         (source) => source.controllerInput === input,
       );
       for (const [key, record] of mailbox.recentSources) {
-        if (
-          record.inputInstance === input.instance &&
-          !input.custody.adopted &&
-          input.phase !== "consumed"
-        ) {
+        if (record.input === input && !input.custody.adopted && input.phase !== "consumed") {
           mailbox.recentSources.delete(key);
         }
       }

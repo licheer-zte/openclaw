@@ -13,10 +13,7 @@ import {
 import "../../components/openclaw-mascot.tsx";
 import type { SidebarAttentionElementAttributes } from "../../components/sidebar-attention-element.ts";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
-import {
-  channelSnapshotHasActiveChannel,
-  createChannelCapability,
-} from "../../lib/channels/index.ts";
+import { channelSnapshotHasActiveChannel } from "../../lib/channels/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -40,9 +37,8 @@ const SidebarAttention = lazy(() => import("../../components/sidebar-attention.t
 const propertyReceipts = new WeakMap<HTMLElement, (key: keyof Props) => void>();
 function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
   const context = useApplication();
-  const channelCapability = context.acquireChannels(createChannelCapability);
   const gateway = projectGateway(context.gateway);
-  const channels = projectChannels(channelCapability);
+  const channels = projectChannels(context.channels);
   const store = projectOwner(host.store, (source) => source);
   const presentation = createCustodianActions(() => host.store);
   const historyAvailable = createMemo(() => {
@@ -81,7 +77,7 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
   });
   let disposed = false;
   function refreshChannelInventory() {
-    const state = channelCapability.state;
+    const state = context.channels.state;
     if (
       host.onboarding &&
       !host.store.channelOnboardingNudgeClosed &&
@@ -90,7 +86,7 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
       !state.channelsLoading &&
       !state.channelsError
     ) {
-      void channelCapability.refresh(false);
+      void context.channels.refresh(false);
     }
   }
   onSettled(() => {
@@ -124,7 +120,7 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
         props.onboarding &&
         !props.store.channelOnboardingNudgeClosed
       ) {
-        void channelCapability.refresh(false);
+        void context.channels.refresh(false);
       }
     },
   });
@@ -209,7 +205,7 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
           <Errored
             fallback={(_error, reset) =>
               channelError(false, () => {
-                void channelCapability.refresh(false);
+                void context.channels.refresh(false);
                 reset();
               })
             }

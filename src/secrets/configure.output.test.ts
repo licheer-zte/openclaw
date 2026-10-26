@@ -1,13 +1,14 @@
 import fs from "node:fs/promises";
 import { expect, it, vi } from "vitest";
 import {
-  createApiKeyCredential as apiKey,
+  createApiKeyCredential,
   createAuthProfileStoreFixture,
 } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import { noteCommittedSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import { readPersistedSharedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import { runSecretsCommand } from "../cli/secrets-cli-output.js";
-import { createCliTtyMock, getMockCallOutput } from "../cli/test-runtime-capture.js";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
+import { defaultRuntime } from "../runtime.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -21,20 +22,22 @@ it.each(["plaintext", "references", "missing"])(
     withOpenClawTestState({ layout: "home" }, async (state) => {
       await state.writeConfig({});
       const keyRef = { source: "env" as const, provider: "default", id: "OPENAI_API_KEY" };
-      const sharedStore = createAuthProfileStoreFixture({
-        "openai:ref": { type: "api_key", provider: "openai", keyRef },
-        "openai:dollar": apiKey("openai", "$OPENAI_API_KEY"),
-        "openai:braced": apiKey("openai", "${OPENAI_API_KEY}"),
-        ...(kind === "plaintext"
+      const sharedStore = createAuthProfileStoreFixture(
+        kind === "plaintext"
           ? {
-              "openai:plaintext": apiKey("openai", "synthetic-plaintext-value"),
+              "openai:plaintext": createApiKeyCredential("openai", "synthetic-plaintext-value"),
               "openai:residue": {
-                ...apiKey("openai", "synthetic-residue-value"),
+                ...createApiKeyCredential("openai", "synthetic-residue-value"),
                 keyRef,
               },
+              "openai:reference": createApiKeyCredential("openai", "$OPENAI_API_KEY"),
             }
-          : {}),
-      });
+          : {
+              "openai:ref": { type: "api_key", provider: "openai", keyRef },
+              "openai:dollar": createApiKeyCredential("openai", "$OPENAI_API_KEY"),
+              "openai:braced": createApiKeyCredential("openai", "${OPENAI_API_KEY}"),
+            },
+      );
       noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, state.env);
       if (kind !== "missing") {
         const { db } = openOpenClawStateDatabase({ env: state.env });
@@ -48,8 +51,15 @@ it.each(["plaintext", "references", "missing"])(
       }
       const configBefore = await fs.readFile(state.configPath, "utf8");
       const ttyMock = createCliTtyMock([process.stdin]);
-      using output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
-      using errors = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      let stdout = "";
+      let stderr = "";
+      const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value, space) => {
+        stdout += `${JSON.stringify(value, null, space && space > 0 ? space : undefined)}\n`;
+      });
+      const error = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+        stderr += String(chunk);
+        return true;
+      });
       try {
         ttyMock.set(true);
         await expect(
@@ -61,11 +71,11 @@ it.each(["plaintext", "references", "missing"])(
           ),
         ).rejects.toMatchObject({ code: 1 });
       } finally {
+        json.mockRestore();
+        error.mockRestore();
         ttyMock.restore();
       }
 
-      const stdout = getMockCallOutput(output);
-      const stderr = getMockCallOutput(errors);
       expect(JSON.parse(stdout)).toEqual({
         ok: false,
         error: {
@@ -74,6 +84,8 @@ it.each(["plaintext", "references", "missing"])(
         },
       });
       if (kind === "plaintext") {
+        expect(stderr.match(/Shared auth-profile store/g)).toHaveLength(1);
+        expect(stderr).toContain("Shared auth-profile store");
         expect(stderr).toContain("2 plaintext credential(s)");
         expect(stderr).toContain("cannot migrate shared credentials");
       } else {

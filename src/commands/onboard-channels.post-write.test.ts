@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createExitThrowingRuntime } from "../../test/helpers/auth-wizard.js";
 import type { ChannelSetupWizardAdapter } from "../channels/plugins/setup-wizard-types.js";
@@ -30,10 +29,13 @@ afterEach(() => state?.cleanup());
 it.each(["plugin", "wizard"] as const)(
   "resolves the exact %s commit after config selection changes",
   async (writer) => {
-    const messages = { responsePrefix: "${SETUP_REPLY_PREFIX}" };
-    await state.writeConfig({ messages });
+    const authored = {
+      messages: { responsePrefix: "${SETUP_REPLY_PREFIX}" },
+      gateway: { port: 19001 },
+    };
+    await state.writeConfig({ messages: authored.messages });
     const before = await readConfigFileSnapshot();
-    const next = { ...before.sourceConfig, gateway: { port: 19001 } };
+    const next = { ...before.sourceConfig, gateway: authored.gateway };
     const afterConfigWritten = vi.fn<AfterConfigWritten>(async () => {});
     hooks.onPostWriteHook(
       createChannelOnboardingPostWriteHook({
@@ -52,16 +54,22 @@ it.each(["plugin", "wizard"] as const)(
         : await writeWizardConfigFile(next, { baseHash: before.hash });
     expect(afterConfigWritten).not.toHaveBeenCalled();
     const persisted = await readConfigFileSnapshot();
-    expect(JSON.parse(persisted.raw ?? "")).toMatchObject({ messages, gateway: next.gateway });
+    expect(JSON.parse(persisted.raw ?? "")).toMatchObject(authored);
+    expect({ config: committed.nextConfig, hash: committed.persistedHash }).toEqual({
+      config: persisted.sourceConfig,
+      hash: persisted.hash,
+    });
+    expect(committed.nextConfig.messages?.responsePrefix).toBe("resolved prefix");
     process.env.OPENCLAW_CONFIG_PATH = await state.writeJson("decoy.json", {});
 
     await hooks.runPostWriteHooks(committed.path);
 
-    expect(afterConfigWritten.mock.lastCall?.[0]).toMatchObject({
+    const written = afterConfigWritten.mock.lastCall?.[0];
+    expect(written).toMatchObject({
       cfg: { messages: { responsePrefix: "resolved prefix" }, gateway: { port: 19001 } },
       accountId: "ops",
     });
-    expect(afterConfigWritten.mock.lastCall?.[0].previousCfg).toEqual(before.sourceConfig);
+    expect(written?.previousCfg).toEqual(before.sourceConfig);
     expect(runtime.error).not.toHaveBeenCalled();
   },
 );
@@ -103,3 +111,4 @@ it("rechecks authority after the awaited read and retains rejected hooks", async
   await hooks.runPostWriteHooks(state.configPath);
   expect(hook).toHaveBeenCalledOnce();
 });
+import assert from "node:assert/strict";

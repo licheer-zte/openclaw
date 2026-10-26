@@ -1,5 +1,5 @@
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
-import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
+import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   responsesContinuationPrefixFingerprint,
@@ -16,6 +16,7 @@ import {
   isProviderReplayContext,
   providerReplayContextMatches,
 } from "./provider-replay-context.js";
+import { sha256Hex } from "./transport-utils.js";
 
 type ReplayIdentity = NonNullable<Parameters<typeof buildProviderReplayContext>[1]>;
 
@@ -29,10 +30,9 @@ function contextFingerprint(input: readonly unknown[], output: readonly unknown[
     const { id: _id, status: _status, ...content } = item;
     return [content];
   });
-  return sha256StableValue({
-    prefix: responsesContinuationPrefixFingerprint(input, output),
-    reasoning,
-  }).digest;
+  return sha256Hex(
+    stableStringify({ prefix: responsesContinuationPrefixFingerprint(input, output), reasoning }),
+  );
 }
 
 /** Bind measured usage to the admitted replay prefix, without copying its content. */

@@ -532,12 +532,13 @@ it("serves personal account RPCs without caller-thread SQL or credentials", ({ s
       }
       return result;
     });
-    resolveMethod.mockResolvedValue({
+    const authMethod: ProviderAuthMethod = {
       id: "token",
       label: "Synthetic token",
       kind: "token",
       run: async () => ({ profiles: [] }),
-    } satisfies ProviderAuthMethod);
+    };
+    resolveMethod.mockResolvedValue(authMethod);
     vi.spyOn(providerAuth, "runProviderPluginAuthMethodUnpersisted").mockResolvedValue({
       profiles: [{ profileId: "ignored-shared-id", credential }],
     });
@@ -559,7 +560,9 @@ it("serves personal account RPCs without caller-thread SQL or credentials", ({ s
         provider: "synthetic",
         method: "token",
       });
-      assert(isRecord(started) && typeof started.connectId === "string");
+      if (!isRecord(started) || typeof started.connectId !== "string") {
+        throw new Error("personal account sign-in did not start");
+      }
       await settlement.checkpoint(
         committed.promise,
         "Personal account sign-in settled before committing",
@@ -573,11 +576,13 @@ it("serves personal account RPCs without caller-thread SQL or credentials", ({ s
         "Personal account sign-in settled without publishing a connected account",
       );
       const connected = await rpc("users.authConnect.status", { connectId: started.connectId });
-      assert(
-        isRecord(connected) &&
-          connected.status === "connected" &&
-          typeof connected.authProfileId === "string",
-      );
+      if (
+        !isRecord(connected) ||
+        connected.status !== "connected" ||
+        typeof connected.authProfileId !== "string"
+      ) {
+        throw new Error("personal account did not connect");
+      }
       const { authProfileId } = connected;
       const link = { provider: "synthetic", authProfileId };
       expect(connected.links).toMatchObject([link]);

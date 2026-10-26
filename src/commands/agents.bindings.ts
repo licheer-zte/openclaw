@@ -1,8 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
@@ -25,9 +22,8 @@ function bindingMatchKey(match: AgentRouteBinding["match"]) {
 
 function bindingMatchIdentityKey(match: AgentRouteBinding["match"]) {
   const roles = Array.isArray(match.roles) ? normalizeSortedUniqueStringEntries(match.roles) : [];
-  // Match runtime routing's trim/lowercase identity without expanding chat aliases.
   return JSON.stringify([
-    normalizeLowercaseStringOrEmpty(match.channel),
+    match.channel,
     match.peer?.kind ?? "",
     match.peer?.id ?? "",
     match.guildId ?? "",

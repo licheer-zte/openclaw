@@ -69,8 +69,6 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
       mode !== "private-fork" &&
       mode !== "update-generation" &&
       mode !== "async" &&
-      mode !== "staged-sync" &&
-      mode !== "staged-async" &&
       mode !== "metadata" &&
       mode !== "consolidated" &&
       mode !== "reclaim" &&
@@ -85,11 +83,7 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
   try {
     if (
       args.length > 4 ||
-      (args[3] !== undefined &&
-        mode !== "sync" &&
-        mode !== "staged-sync" &&
-        mode !== "metadata" &&
-        mode !== "private-fork")
+      (args[3] !== undefined && mode !== "sync" && mode !== "metadata" && mode !== "private-fork")
     ) {
       throw new Error("SQLite source identity is supported only for sync or metadata snapshots");
     }
@@ -97,10 +91,6 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
       args[3] === undefined || mode === "private-fork"
         ? undefined
         : readDatabaseFileIdentity(JSON.parse(args[3]));
-    const staged = mode === "staged-sync" || mode === "staged-async";
-    if (staged && !stagingRoot) {
-      throw new Error("SQLite staged snapshot requires its owner-allocated directory");
-    }
     if (mode === "update-generation") {
       const { readUpdateDatabaseGenerations } = await import("./update-database-generations.js");
       return {
@@ -211,11 +201,10 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
         throw error;
       }
     } else {
-      const destination = staged && stagingRoot ? { directory: stagingRoot } : stagingRoot;
       prepared =
-        mode === "sync" || mode === "staged-sync"
-          ? await prepareSqliteReadOnlyCopyInProcess(pathname, destination, expectedSourceIdentity)
-          : await prepareSqliteReadOnlyLocationInProcess(pathname, destination);
+        mode === "sync"
+          ? await prepareSqliteReadOnlyCopyInProcess(pathname, stagingRoot, expectedSourceIdentity)
+          : await prepareSqliteReadOnlyLocationInProcess(pathname, stagingRoot);
     }
     releaseSnapshotTempDirectory(prepared.cleanupRoot ?? path.dirname(prepared.location));
     return { ok: true, location: prepared.location };

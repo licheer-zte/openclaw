@@ -16,8 +16,6 @@ import type {
 import {
   resolveWorkerWorkspaceGitAuthor,
   validateWorkspaceSyncRequest,
-  workerWorkspaceCommandSucceeded,
-  workspaceSyncError,
 } from "./workspace-sync-helpers.js";
 
 const GIT_TIMEOUT_MS = 60_000;
@@ -188,31 +186,17 @@ export function createNodeWorkerWorkspaceFallback(exec: NodeWorkerRepositoryExec
         inspection.identity,
         expectedManifestRef,
       );
-      if (prepared.kind === "failed") {
-        // A partial origin clone is not retained worker history. Clear it before
-        // the canonical transfer preserves existing Git metadata during replacement.
-        const cleared = await exec({
-          argv: ["node", "-e", ""],
-          resetWorkspace: true,
-          timeoutMs: GIT_TIMEOUT_MS,
-          transportRetry: "never",
-          assertCurrent: request.authorize,
-        });
-        request.authorize?.();
-        if (!workerWorkspaceCommandSucceeded(cleared)) {
-          throw workspaceSyncError(cleared);
-        }
-        return { kind: "fallback", reason: prepared.reason };
-      }
-      return {
-        kind: "synced",
-        seeded: prepared.seeded,
-        result: {
-          mode: "git",
-          remoteWorkspaceDir: prepared.result.remoteWorkspaceDir,
-          manifestRef: prepared.result.manifestRef,
-        },
-      };
+      return prepared.kind === "prepared"
+        ? {
+            kind: "synced",
+            seeded: prepared.seeded,
+            result: {
+              mode: "git",
+              remoteWorkspaceDir: prepared.result.remoteWorkspaceDir,
+              manifestRef: prepared.result.manifestRef,
+            },
+          }
+        : { kind: "fallback", reason: prepared.reason };
     },
     async finalizeSync(
       request: WorkerLocalWorkspaceSyncRequest,

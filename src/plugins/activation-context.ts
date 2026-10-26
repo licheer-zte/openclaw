@@ -1,10 +1,24 @@
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
-import { createPluginActivationSource, normalizePluginsConfig } from "./config-state.js";
+import {
+  createPluginActivationSource,
+  normalizePluginsConfig,
+  type NormalizedPluginsConfig,
+  type PluginActivationConfigSource,
+} from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
+
+type PluginActivationInputs = {
+  rawConfig?: OpenClawConfig;
+  config?: OpenClawConfig;
+  normalized: NormalizedPluginsConfig;
+  activationSourceConfig?: OpenClawConfig;
+  activationSource: PluginActivationConfigSource;
+  autoEnabledReasons: Record<string, string[]>;
+};
 
 type PluginActivationParams = {
   rawConfig?: OpenClawConfig;
@@ -74,7 +88,9 @@ export function withActivatedPluginIds(params: {
   };
 }
 
-export function resolveBundledCompatActivationInputs(params: BundledCompatActivationParams) {
+export function resolveBundledCompatActivationInputs(
+  params: BundledCompatActivationParams,
+): PluginActivationInputs {
   const env = params.env ?? process.env;
   const rawConfig = params.rawConfig ?? params.resolvedConfig;
   let resolvedConfig = params.resolvedConfig ?? params.rawConfig;

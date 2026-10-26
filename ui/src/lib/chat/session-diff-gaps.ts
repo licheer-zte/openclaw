@@ -7,6 +7,15 @@ export type SessionDiffGapDirection = "down" | "up" | "all";
 const GAP_CHUNK_SIZE = 20;
 const EXPAND_WHOLE_GAP_MAX = 25;
 
+function fileMatchesPatch(lines: readonly DiffLine[], fileLines: readonly string[]): boolean {
+  return lines.every(
+    (line) =>
+      (line.kind !== "add" && line.kind !== "ctx") ||
+      line.lineNo === undefined ||
+      fileLines[line.lineNo - 1] === line.text,
+  );
+}
+
 /** Replaces part or all of one unchanged-lines marker with working-tree context. */
 export function expandSessionDiffGap(
   lines: readonly DiffLine[],
@@ -22,12 +31,7 @@ export function expandSessionDiffGap(
     target.newStart < 1 ||
     target.count < 1 ||
     gapEnd > fileLines.length ||
-    !lines.every(
-      (line) =>
-        (line.kind !== "add" && line.kind !== "ctx") ||
-        line.lineNo === undefined ||
-        fileLines[line.lineNo - 1] === line.text,
-    )
+    !fileMatchesPatch(lines, fileLines)
   ) {
     return null;
   }

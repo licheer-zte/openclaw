@@ -48,8 +48,6 @@ type SidebarSubtitleValue = ReturnType<typeof resolveSidebarSessionSubtitle>;
 
 type SidebarProjectionInput = {
   rows: SidebarRecentSession[];
-  /** Personal placements participate in disclosure lifetime, not canonical grouping. */
-  referencedRows?: readonly SidebarRecentSession[];
   sections?: SidebarSessionSection<SidebarRecentSession>[];
   /** Personal pins render in the Pinned section above these sections, never twice. */
   pinnedKeys?: ReadonlySet<string>;
@@ -197,11 +195,6 @@ export class SidebarSessionProjection {
     const presentation = [
       host.navigationView,
       railRows.map(({ children: _children, ...row }) => row),
-      // Off-page group descriptors must admit repaint even when the roster tree is unchanged.
-      sessionsVisible &&
-        (context?.navigation.snapshot.personalSessionGroups ?? []).map((group) =>
-          group.sessionKeys.map((key) => zone.sessionRows.get(key)),
-        ),
       host.connected,
       this.helloPresentation.readRevision(
         () => [context?.gateway.snapshot.hello, context?.gateway.snapshot.pluginCapabilities],
@@ -547,18 +540,15 @@ export class SidebarSessionProjection {
     this.previousCollapsedSections = new Set(input.collapsedSections);
 
     const staleKeys = new Set([...this.children.keys(), ...this.heldSubtitles.keys()]);
-    const observed = new Set<string>();
-    const pending = [...input.rows, ...(input.referencedRows ?? [])];
-    for (const session of pending) {
-      if (observed.has(session.key)) {
-        continue;
-      }
-      observed.add(session.key);
+    const observeTree = (session: SidebarRecentSession) => {
       staleKeys.delete(session.key);
       this.children.observe(session, input.listLoaded);
       this.observeSubtitle(session, input.subtitle);
-      pending.push(...session.children);
-    }
+      for (const child of session.children) {
+        observeTree(child);
+      }
+    };
+    input.rows.forEach(observeTree);
     for (const key of staleKeys) {
       this.children.delete(key);
       this.heldSubtitles.delete(key);

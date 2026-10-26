@@ -2,7 +2,7 @@ import { parentPort, workerData, type MessagePort } from "node:worker_threads";
 import { coerceErrorMessage, toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { installDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
-import { bindPostgresPool } from "../infra/postgres-sync/pool-state.js";
+import { bindPostgresPool } from "../infra/postgres-sync/pool.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { withSqliteDatabaseAdmissionExchange } from "../infra/sqlite-database-admission.js";
@@ -13,15 +13,10 @@ import {
 } from "../infra/sqlite-error-diagnostics.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { exchangeSqliteDatabaseAdmissions } from "../infra/sqlite-worker-database-admission-relay.js";
-import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { serveWorkerMemorySamples } from "../infra/worker-memory.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { openExistingStatePostgresConnection } from "./openclaw-state-db-engine.js";
-import {
-  openTrackedStateDatabase,
-  closeTrackedStateDatabase,
-  readTrackedStateDatabaseIdentity,
-} from "./openclaw-state-db-handle.js";
+import { openTrackedStateDatabase, closeTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import {
   createOpenClawStateLeaseLostError,
   OpenClawStateLeaseError,
@@ -121,14 +116,6 @@ function startHeartbeat(
     throw new Error("state lease heartbeat startup deadline expired or owner stopped");
   }
   let db: EngineConnection;
-  function assertDatabaseAccess(): void {
-    assertStateDatabaseAccessAllowed(params.path);
-    const identity = readTrackedStateDatabaseIdentity(db);
-    if (!identity) {
-      throw new Error("State lease heartbeat database has no admitted physical identity");
-    }
-    assertExistingDatabaseIdentity(params.path, params.expectedIdentity, identity.birthtime);
-  }
   let processOwner = params.processOwner;
   let heartbeat: ReturnType<typeof setTimeout> | undefined;
   let closed = false;
@@ -139,7 +126,7 @@ function startHeartbeat(
     intervalMs: params.heartbeatMs,
     execute: (operation) =>
       withRenewalProgress(() => {
-        assertDatabaseAccess();
+        assertStateDatabaseAccessAllowed(params.path);
         return operation();
       }),
     complete: (outcome) =>
@@ -225,7 +212,7 @@ function startHeartbeat(
         runSqliteImmediateTransactionSync(
           db,
           () => {
-            assertDatabaseAccess();
+            assertStateDatabaseAccessAllowed(params.path);
             if (Atomics.load(shared, state.status) >= state.closed) {
               return undefined;
             }
@@ -286,7 +273,6 @@ function startHeartbeat(
         }
         return Number(Atomics.load(shared, state.expiresAt));
       }
-      assertDatabaseAccess();
       expiresAt = readOpenClawStateLeaseExpiry(db, params.identity);
     }
     observeDurableExpiry(expiresAt);
@@ -413,10 +399,9 @@ function startHeartbeat(
       const expiresAt =
         request.operation === "renew"
           ? renew(true, path)
-          : withDatabaseAdmission(() => {
-              assertDatabaseAccess();
-              return observeDurableExpiry(readOpenClawStateLeaseExpiry(db, params.identity));
-            });
+          : withDatabaseAdmission(() =>
+              observeDurableExpiry(readOpenClawStateLeaseExpiry(db, params.identity)),
+            );
       if (expiresAt === undefined) {
         outcome = "no-current-owned-unexpired-row";
         throw createOpenClawStateLeaseLostError(params.identity, undefined, observeLoss());

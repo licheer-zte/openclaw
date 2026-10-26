@@ -23,7 +23,6 @@ export type IconAttributes = Readonly<{
   y1?: string | number;
   y2?: string | number;
   points?: string;
-  transform?: string;
   id?: string;
   offset?: string | number;
 }>;

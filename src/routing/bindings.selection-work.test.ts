@@ -18,16 +18,15 @@ const tracked = (entry: AgentRouteBinding) =>
   Object.defineProperty(entry, "type", { get: typeReads });
 
 function countRoleVisits<T>(memberRoleIds: string[], read: () => T) {
-  let visits = 0;
+  const visit = vi.fn((role: string) => role);
   const iter = vi.spyOn(memberRoleIds, Symbol.iterator).mockImplementation(function* () {
     for (const role of memberRoleIds.values()) {
-      visits++;
-      yield role;
+      yield visit(role);
     }
     return undefined;
   });
   try {
-    return { value: read(), iterations: iter.mock.calls.length, visits };
+    return { value: read(), iterations: iter.mock.calls.length, visits: visit.mock.calls.length };
   } finally {
     iter.mockRestore();
   }
@@ -52,6 +51,7 @@ it.each(["peerless", "default"] as const)(
         : resolveDefaultAgentBoundAccountId(cfg, " MATRIX ");
     expect(result).toBe("account-0");
     expect(cfg.bindings).toBe(bindings);
+    expect(bindings).toHaveLength(10_004);
     expect(typeReads).toHaveBeenCalledTimes(1);
   },
 );
@@ -88,6 +88,7 @@ it.each([true, false])("prepares caller roles once only for matching scopes (%s)
     visits: matching ? 1000 : 0,
   });
   expect(cfg.bindings).toBe(bindings);
+  expect(bindings).toHaveLength(matching ? 1000 : 3);
   expect(memberRoleIds).toEqual(expectedRoles);
   if (matching) {
     memberRoleIds[999] = "other-role";

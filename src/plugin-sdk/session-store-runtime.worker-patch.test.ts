@@ -109,6 +109,10 @@ it.each(["snapshot", "authority"] as const)("rejects changed %s", async (change)
       change === "snapshot" ? /changed/ : "Session operation revoked",
     );
     expect(beforeCommit).toHaveBeenCalledOnce();
+    expect(delivery.commands).toEqual([
+      "session.entry.patch.prepare",
+      "session.entry.patch.commit",
+    ]);
     expect(prepare).toHaveBeenCalledOnce();
     if (change === "snapshot") {
       expect(fixture.read()?.label).toBe("concurrent write");

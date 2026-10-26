@@ -14,7 +14,6 @@ import {
   createLegacyStateMigrationStepReceipt,
   DoctorStateMigrationRefusalError,
 } from "./state-migrations.messages.js";
-import { migrationStepInput } from "./state-migrations.step.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -46,7 +45,14 @@ it.each([
     { deferInspections: false },
   );
   const receipt = createLegacyStateMigrationStepReceipt(
-    migrationStepInput("media-persistence", "required", "checkpoint-required"),
+    {
+      id: "media-persistence",
+      phase: "shared",
+      source: [],
+      target: [],
+      requiredness: "required",
+      reversibility: "checkpoint-required",
+    },
     await migrateLegacyMediaPersistence({ env }),
   );
   expect(receipt.outcome).toBe("refused");

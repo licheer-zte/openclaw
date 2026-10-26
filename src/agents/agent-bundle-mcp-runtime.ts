@@ -139,7 +139,7 @@ function createServerMcpRuntime(
     : undefined;
   let nativeViewCount = 0;
   const nativeChildren = new Set<ServerMcpRuntime>();
-  let awaitSessionRecovery = false;
+  let awaitSseRecovery = false;
   let disposal: Promise<void> | undefined;
   let cleanupFailed = false;
   const pendingDisposals = new Set<Promise<void>>();
@@ -258,13 +258,15 @@ function createServerMcpRuntime(
         }
       }
       if (recycleReason) {
-        awaitSessionRecovery ||= sessionExpired;
         serverBackoff = undefined;
         scheduleCatalogServerRetry(recycleReason);
-        logWarn(`bundle-mcp: recycling server "${serverName}" after ${recycleReason}`);
+        const timedOut = recycleReason === "repeated request timeouts";
+        logWarn(
+          `bundle-mcp: recycling server "${serverName}" after ${timedOut ? "repeated timeouts" : "an expired HTTP session"}`,
+        );
         void retireSessionIfCurrent(session).catch((retireError: unknown) => {
           logWarn(
-            `bundle-mcp: failed to retire server "${serverName}" after ${recycleReason}: ${redactMcpDiagnosticError(retireError)}`,
+            `bundle-mcp: failed to retire ${timedOut ? "timed-out" : "expired-session"} server "${serverName}": ${redactMcpDiagnosticError(retireError)}`,
           );
         });
       }
@@ -446,7 +448,7 @@ function createServerMcpRuntime(
             !createdSession.retiring &&
             currentSession === createdSession
           ) {
-            awaitSessionRecovery ||= createdSession.transportType === "sse";
+            awaitSseRecovery ||= createdSession.transportType === "sse";
             scheduleCatalogServerRetry("mcp transport closed");
             logWarn(`bundle-mcp: server "${serverName}" closed; next request reconnects`);
           }
@@ -613,7 +615,7 @@ function createServerMcpRuntime(
       catalog = nextCatalog;
       if (!nextCatalog.diagnostics?.length) {
         lastListedCatalog = nextCatalog;
-        awaitSessionRecovery = false;
+        awaitSseRecovery = false;
       }
       catalogRetryAfterMs = nextCatalog.diagnostics?.length
         ? (startupRetryAfterMs ?? Date.now() + BUNDLE_MCP_CATALOG_FAILURE_RETRY_MS)
@@ -678,7 +680,7 @@ function createServerMcpRuntime(
     const signal = getSessionMcpRequestSignal();
     signal?.throwIfAborted();
     await racePromiseWithAbortSignal(getCatalog(), signal);
-    if (awaitSessionRecovery && catalogInFlight) {
+    if (awaitSseRecovery && catalogInFlight) {
       await racePromiseWithAbortSignal(catalogInFlight, signal);
     }
     return requireConnectedSession();

@@ -1,4 +1,9 @@
-import { ControlUiGitHubError, fetchGitHubJsonPage, isRecord } from "./github-api.js";
+import {
+  ControlUiGitHubError,
+  fetchGitHubApi,
+  readGitHubJsonResponse,
+  isRecord,
+} from "./github-api.js";
 import type { ControlUiGitHubPreviewIdentity } from "./preview-contract.js";
 import type { GitHubTarget } from "./targets.js";
 
@@ -49,16 +54,18 @@ export async function readSessionGitHubRepository(
   fetchImpl: typeof fetch,
   signal?: AbortSignal,
 ) {
-  const { value } = await fetchGitHubJsonPage(
-    sessionGitHubRepositoryUrl(identity),
-    fetchImpl,
-    identity.token,
-    {
-      beforeRedirect: rejectSessionGitHubRedirect,
+  const value = await readGitHubJsonResponse(
+    await fetchGitHubApi(
+      sessionGitHubRepositoryUrl(identity),
+      fetchImpl,
+      identity.token,
+      rejectSessionGitHubRedirect,
       identity,
+      undefined,
       signal,
-      apiBaseUrl: identity.apiBaseUrl,
-    },
+      undefined,
+      identity.apiBaseUrl,
+    ),
   );
   if (
     !isRecord(value) ||

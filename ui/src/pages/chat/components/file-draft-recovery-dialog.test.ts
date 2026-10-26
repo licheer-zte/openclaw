@@ -1,6 +1,4 @@
 /* @vitest-environment jsdom */
-
-import { within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../../i18n/index.ts";
 import {
@@ -45,31 +43,62 @@ function draft(name: string): FileDraft {
   };
 }
 
-it("retains draft controls through copy feedback and discard, then ignores a dismissed copy", async () => {
-  const first = draft("first.md");
-  const second = draft("second.md");
-  const pending = Promise.withResolvers<boolean>();
-  clipboard.copy.mockResolvedValueOnce(true).mockReturnValueOnce(pending.promise);
-  const result = reviewFileDrafts([first, second]);
+function button(modal: HTMLElement, text: string): HTMLButtonElement {
+  const found = [...modal.querySelectorAll("button")].find((entry) =>
+    entry.textContent?.includes(text),
+  );
+  if (!found) {
+    throw new Error(`Missing dialog button: ${text}`);
+  }
+  return found;
+}
+
+it("keeps focus on the copy action when its feedback changes", async () => {
+  clipboard.copy.mockResolvedValue(true);
+  const result = reviewFileDrafts([draft("notes.md")]);
   const { modal } = await waitForRenderedModalDialog(document.body);
-  const button = (name: string) => within(modal).getByRole("button", { name });
-  const copy = button("Copy first.md");
-  const secondCopy = button("Copy second.md");
+  const copy = button(modal, "Copy notes.md");
   copy.focus();
   copy.click();
   await waitForSolid(() => expect(copy.textContent).toContain("Copied"));
   expect(document.activeElement).toBe(copy);
-  button("Discard first.md").click();
+  button(modal, "Keep").click();
+  await result;
+});
+
+it("ignores a copy completion after the review is dismissed", async () => {
+  let finishCopy!: (copied: boolean) => void;
+  clipboard.copy.mockImplementation(
+    () =>
+      new Promise<boolean>((resolve) => {
+        finishCopy = resolve;
+      }),
+  );
+  const entry = draft("pending.md");
+  const result = reviewFileDrafts([entry]);
+  const { modal } = await waitForRenderedModalDialog(document.body);
+  button(modal, "Copy pending.md").click();
+  expect(clipboard.copy).toHaveBeenCalledOnce();
+  button(modal, "Keep").click();
+  await result;
+  finishCopy(true);
+  await waitForSolid(() => expect(document.querySelector("openclaw-modal-dialog")).toBeNull());
+  expect(entry.discard).not.toHaveBeenCalled();
+});
+
+it("removes one discarded draft without replacing the remaining draft controls", async () => {
+  const first = draft("first.md");
+  const second = draft("second.md");
+  const result = reviewFileDrafts([first, second]);
+  const { modal } = await waitForRenderedModalDialog(document.body);
+  const secondCopy = button(modal, "Copy second.md");
+  button(modal, "Discard first.md").click();
   await waitForSolid(() => {
     expect(first.discard).toHaveBeenCalledOnce();
     expect(modal.textContent).not.toContain("first.md");
-    expect(button("Copy second.md")).toBe(secondCopy);
+    expect(button(modal, "Copy second.md")).toBe(secondCopy);
   });
-  secondCopy.click();
-  expect(clipboard.copy).toHaveBeenCalledTimes(2);
-  button("Keep drafts").click();
+  button(modal, "Discard second.md").click();
   await result;
-  pending.resolve(true);
-  await waitForSolid(() => expect(document.querySelector("openclaw-modal-dialog")).toBeNull());
-  expect(second.discard).not.toHaveBeenCalled();
+  expect(second.discard).toHaveBeenCalledOnce();
 });

@@ -34,7 +34,6 @@ import {
   DispatchReplyOperationAbortedError,
   isDispatchReplyOperationAbortedError,
 } from "./dispatch-from-config.abort.js";
-import { deferLifecycleBlockedDispatchClaim } from "./dispatch-from-config.claim-retry.js";
 import {
   resolveDispatchResetAdmission,
   shouldLetSlackRoutedThreadBypassBusyReplyOperation,
@@ -66,7 +65,6 @@ export function createDispatchReplyOperationCoordinator(
 ) {
   let dispatchReplyOperation: ReplyOperation | undefined;
   let admittedExpectedSessionId: string | undefined;
-  let admittedDatabaseIncarnation: string | undefined;
   let dispatchAbortOperation: ReplyOperation | undefined;
   let preDispatchAbortOperation: ReplyOperation | undefined;
   let preDispatchLifecycleAdmission: SessionEffectRef | undefined;
@@ -448,7 +446,6 @@ export function createDispatchReplyOperationCoordinator(
           params.initialDispatchReplyOperation,
         ].filter((operation): operation is ReplyOperation => operation !== undefined),
         storePath: params.operationSessionStoreEntry.storePath,
-        expectedDatabaseIncarnation: admittedDatabaseIncarnation,
         kind: replyTurnKind,
         resetTriggered: dispatchResetTriggered,
         allowRestartTombstoneParentFork,
@@ -471,14 +468,6 @@ export function createDispatchReplyOperationCoordinator(
         }
       }
     } catch (error) {
-      const deferred = await deferLifecycleBlockedDispatchClaim(error, mailboxClaim);
-      if (deferred) {
-        if (input?.abortSignal.aborted || input?.retirementRequested) {
-          return { status: "aborted" };
-        }
-        admittedDatabaseIncarnation ??= deferred.databaseIncarnation;
-        return await ensureDispatchReplyOperation(phase, hasPluginOwnedBinding);
-      }
       if (mailboxClaim) {
         releaseSessionControllerClaim(mailboxClaim);
       }

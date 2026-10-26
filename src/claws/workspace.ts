@@ -120,8 +120,6 @@ export async function createClawWorkspaceFiles(
       if (await workspace.exists(targetRelative)) {
         throw new ClawWorkspaceWriteError();
       }
-      await options.prepareEffect?.();
-      assertForwardCurrent();
       await workspace.write(targetRelative, resolvedSource.content, {
         mkdir: true,
         overwrite: false,

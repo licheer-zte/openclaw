@@ -6,11 +6,14 @@ import { describe, expect, it, vi } from "vitest";
 import { registerProviderWithPluginConfig } from "./provider.test-support.js";
 import { fetchCopilotUsage } from "./usage.js";
 
-const provider = registerProviderWithPluginConfig({});
-type UsageOptions = Parameters<NonNullable<typeof provider.fetchUsageSnapshot>>[0];
+const registerProvider = () => registerProviderWithPluginConfig({});
+
+type UsageOptions = Parameters<
+  NonNullable<ReturnType<typeof registerProvider>["fetchUsageSnapshot"]>
+>[0];
 
 function fetchSnapshot(fetchFn: typeof fetch, options: Partial<UsageOptions> = {}) {
-  const fetchUsage = expectDefined(provider.fetchUsageSnapshot, "Copilot usage hook");
+  const fetchUsage = expectDefined(registerProvider().fetchUsageSnapshot, "Copilot usage hook");
   return fetchUsage({
     config: {},
     env: {},
@@ -51,6 +54,7 @@ describe("GitHub Copilot usage credential routing", () => {
   ])(
     "uses the raw token and correct host for %s",
     async (expectedDomain, credentialDomain, configuredDomain, envDomain) => {
+      const provider = registerProvider();
       const formatKey = expectDefined(provider.formatApiKey, "Copilot OAuth formatter");
       const token = credentialDomain
         ? formatKey({
@@ -74,17 +78,24 @@ describe("GitHub Copilot usage credential routing", () => {
         const request = new Request(input, init);
         expect(request.url).toBe(`https://api.${expectedDomain}/copilot_internal/user`);
         expect(request.headers.get("authorization")).toBe("token durable-token");
-        expect(request.headers.get("x-github-api-version")).toBe("2025-04-01");
-        return Response.json(null);
+        return Response.json({
+          copilot_plan: "business",
+          quota_snapshots: { premium_interactions: { percent_remaining: 75 } },
+        });
       });
 
-      await fetchSnapshot(fetchFn, {
+      const result = await fetchSnapshot(fetchFn, {
         config,
         token,
         env: envDomain ? { COPILOT_GITHUB_DOMAIN: envDomain } : {},
       });
 
       expect(fetchFn).toHaveBeenCalledOnce();
+      expect(result).toMatchObject({
+        provider: "github-copilot",
+        plan: "business",
+        windows: [{ label: "Premium", usedPercent: 25 }],
+      });
     },
   );
 
@@ -102,16 +113,20 @@ describe("GitHub Copilot usage credential routing", () => {
 
 describe("fetchCopilotUsage", () => {
   it("cancels failed response bodies", async () => {
-    const cancel = vi.fn(() => {
-      throw new Error("stream already closed");
+    let canceled = false;
+    const body = new ReadableStream({
+      cancel() {
+        canceled = true;
+        throw new Error("stream already closed");
+      },
     });
-    const body = new ReadableStream({ cancel });
     const mockFetch = createProviderUsageFetch(async () => new Response(body, { status: 500 }));
 
     const result = await fetchCopilotUsage("token", 5000, mockFetch);
 
-    expect(result).toMatchObject({ error: "HTTP 500", windows: [] });
-    expect(cancel).toHaveBeenCalledOnce();
+    expect(result.error).toBe("HTTP 500");
+    expect(result.windows).toHaveLength(0);
+    expect(canceled).toBe(true);
   });
 
   it.each([
@@ -119,7 +134,13 @@ describe("fetchCopilotUsage", () => {
     ["missing/clamped values", quotas(null, 140), undefined, usageWindows(100, 0)],
     ["null payload", null, undefined, []],
   ] as const)("parses %s", async (_label, payload, plan, windows) => {
-    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, payload));
+    const mockFetch = createProviderUsageFetch(async (_url, init) => {
+      const headers = (init?.headers as Record<string, string> | undefined) ?? {};
+      expect(headers.Authorization).toBe("token token");
+      expect(headers["X-Github-Api-Version"]).toBe("2025-04-01");
+
+      return makeResponse(200, payload);
+    });
 
     expect(await fetchCopilotUsage("token", 5000, mockFetch)).toEqual({
       provider: "github-copilot",

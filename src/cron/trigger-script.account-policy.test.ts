@@ -1,16 +1,15 @@
 import { expect, it, vi } from "vitest";
-import type {
-  ChannelMessageActionContext,
-  ChannelPlugin,
-} from "../channels/plugins/types.public.js";
-import * as configSnapshot from "../config/runtime-snapshot.js";
+import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../gateway/agent-runtime-approval-authority.js";
-import { createGatewayMethodRegistry } from "../gateway/methods/registry.js";
-import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
-import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
-import * as plugins from "../plugins/runtime.js";
-import { createPluginRecord } from "../plugins/status.test-fixtures.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { bindCronJobAdmittedRun, clearCronJobActive, markCronJobActive } from "./active-jobs.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
@@ -24,21 +23,18 @@ it.each(["trigger", "payload"] as const)(
   "preserves creator account authority through real %s preparation and execution",
   async (entry) => {
     await withCronStore("cron-account-policy", async (state) => {
-      const registrySnapshot = plugins.captureActivePluginRegistrySnapshot();
+      const registrySnapshot = captureActivePluginRegistrySnapshot();
       try {
+        const accounts = {
+          work: { botToken: "synthetic-work-token" },
+          disabled: { enabled: false, botToken: "synthetic-disabled-token" },
+        };
         const config: OpenClawConfig = {
           agents: { defaults: { workspace: state.workspaceDir, skipBootstrap: true } },
           tools: { allow: ["message"] },
-          channels: {
-            telegram: {
-              accounts: {
-                work: { botToken: "synthetic-work-token" },
-                disabled: { enabled: false, botToken: "synthetic-disabled-token" },
-              },
-            },
-          },
+          channels: { telegram: { accounts } },
         };
-        configSnapshot.setRuntimeConfigSnapshot(config, config);
+        setRuntimeConfigSnapshot(config, config);
         const sendText = vi.fn(async (_params: { accountId?: string | null }) => ({
           channel: "telegram" as const,
           messageId: "sent-1",
@@ -66,10 +62,10 @@ it.each(["trigger", "payload"] as const)(
             },
           },
         ]);
-        plugins.setActivePluginRegistry(registry);
+        setActivePluginRegistry(registry);
         const runtime = createCronScriptRuntime({ config, loadPluginRegistry: () => registry });
-        const signal = new AbortController().signal;
-        const invoke = async (accountId: string, channel?: string) => {
+        const controller = new AbortController();
+        const invoke = async (accountId: string, callerOrigin?: CronScheduledToolCallerOrigin) => {
           const script = `await message({ action: "send", channel: "telegram", accountId: ${JSON.stringify(accountId)}, target: "123", message: "Scheduled report" }); return { fire: false };`;
           const jobId = `account-${entry}-${accountId}`;
           const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
@@ -90,11 +86,11 @@ it.each(["trigger", "payload"] as const)(
               ownerAccountId: accountId,
             },
           });
-          if (channel) {
+          if (callerOrigin) {
             job.toolsAllowProvenance = {
               version: 1,
               source: "final-executable-surface",
-              callerOrigin: { kind: "external", channel },
+              callerOrigin,
             };
           }
           const params = {
@@ -102,13 +98,15 @@ it.each(["trigger", "payload"] as const)(
             job,
             script,
             state: null,
-            abortSignal: signal,
+            abortSignal: controller.signal,
             deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
             executionIdentity: {
               ingress: { kind: "schedule", boundary: "cron.script", state: "present" } as const,
-              onPostAdmission: (admitted) => bindCronJobAdmittedRun(marker, admitted, signal),
+              onPostAdmission: (admitted: AdmittedRunContext) => {
+                bindCronJobAdmittedRun(marker, admitted, controller.signal);
+              },
             },
-          } satisfies Parameters<typeof runtime.evaluateTrigger>[0];
+          };
           try {
             return await (entry === "trigger"
               ? runtime.evaluateTrigger(params)
@@ -127,7 +125,10 @@ it.each(["trigger", "payload"] as const)(
           ["missing", "telegram", 'Scheduled account "missing" is unavailable', 2],
           ["disabled", "telegram", "disabled", 2],
         ] as const) {
-          const result = await invoke(accountId, channel);
+          const result = await invoke(
+            accountId,
+            channel ? { kind: "external", channel } : undefined,
+          );
           expect(result, JSON.stringify(result)).toMatchObject(
             error ? { kind: "error", error: expect.stringContaining(error) } : expected,
           );
@@ -137,158 +138,9 @@ it.each(["trigger", "payload"] as const)(
           }
         }
       } finally {
-        configSnapshot.clearRuntimeConfigSnapshot();
-        plugins.restoreActivePluginRegistrySnapshot(registrySnapshot);
+        clearRuntimeConfigSnapshot();
+        restoreActivePluginRegistrySnapshot(registrySnapshot);
       }
     });
   },
 );
-
-it("reuses hydrated creator origin for script admission across warm cache changes", async () => {
-  await withCronStore("cron-script-delete-origin", async (state) => {
-    const registrySnapshot = plugins.captureActivePluginRegistrySnapshot();
-    try {
-      const accountId = "account-a";
-      const target = "123";
-      const messageId = "message-a";
-      const accounts = { [accountId]: { botToken: "synthetic-account-token" } };
-      const config: OpenClawConfig = {
-        agents: { defaults: { workspace: state.workspaceDir, skipBootstrap: true } },
-        tools: { allow: ["message"] },
-        channels: { telegram: { accounts } },
-      };
-      configSnapshot.setRuntimeConfigSnapshot(config, config);
-      const handleAction = vi.fn(async (_context: ChannelMessageActionContext) => ({
-        content: [{ type: "text" as const, text: "deleted" }],
-        details: { ok: true },
-      }));
-      const plugin: ChannelPlugin = {
-        ...createChannelTestPluginBase({
-          id: "telegram",
-          config: {
-            listAccountIds: (cfg) => Object.keys(cfg.channels?.telegram?.accounts ?? {}),
-            resolveAccount: (cfg, selectedAccountId) =>
-              cfg.channels?.telegram?.accounts?.[selectedAccountId ?? "default"] ?? {},
-          },
-        }),
-        messaging: { targetResolver: { looksLikeId: (value) => value === target } },
-        actions: {
-          describeMessageTool: () => ({ actions: ["delete"] }),
-          providerOwnedReadGates: ["delete"],
-          writeAuthorityActions: ["delete"],
-          handleAction,
-        },
-      };
-      const owner = createTestPluginRegistry();
-      const record = createPluginRecord({
-        id: "cron-script-delete-provider",
-        origin: "global",
-        trustedOfficialInstall: true,
-      });
-      owner.registry.plugins.push(record);
-      owner.createApi(record, { config, registrationMode: "full" }).registerChannel({ plugin });
-      const registry = owner.registry;
-      plugins.setActivePluginRegistry(registry);
-
-      const script = `await message({ action: "delete", channel: "telegram", accountId: ${JSON.stringify(accountId)}, target: ${JSON.stringify(target)}, messageId: ${JSON.stringify(messageId)} }); return { ok: true };`;
-      const controller = new AbortController();
-      const ownerSessionKey = `agent:main:telegram:${accountId}:direct:${target}`;
-      const { sendHandlers } = await import("../gateway/server-methods/send.js");
-      const messageActionHandler = sendHandlers["message.action"];
-      if (!messageActionHandler) {
-        throw new Error("missing message.action Gateway handler");
-      }
-      const methods = createGatewayMethodRegistry([
-        {
-          name: "message.action",
-          owner: { kind: "core", area: "message" },
-          scope: "operator.write",
-          handler: messageActionHandler,
-        },
-      ]);
-      const gatewayContext = {
-        getRuntimeConfig: () => config,
-        validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
-        getGatewayMethodRegistry: () => methods,
-        trackExecution: <T>(run: () => Promise<T>) => run(),
-        dedupe: new Map(),
-      } as GatewayRequestContext;
-      const runtime = createCronScriptRuntime({
-        config,
-        loadPluginRegistry: () => registry,
-        resolveGatewayContext: () => gatewayContext,
-      });
-      const jobId = "script-delete-origin";
-      const invoke = async (callerOrigin?: CronScheduledToolCallerOrigin) => {
-        const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
-        const job: CronStoredJob = makeCronJob({
-          id: jobId,
-          agentId: "main",
-          payload: { kind: "script", script, toolsAllow: ["message"] },
-          owner: { agentId: "main", sessionKey: ownerSessionKey, accountId },
-          scheduledToolPolicy: {
-            version: 1,
-            mode: "account",
-            ownerSessionKey,
-            ownerAccountId: accountId,
-          },
-        });
-        if (callerOrigin) {
-          job.toolsAllowProvenance = {
-            version: 1,
-            source: "final-executable-surface",
-            callerOrigin,
-          };
-        }
-        try {
-          return await runtime.executePayload({
-            occurrence: TEST_SCHEDULED_OCCURRENCE,
-            job,
-            streamBatch: undefined,
-            abortSignal: controller.signal,
-            deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
-            executionIdentity: {
-              ingress: { kind: "schedule", boundary: "cron.script", state: "present" },
-              onPostAdmission: (admitted) => {
-                bindCronJobAdmittedRun(marker, admitted, controller.signal);
-              },
-            },
-          });
-        } finally {
-          clearCronJobActive(jobId, marker);
-        }
-      };
-
-      const validOrigin = { kind: "external", channel: "telegram" } as const;
-      const first = await invoke(validOrigin);
-      expect(first, JSON.stringify(first)).toMatchObject({ kind: "completed" });
-      expect(handleAction).toHaveBeenCalledOnce();
-      expect(handleAction.mock.calls[0]?.[0]).toMatchObject({
-        action: "delete",
-        channel: "telegram",
-        accountId,
-        params: { target: `telegram:${target}`, messageId },
-      });
-
-      for (const callerOrigin of [
-        undefined,
-        { kind: "unknown" },
-        { kind: "external", channel: "slack" },
-      ] as const) {
-        const denied = await invoke(callerOrigin);
-        expect(denied, JSON.stringify(denied)).toMatchObject({ kind: "error" });
-        expect(denied.kind === "error" ? denied.error : "").toMatch(
-          /Scheduled account "account-a" is unavailable|requires matching recorded creator origin/,
-        );
-        expect(handleAction).toHaveBeenCalledOnce();
-      }
-
-      const restored = await invoke(validOrigin);
-      expect(restored, JSON.stringify(restored)).toMatchObject({ kind: "completed" });
-      expect(handleAction).toHaveBeenCalledTimes(2);
-    } finally {
-      configSnapshot.clearRuntimeConfigSnapshot();
-      plugins.restoreActivePluginRegistrySnapshot(registrySnapshot);
-    }
-  });
-});

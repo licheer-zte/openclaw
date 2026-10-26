@@ -1,7 +1,6 @@
 import { createServer } from "node:http";
 import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
-import * as httpFixtures from "../../test/helpers/gateway-integration-fixtures.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import { summarizeCompactionHistory } from "./compaction.js";
 import type { AgentMessage } from "./runtime/index.js";
@@ -43,15 +42,25 @@ describe("compaction retry backoff over real HTTP", () => {
       );
     });
 
-    const origin = await httpFixtures.listenLoopback(server);
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        server.removeListener("error", reject);
+        resolve();
+      });
+    });
 
     try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Compaction loopback server did not expose a TCP port");
+      }
       const model = makeProviderModelFixture<"openai-completions">({
         id: "loopback-compaction-model",
         name: "Loopback compaction model",
         api: "openai-completions",
         provider: "openai",
-        baseUrl: `${origin}/v1`,
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
         contextWindow: 200_000,
         maxTokens: 8_192,
       }) satisfies NonNullable<ExtensionContext["model"]>;

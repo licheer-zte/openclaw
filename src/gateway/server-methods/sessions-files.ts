@@ -144,7 +144,6 @@ export async function withSessionFileRoot<T>(
     projection?: SessionEntryReadScope["projection"];
     getRuntimeConfig?: () => OpenClawConfig;
     messageEntryId?: string;
-    retained?: Awaited<ReturnType<typeof retainGatewaySessionEntryReadOnly>>;
   },
   cfg: OpenClawConfig,
   consume: (
@@ -153,20 +152,18 @@ export async function withSessionFileRoot<T>(
     readEntry: () => InternalSessionEntry | undefined,
   ) => Promise<T>,
 ): Promise<T> {
-  const session =
-    params.retained ??
-    (await retainGatewaySessionEntryReadOnly(
-      params.sessionKey,
-      params.agentId,
-      sessionFileWorkspaceMatches,
-      cfg,
-      {
-        projection:
-          params.projection && params.projection !== "full"
-            ? [...(params.projection === "list" ? [] : params.projection), "skillsSnapshot"]
-            : "full",
-      },
-    ));
+  const session = await retainGatewaySessionEntryReadOnly(
+    params.sessionKey,
+    params.agentId,
+    sessionFileWorkspaceMatches,
+    cfg,
+    {
+      projection:
+        params.projection && params.projection !== "full"
+          ? [...(params.projection === "list" ? [] : params.projection), "skillsSnapshot"]
+          : "full",
+    },
+  );
   try {
     const loaded = await loadSessionFileRoot(session, params.messageEntryId);
     const assertCurrent = () => {
@@ -185,9 +182,7 @@ export async function withSessionFileRoot<T>(
     assertCurrent();
     return result;
   } finally {
-    if (!params.retained) {
-      session.release();
-    }
+    session.release();
   }
 }
 

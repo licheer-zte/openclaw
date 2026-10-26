@@ -1,3 +1,4 @@
+// Channels dead-letter command tests exercise the operator-visible recovery path.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createChannelIngressQueue } from "../../channels/message/ingress-queue.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -8,22 +9,11 @@ import {
   channelsDeadLettersResubmitCommand,
 } from "./dead-letters.js";
 
-const stateOptions = { layout: "state-only", prefix: "openclaw-channel-dead-letters-" } as const;
-
-async function withFailedEvent(
-  scope: { channelId: string; accountId?: string },
-  run: (queue: ReturnType<typeof createChannelIngressQueue<{ text: string }>>) => Promise<void>,
-): Promise<void> {
-  await withOpenClawTestState(stateOptions, async () => {
-    const queue = createChannelIngressQueue<{ text: string }>(scope);
-    await queue.enqueue("event-1", { text: "recover me" });
-    const claim = await queue.claim("event-1", { ownerId: "worker" });
-    if (!claim) {
-      throw new Error("Expected a claimed ingress event");
-    }
-    await queue.fail(claim, { reason: "handler-error", failedAt: 20 });
-    await run(queue);
-  });
+async function withTempState(run: (stateDir: string) => Promise<void>): Promise<void> {
+  await withOpenClawTestState(
+    { layout: "state-only", prefix: "openclaw-channel-dead-letters-" },
+    ({ stateDir }) => run(stateDir),
+  );
 }
 
 describe("channel dead-letter commands", () => {
@@ -37,31 +27,48 @@ describe("channel dead-letter commands", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it.each(["ops", undefined])("lists retained failures for account %s as JSON", async (account) => {
-    await withFailedEvent({ channelId: "telegram", accountId: account }, async () => {
-      await channelsDeadLettersListCommand({ channel: "telegram", account, json: true });
-      expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
+  it("lists retained failures as JSON", async () => {
+    await withTempState(async () => {
+      const queue = createChannelIngressQueue<{ text: string }>({
         channelId: "telegram",
-        accountId: account ?? "default",
-        deadLetters: [
-          expect.objectContaining({
-            id: "event-1",
-            payload: { text: "recover me" },
-            reason: "handler-error",
-          }),
-        ],
+        accountId: "ops",
       });
+      await queue.enqueue("event-1", { text: "recover me" });
+      const claim = await queue.claim("event-1", { ownerId: "worker" });
+      if (!claim) {
+        throw new Error("Expected a claimed ingress event");
+      }
+      await queue.fail(claim, { reason: "handler-error", failedAt: 20 });
+      await channelsDeadLettersListCommand({ channel: "telegram", account: "ops", json: true });
+
+      const output = JSON.parse(String(runtime.log.mock.calls[0]?.[0])) as {
+        deadLetters: Array<{ id: string; payload?: unknown; reason: string }>;
+      };
+      expect(output.deadLetters).toEqual([
+        expect.objectContaining({
+          id: "event-1",
+          payload: { text: "recover me" },
+          reason: "handler-error",
+        }),
+      ]);
     });
   });
 
   it("resubmits through the queue API and reports completed events as terminal", async () => {
-    await withFailedEvent({ channelId: "line" }, async (queue) => {
+    await withTempState(async () => {
+      const queue = createChannelIngressQueue<{ text: string }>({ channelId: "line" });
+      await queue.enqueue("event-1", { text: "once" });
+      const claim = await queue.claim("event-1", { ownerId: "worker" });
+      if (!claim) {
+        throw new Error("Expected a claimed ingress event");
+      }
+      await queue.fail(claim, { reason: "handler-error", failedAt: 20 });
       await channelsDeadLettersResubmitCommand("event-1", { channel: "line" });
       expect(runtime.log).toHaveBeenCalledWith(
         expect.stringContaining("within 5 minutes by default (longer if configured)"),
       );
       const replay = await queue.claimNext({ ownerId: "replay-worker" });
-      expect(replay).toMatchObject({ id: "event-1", payload: { text: "recover me" } });
+      expect(replay).toMatchObject({ id: "event-1", payload: { text: "once" } });
       if (!replay) {
         throw new Error("Expected a resubmitted ingress event");
       }
@@ -74,19 +81,42 @@ describe("channel dead-letter commands", () => {
   });
 
   it.each(
-    ["", " \t "].flatMap((account) => [
-      { account, command: "list" },
-      { account, command: "resubmit" },
+    [
+      { account: "", label: "empty" },
+      { account: " \t ", label: "whitespace" },
+    ].flatMap((accountCase) => [
+      { ...accountCase, command: "list" as const },
+      { ...accountCase, command: "resubmit" as const },
     ]),
-  )("rejects blank --account '$account' at the $command boundary", async ({ account, command }) => {
-    await withOpenClawTestState(stateOptions, async () => {
-      const options = { channel: "telegram", account, json: true };
+  )("rejects a $label --account at the $command boundary", async ({ account, command }) => {
+    await withTempState(async () => {
       const action =
         command === "list"
-          ? channelsDeadLettersListCommand(options)
-          : channelsDeadLettersResubmitCommand("event-1", options);
+          ? channelsDeadLettersListCommand({ channel: "telegram", account, json: true })
+          : channelsDeadLettersResubmitCommand("event-1", { channel: "telegram", account });
+
       await expect(action).rejects.toThrow("--account must not be blank");
       expect(runtime.log).not.toHaveBeenCalled();
+    });
+  });
+
+  it("still resolves an omitted --account to the default account", async () => {
+    await withTempState(async () => {
+      const queue = createChannelIngressQueue<{ text: string }>({ channelId: "telegram" });
+      await queue.enqueue("event-1", { text: "default scope" });
+      const claim = await queue.claim("event-1", { ownerId: "worker" });
+      if (!claim) {
+        throw new Error("Expected a claimed ingress event");
+      }
+      await queue.fail(claim, { reason: "handler-error", failedAt: 20 });
+      await channelsDeadLettersListCommand({ channel: "telegram", json: true });
+
+      const output = JSON.parse(String(runtime.log.mock.calls[0]?.[0])) as {
+        accountId: string;
+        deadLetters: Array<{ id: string }>;
+      };
+      expect(output.accountId).toBe("default");
+      expect(output.deadLetters).toEqual([expect.objectContaining({ id: "event-1" })]);
     });
   });
 });

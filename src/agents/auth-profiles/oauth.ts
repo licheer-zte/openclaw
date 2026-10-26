@@ -116,8 +116,6 @@ type ResolveApiKeyForProfileParams = {
   signal?: AbortSignal;
   /** Reject an OAuth credential before the resolver persists, adopts, or returns it. */
   validateOAuthCredential?: (credential: OAuthCredential) => void;
-  /** Admission only: an already claimed refresh retains independent settlement. */
-  assertRefreshAdmission?: () => void;
 };
 
 type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
@@ -139,6 +137,12 @@ export async function refreshOAuthCredentialForRuntime(params: {
 
 const oauthManager = createOAuthManager();
 
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.oauthTestApi")] = {
+    isRefreshTokenReusedError,
+  };
+}
+
 async function resolveOAuthProfileAccess(
   params: ResolveApiKeyForProfileParams,
   credential: OAuthCredential,
@@ -157,7 +161,6 @@ async function resolveOAuthProfileAccess(
     cfg: params.cfg,
     forceRefresh: params.forceRefresh,
     validateCredential: params.validateOAuthCredential,
-    assertRefreshAdmission: params.assertRefreshAdmission,
     signal: params.signal,
   });
   return resolved
@@ -434,7 +437,6 @@ async function resolveApiKeyForProfileOwned(
           agentDir: params.agentDir,
           forceRefresh: params.forceRefresh,
           validateOAuthCredential: params.validateOAuthCredential,
-          assertRefreshAdmission: params.assertRefreshAdmission,
           signal: params.signal,
         });
         params.signal?.throwIfAborted();

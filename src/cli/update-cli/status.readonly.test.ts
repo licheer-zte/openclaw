@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -10,7 +11,6 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../../test-utils/port-claims.js";
-import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import { updateStatusCommand } from "./status.js";
 
 const runtime = vi.hoisted(() => ({
@@ -66,10 +66,13 @@ it.each([true, false])(
     const configPath = path.join(stateDir, "openclaw.json");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-    writeFixtureJsonSync(configPath, {
-      gateway: { mode: "local", auth: { mode: "none" }, port: gatewayPort.port },
-      plugins: { enabled: false },
-    });
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        gateway: { mode: "local", auth: { mode: "none" }, port: gatewayPort.port },
+        plugins: { enabled: false },
+      }),
+    );
     const databasePath = openOpenClawStateDatabase().path;
     await closeOpenClawStateDatabaseAsync();
     writeUnreadableNewerStateSchema(databasePath);

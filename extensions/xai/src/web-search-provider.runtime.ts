@@ -150,6 +150,17 @@ async function runXaiWebSearch(params: {
   return payload;
 }
 
+function resolveXaiToolSearchConfig(ctx: {
+  config?: Record<string, unknown>;
+  searchConfig?: Record<string, unknown>;
+}) {
+  return mergeScopedSearchConfig(
+    ctx.searchConfig,
+    "grok",
+    resolveProviderWebSearchPluginConfig(ctx.config, "xai"),
+  );
+}
+
 function resolveConfiguredXaiWebSearchAuth(
   searchConfig?: Record<string, unknown>,
 ): XaiResolvedWebSearchAuth | undefined {
@@ -332,11 +343,7 @@ export async function executeXaiWebSearchProviderTool(
   executionContext?: { signal?: AbortSignal },
 ): Promise<Record<string, unknown>> {
   executionContext?.signal?.throwIfAborted();
-  const searchConfig = mergeScopedSearchConfig(
-    ctx.searchConfig,
-    "grok",
-    resolveProviderWebSearchPluginConfig(ctx.config, "xai"),
-  );
+  const searchConfig = resolveXaiToolSearchConfig(ctx);
   const timeoutSeconds = resolveTimeoutSeconds(
     searchConfig?.timeoutSeconds,
     XAI_WEB_SEARCH_DEFAULT_TIMEOUT_SECONDS,

@@ -1,34 +1,60 @@
-import { describe, expect, it, vi } from "vitest";
+import { access } from "node:fs/promises";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { WidgetHtmlInputError } from "../plugin-sdk/widget-html.js";
 import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
-import {
-  createBoardPutCaller,
-  currentPresenter,
-  useWidgetHarness,
-  runWidget as run,
-  widgetPayload as payload,
-} from "./widget-tool.test-support.js";
+import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { resolveCanvasDocumentsDir } from "./documents.js";
+import { createShowWidgetTool } from "./widget-tool.js";
+import { createBoardPutCaller, currentPresenter } from "./widget-tool.test-support.js";
 import { buildWidgetDocument } from "./wrap.js";
 
-const { createTool, expectNoDocument } = useWidgetHarness();
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const widget = { title: "Status", widget_code: "<p>ready</p>" };
+const scheduled = { title: "Scheduled status", widget_code: "<main>ready</main>" };
+const payload = (result: Awaited<ReturnType<ReturnType<typeof createShowWidgetTool>["execute"]>>) =>
+  JSON.parse(result.content[0]?.type === "text" ? result.content[0].text : "null");
+beforeEach(() => resetPluginRuntimeStateForTest());
+afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  resetPluginRuntimeStateForTest();
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 describe("show_widget current-channel presentation", () => {
   it.each([false, true])("prefers the channel presenter (inline=%s)", async (inlineClient) => {
-    const receipt = {
-      primaryPlatformMessageId: "message-1",
-      platformMessageIds: ["message-1"],
-      parts: [],
-      sentAt: 1,
-    };
+    const stateDir = tempDirs.make("openclaw-widget-presenter-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const present = vi.fn(async () => ({
       ok: true as const,
-      value: { kind: "message" as const, receipt },
+      value: {
+        kind: "message" as const,
+        receipt: {
+          primaryPlatformMessageId: "message-1",
+          platformMessageIds: ["message-1"],
+          parts: [],
+          sentAt: 1,
+        },
+      },
     }));
-    const context = { messageChannel: "discord", sessionKey: "agent:main:discord" };
+    const context = {
+      messageChannel: "discord",
+      accountId: "work",
+      nativeChannelId: "channel-1",
+      currentChannelId: "channel:channel-1",
+      currentMessagingTarget: "discord:channel:channel-1",
+      sessionKey: "agent:main:discord",
+    };
     const presenter: WidgetPresenter = currentPresenter(present, {
+      description: "Post in the current channel",
+      capabilities: { sourceKinds: ["html"], maxSourceBytes: 48 * 1024 },
       match: (candidate) => candidate.messageChannel === "discord",
     });
-    const tool = createTool({
+    const tool = createShowWidgetTool({
       sessionId: "current-channel",
       inlineClientAvailable: inlineClient,
       presenters: [presenter],
@@ -36,7 +62,12 @@ describe("show_widget current-channel presentation", () => {
     });
 
     expect(tool.requiredClientCaps).toBeUndefined();
-    expect(payload(await run(tool))).toMatchObject({
+    expect(tool.description).toContain("current channel presenter");
+    expect(tool.description).not.toContain("Keep one-off visualizations inline");
+    expect(
+      (tool.parameters as { properties?: { kind?: { enum?: string[] } } }).properties?.kind?.enum,
+    ).toEqual(["html"]);
+    expect(payload(await tool.execute("current-channel", widget))).toMatchObject({
       kind: "widget",
       presentation: {
         target: "current_channel",
@@ -50,19 +81,24 @@ describe("show_widget current-channel presentation", () => {
       title: "Status",
       context,
     });
-    await expectNoDocument();
+    await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
   });
   it.each(["pending", "rejected", "granted"] as const)(
     "reports the owner's %s capability outcome",
     async (grantState) => {
       createBoardPutCaller(grantState);
-      const tool = createTool({ agentSessionKey: "agent:main:approval", inlineHostEnabled: false });
-      const result = await run(tool, {
+      const tool = createShowWidgetTool({
+        agentSessionKey: "agent:main:approval",
+        inlineHostEnabled: false,
+      });
+      const result = await tool.execute("pin", {
+        title: "Runs",
+        widget_code: "<p>runs</p>",
         pin: true,
         capabilities: { tools: ["github.actions.runs:owner/repo"] },
       });
       const parsed = payload(result);
-      expect(parsed).toMatchObject({ boardWidgetName: "status", capabilityState: grantState });
+      expect(parsed).toMatchObject({ boardWidgetName: "runs", capabilityState: grantState });
       expect(parsed.text).toContain(grantState);
       if (grantState !== "granted") {
         expect(parsed.text).toMatch(/approve|review/i);
@@ -70,43 +106,72 @@ describe("show_widget current-channel presentation", () => {
     },
   );
   it("keeps scheduled widget authoring pinned-only without an inline client", async () => {
-    createBoardPutCaller();
-    const tool = createTool({
+    const { mock: callGatewayMock } = createBoardPutCaller();
+    const stateDir = tempDirs.make("openclaw-scheduled-widget-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const tool = createShowWidgetTool({
       sessionId: "scheduled-board-only",
       agentSessionKey: "agent:main:dashboard:scheduled",
       inlineClientAvailable: false,
       pinnedOnly: true,
     });
+    const schema = tool.parameters as {
+      properties?: {
+        pin?: { const?: boolean };
+        presentation?: { properties?: { target?: unknown } };
+      };
+      required?: string[];
+    };
+
     expect(tool.requiredClientCaps).toBeUndefined();
-    expect(tool.parameters).toHaveProperty("required", expect.arrayContaining(["pin"]));
-    expect(tool.parameters).toHaveProperty("properties.pin.const", true);
-    expect(tool.parameters).not.toHaveProperty("properties.presentation.properties.target");
+    expect(schema.required).toContain("pin");
+    expect(schema.properties?.pin?.const).toBe(true);
+    expect(schema.properties?.presentation?.properties).not.toHaveProperty("target");
     expect(tool.description).toContain("This surface is pinned-only");
 
-    await expect(run(tool)).rejects.toThrow(
+    await expect(tool.execute("scheduled-unpinned", scheduled)).rejects.toThrow(
       "pin=true is required for this pinned-only widget surface",
     );
     await expect(
-      run(tool, {
+      tool.execute("scheduled-target", {
+        ...scheduled,
         pin: true,
         presentation: { target: "assistant_message" },
       }),
     ).rejects.toThrow("presentation.target is unavailable for this pinned-only widget surface");
 
-    const result = await run(tool, { name: "scheduled-status", pin: true });
+    const result = await tool.execute("scheduled-pinned", {
+      ...scheduled,
+      widget_code: "<button onclick=\"this.textContent='updated'\">Update</button>",
+      name: "scheduled-status",
+      pin: true,
+    });
     expect(payload(result)).toEqual({
       status: "pinned",
       boardWidgetName: "scheduled-status",
       capabilityState: "none",
       text: "Widget pinned to dashboard tab main as scheduled-status. Open this dashboard tab in Control UI to view it.",
     });
-    await expectNoDocument();
+    expect(callGatewayMock).toHaveBeenCalledExactlyOnceWith(
+      "board.widget.put",
+      expect.objectContaining({
+        sessionKey: "agent:main:dashboard:scheduled",
+        name: "scheduled-status",
+        content: {
+          kind: "html",
+          html: "<button onclick=\"this.textContent='updated'\">Update</button>",
+        },
+      }),
+    );
+    await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
   });
   it("rejects broken scripts before any side effect", async () => {
+    const stateDir = tempDirs.make("openclaw-widget-syntax-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const { mock: gateway } = createBoardPutCaller();
     const present = vi.fn<WidgetPresenter["present"]>();
     const availability = vi.fn<WidgetPresenter["availability"]>();
-    const tool = createTool({
+    const tool = createShowWidgetTool({
       sessionId: "syntax",
       agentSessionKey: "agent:main:syntax",
       presenters: [{ target: "node_panel", description: "Test panel", availability, present }],
@@ -123,6 +188,6 @@ describe("show_widget current-channel presentation", () => {
     expect(gateway).not.toHaveBeenCalled();
     expect(present).not.toHaveBeenCalled();
     expect(availability).not.toHaveBeenCalled();
-    await expectNoDocument();
+    await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
   });
 });

@@ -195,7 +195,7 @@ async function forceCapabilitySelection(item: import("playwright").Locator) {
 }
 
 suite.define(() => {
-  it("renders the root menu, proxies attachments, patches sparse overrides, and resets them", async () => {
+  it("renders the root stack, proxies attachments, patches sparse overrides, and clears the pill", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         methodResponses: {
@@ -236,14 +236,15 @@ suite.define(() => {
         .poll(() => dropdown.getByRole("menuitem").allTextContents())
         .toEqual(
           expect.arrayContaining([
-            expect.stringContaining("Camera"),
-            expect.stringContaining("Media"),
+            expect.stringContaining("Take photo"),
+            expect.stringContaining("Photo"),
             expect.stringContaining("File"),
             expect.stringContaining("Skills"),
             expect.stringContaining("Plugins"),
+            expect.stringContaining("Manage plugins"),
           ]),
         );
-      const clearOverrides = dropdown.getByRole("menuitem", { name: /4 changes for this session/ });
+      const clearOverrides = dropdown.getByRole("menuitem", { name: /4 overrides/ });
       await expect.poll(() => clearOverrides.isVisible()).toBe(true);
       await expect.poll(() => webSearchItem(dropdown).isVisible()).toBe(true);
       const skillsRoot = dropdown.getByRole("menuitem", { name: /^Skills/ });
@@ -252,11 +253,11 @@ suite.define(() => {
         item.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
       });
       await expect.poll(() => dropdown.getAttribute("data-view")).toBe("skills");
-      await dropdown.locator('[data-value="back"]').click();
+      await dropdown.getByRole("menuitem", { name: "Back" }).click();
       await expect.poll(() => dropdown.getAttribute("data-view")).toBe("root");
       await expect
         .poll(() => dropdown.locator(".oc-menu-item:focus").textContent())
-        .toContain("Camera");
+        .toContain("Take photo");
       await page.evaluate(() => {
         const input = document.querySelector<HTMLInputElement>(".agent-chat__file-input");
         if (!input) {
@@ -284,8 +285,10 @@ suite.define(() => {
       await menu.getByRole("menuitem", { name: /^Skills/ }).click();
       await expect.poll(() => menu.getAttribute("data-view")).toBe("skills");
       const docs = menu.getByRole("menuitemcheckbox", { name: /^Docs/ });
-      const broken = menu.getByRole("menuitem", { name: "Broken", exact: true });
-      const blocked = menu.getByRole("menuitem", { name: "Private", exact: true });
+      const broken = menu.getByRole("menuitemcheckbox", { name: /Broken.*deps missing/ });
+      const blocked = menu.getByRole("menuitemcheckbox", {
+        name: /Private.*not available for this agent/,
+      });
       await expect.poll(() => broken.isDisabled()).toBe(true);
       await expect.poll(() => blocked.isDisabled()).toBe(true);
       await docs.click();
@@ -293,10 +296,10 @@ suite.define(() => {
       await docs.click();
       await expect.poll(() => latestToolOverrides(gateway)).toEqual({});
 
-      await menu.locator('[data-value="back"]').click();
+      await menu.getByRole("menuitem", { name: "Back" }).click();
       await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
       await expect.poll(() => menu.getAttribute("data-view")).toBe("connectors");
-      const github = menu.getByRole("switch", { name: "github", exact: true });
+      const github = menu.getByRole("menuitemcheckbox", { name: /^github/ });
       await github.click();
       await expect
         .poll(() => latestToolOverrides(gateway))
@@ -309,7 +312,7 @@ suite.define(() => {
         .poll(() => menu.getByRole("menuitem", { name: /Add MCP server/ }).isDisabled())
         .toBe(false);
 
-      await menu.locator('[data-value="back"]').click();
+      await menu.getByRole("menuitem", { name: "Back" }).click();
       const webSearch = webSearchItem(menu);
       await expect
         .poll(() => webSearch.evaluate((node) => node.getAttribute("aria-checked") === "true"))
@@ -355,7 +358,7 @@ suite.define(() => {
     });
   });
 
-  it("expands connector tools inline and preserves raw MCP tool identity", async () => {
+  it("shows per-connector tool access and preserves raw MCP tool identity", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         featureMethods: ["chat.metadata", "chat.startup", "sessions.patch", "tools.effective"],
@@ -375,27 +378,24 @@ suite.define(() => {
       const composer = await openMenu(page);
       const menu = composer.locator(".agent-chat__capability-menu");
       await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
-      await menu.locator('[data-value^="server:"]').first().click();
-      await expect.poll(() => menu.getAttribute("data-view")).toBe("connectors");
-      await expect.poll(() => menu.locator('[data-value^="mcp-tool:"]').count()).toBe(3);
+      await menu.getByRole("menuitem", { name: "Tool access" }).first().click();
+      await expect.poll(() => menu.getAttribute("data-view")).toBe("tools:github");
+      await expect.poll(() => menu.getByText("2 of 3 tools on").isVisible()).toBe(true);
       await expect
         .poll(() => menu.getByRole("menuitemcheckbox", { name: "delete_page" }).count())
         .toBe(0);
 
       const toolRows = menu.locator('.oc-menu-item[data-value^="mcp-tool:"]');
-      const toolLabels = toolRows.locator(".oc-menu-item__label");
+      const rawToolNames = toolRows.locator(
+        ".agent-chat__capability-menu-label > span:first-child",
+      );
       await expect
-        .poll(() =>
-          toolRows.evaluateAll((rows) => rows.map((row) => row.getAttribute("data-value"))),
-        )
-        .toEqual(["mcp-tool:list-issues", "mcp-tool:search-items", "mcp-tool:search_items"]);
-      await expect
-        .poll(() => toolLabels.allTextContents())
-        .toEqual(["list_issues", "search-items", "search_items"]);
+        .poll(() => rawToolNames.allTextContents())
+        .toEqual(["list-issues", "search-items", "search_items"]);
       await expect
         .poll(async () => [
-          await toolLabels.nth(1).isVisible(),
-          await toolLabels.nth(2).isVisible(),
+          await rawToolNames.nth(1).isVisible(),
+          await rawToolNames.nth(2).isVisible(),
         ])
         .toEqual([true, true]);
       await expect
@@ -404,7 +404,6 @@ suite.define(() => {
         )
         .toBe(false);
 
-      const toolReadsBeforeModelChange = (await gateway.getRequests("tools.effective")).length;
       await gateway.deferNext("tools.effective");
       await gateway.setSessionsListResponse(
         sessionsList(
@@ -413,23 +412,21 @@ suite.define(() => {
         ),
       );
       await gateway.emitGatewayEvent("sessions.changed", { sessionKey: "agent:main:main" });
-      await expect
-        .poll(async () => (await gateway.getRequests("tools.effective")).length)
-        .toBe(toolReadsBeforeModelChange + 1);
+      await expect.poll(async () => (await gateway.getRequests("tools.effective")).length).toBe(2);
       await expect.poll(() => menu.getByText("Loading tools…").isVisible()).toBe(true);
       await gateway.resolveDeferred("tools.effective", effectiveToolsResponse());
       await expect
-        .poll(() => toolLabels.allTextContents())
-        .toEqual(["list_issues", "search-items", "search_items"]);
+        .poll(() => rawToolNames.allTextContents())
+        .toEqual(["list-issues", "search-items", "search_items"]);
 
       await toolRows.nth(1).click();
       await expect
         .poll(() => latestToolOverrides(gateway))
         .toEqual({ mcpToolsDeny: { github: ["search-items", "search_items"] } });
-      await expect.poll(() => menu.getAttribute("data-view")).toBe("connectors");
+      await expect.poll(() => menu.getAttribute("data-view")).toBe("tools:github");
 
-      await menu.locator('[data-value="server:github"]').click();
-      await expect.poll(() => menu.locator('[data-value^="mcp-tool:"]').count()).toBe(0);
+      await menu.getByRole("menuitem", { name: "Back" }).click();
+      await expect.poll(() => menu.getAttribute("data-view")).toBe("connectors");
     });
   });
 
@@ -452,10 +449,10 @@ suite.define(() => {
       const composer = await openMenu(page);
       const menu = composer.locator(".agent-chat__capability-menu");
       await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
-      await menu.locator('[data-value^="server:"]').click();
+      await menu.getByRole("menuitem", { name: "Tool access" }).click();
 
-      await expect.poll(() => menu.getAttribute("data-view")).toBe("connectors");
-
+      await expect.poll(() => menu.getAttribute("data-view")).toBe("tools:constructor");
+      await expect.poll(() => menu.getByText("3 of 3 tools on").isVisible()).toBe(true);
       await expect
         .poll(() => menu.locator('.oc-menu-item[data-value^="mcp-tool:"]').count())
         .toBe(3);
@@ -480,9 +477,9 @@ suite.define(() => {
       const composer = await openMenu(page);
       const menu = composer.locator(".agent-chat__capability-menu");
       await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
-      await menu.locator('[data-value^="server:"]').first().click();
+      await menu.getByRole("menuitem", { name: "Tool access" }).first().click();
 
-      await expect.poll(() => menu.getAttribute("data-view")).toBe("connectors");
+      await expect.poll(() => menu.getAttribute("data-view")).toBe("tools:github");
       await expect
         .poll(() =>
           menu
@@ -493,10 +490,11 @@ suite.define(() => {
       await expect
         .poll(() => menu.getByText("No tools available for this MCP server.").count())
         .toBe(0);
+      await expect.poll(() => menu.getByText("0 of 0 tools on").count()).toBe(0);
 
-      await menu.locator('[data-value="server:github"]').click();
-      await menu.locator('[data-value^="server:"]').nth(1).click();
-      await expect.poll(() => menu.getAttribute("data-view")).toBe("connectors");
+      await menu.getByRole("menuitem", { name: "Back" }).click();
+      await menu.getByRole("menuitem", { name: "Tool access" }).nth(1).click();
+      await expect.poll(() => menu.getAttribute("data-view")).toBe("tools:notion");
       await expect
         .poll(() =>
           menu.getByText("MCP tools will appear here after an agent run discovers them.").count(),
@@ -505,10 +503,11 @@ suite.define(() => {
       await expect
         .poll(() => menu.getByText("No tools available for this MCP server.").isVisible())
         .toBe(true);
+      await expect.poll(() => menu.getByText("0 of 0 tools on").count()).toBe(0);
     });
   });
 
-  it("lists discovered connector tools when the server is reopened after a run", async () => {
+  it("lists discovered connector tools when Tool access is reopened after a run", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         featureMethods: ["chat.metadata", "chat.startup", "tools.effective"],
@@ -526,26 +525,26 @@ suite.define(() => {
       const composer = await openMenu(page);
       const menu = composer.locator(".agent-chat__capability-menu");
       await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
-      await menu.locator('[data-value^="server:"]').click();
+      await menu.getByRole("menuitem", { name: "Tool access" }).click();
       await expect.poll(() => menu.getByText(notice).isVisible()).toBe(true);
 
       // A run discovers the connector's tools without changing the catalog cache key.
       await gateway.setMethodResponse("tools.effective", effectiveToolsResponse());
-      await menu.locator('[data-value="server:github"]').click();
-      await menu.locator('[data-value^="server:"]').click();
+      await menu.getByRole("menuitem", { name: "Back" }).click();
+      await menu.getByRole("menuitem", { name: "Tool access" }).click();
       await expect
         .poll(() =>
           menu
             .locator('.oc-menu-item[data-value^="mcp-tool:"]')
-            .locator(".oc-menu-item__label")
+            .locator(".agent-chat__capability-menu-label > span:first-child")
             .allTextContents(),
         )
-        .toEqual(["list_issues", "search-items", "search_items"]);
+        .toEqual(["list-issues", "search-items", "search_items"]);
       await expect.poll(() => menu.getByText(notice).count()).toBe(0);
     });
   });
 
-  it("refreshes expanded tools when the session run settles", async () => {
+  it("refreshes the open Tool access view when the session run settles", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const idleSessions = sessionsList();
       const runningSessions = {
@@ -570,20 +569,17 @@ suite.define(() => {
         "MCP tools will appear here after an agent run discovers them.",
       );
       await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
-      await menu.locator('[data-value^="server:"]').click();
+      await menu.getByRole("menuitem", { name: "Tool access" }).click();
       await expect.poll(() => notice.isVisible()).toBe(true);
 
-      const toolReadsBeforeSettlement = (await gateway.getRequests("tools.effective")).length;
       await gateway.setMethodResponse("tools.effective", effectiveToolsResponse());
       await gateway.setSessionsListResponse(idleSessions);
       await gateway.emitGatewayEvent("sessions.changed", { sessionKey: "agent:main:main" });
 
-      await expect.poll(() => menu.locator('[data-value^="mcp-tool:"]').count()).toBe(3);
+      await expect.poll(() => menu.getByText("2 of 3 tools on").isVisible()).toBe(true);
       await expect.poll(() => notice.count()).toBe(0);
-      await expect.poll(() => menu.getAttribute("data-view")).toBe("connectors");
-      expect(await gateway.getRequests("tools.effective")).toHaveLength(
-        toolReadsBeforeSettlement + 1,
-      );
+      await expect.poll(() => menu.getAttribute("data-view")).toBe("tools:github");
+      expect(await gateway.getRequests("tools.effective")).toHaveLength(2);
     });
   });
 
@@ -609,7 +605,7 @@ suite.define(() => {
       const composer = await openMenu(page);
       const menu = composer.locator(".agent-chat__capability-menu");
       await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
-      await menu.locator('[data-value^="server:"]').click();
+      await menu.getByRole("menuitem", { name: "Tool access" }).click();
       await gateway.waitForRequest("tools.effective");
       await expect.poll(() => menu.getByText("Loading tools…").isVisible()).toBe(true);
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
@@ -624,9 +620,9 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
 
       await gateway.resolveDeferred("sessions.list", sessionsList());
-      await expect.poll(() => menu.getAttribute("data-view")).toBe("connectors");
-      await menu.locator('[data-value="server:github"]').click();
-      await menu.locator('[data-value^="server:"]').click();
+      await expect.poll(() => menu.getAttribute("data-view")).toBe("tools:github");
+      await menu.getByRole("menuitem", { name: "Back" }).click();
+      await menu.getByRole("menuitem", { name: "Tool access" }).click();
       const readyListIssues = menu.locator('.oc-menu-item[data-value="mcp-tool:list-issues"]');
       await expect.poll(() => readyListIssues.isDisabled()).toBe(false);
       await readyListIssues.click();
@@ -692,13 +688,13 @@ suite.define(() => {
         await expect.poll(() => docs.isDisabled()).toBe(true);
         await expect.poll(() => tooltipTitleText(docs)).toContain("operator.admin access");
         // Leave disabled-row hints before the next click's hit test. Returning to
-        // the root can put Web search under the pointer that clicked the header.
+        // the root can put Web search under the pointer that clicked Back.
         await composer.locator("textarea").hover();
-        await menu.locator('[data-value="back"]').click();
+        await menu.getByRole("menuitem", { name: "Back" }).click();
         await composer.locator("textarea").hover();
         await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
         await expect
-          .poll(() => menu.getByRole("switch", { name: "github", exact: true }).isDisabled())
+          .poll(() => menu.getByRole("menuitemcheckbox", { name: /^github/ }).isDisabled())
           .toBe(true);
         expect(await menu.getByRole("menuitem", { name: "Browse connectors" }).count()).toBe(0);
         const addServer = menu.getByRole("menuitem", { name: /Add MCP server/ });
@@ -834,7 +830,7 @@ suite.define(() => {
 
   it("shows empty skills and connector states", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
+      await installMockGateway(page, {
         methodResponses: {
           "config.get": configResponse({}, false),
           "sessions.list": sessionsList(),
@@ -851,25 +847,10 @@ suite.define(() => {
       const menu = composer.locator(".agent-chat__capability-menu");
       await expect.poll(() => webSearchItem(menu).count()).toBe(1);
       await menu.getByRole("menuitem", { name: /^Skills/ }).click();
-      await gateway.waitForRequest("skills.status");
-      await expect
-        .poll(() =>
-          menu.getByRole("menuitem", { name: "Add from libraries", exact: true }).isEnabled(),
-        )
-        .toBe(true);
-      await expect
-        .poll(() => menu.locator(".agent-chat__capability-menu-skeleton").count())
-        .toBe(0);
-      expect(
-        await menu.locator('[data-value^="skill:"], [data-value^="library-selected:"]').count(),
-      ).toBe(0);
-      await menu.locator('[data-value="back"]').click();
+      await expect.poll(() => menu.getByText("No skills available.").isVisible()).toBe(true);
+      await menu.getByRole("menuitem", { name: "Back" }).click();
       await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
-      await expect
-        .poll(() =>
-          menu.getByText("No MCP servers yet. Add one to give the agent new tools.").isVisible(),
-        )
-        .toBe(true);
+      await expect.poll(() => menu.getByText("No MCP servers configured.").isVisible()).toBe(true);
     });
   });
 
@@ -952,11 +933,9 @@ suite.define(() => {
       await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
       await expect
         .poll(() =>
-          menu
-            .getByRole("switch", { name: "session-docs", exact: true })
-            .getAttribute("aria-checked"),
+          menu.getByRole("menuitemcheckbox", { name: /session-docs.*session/ }).isVisible(),
         )
-        .toBe("true");
+        .toBe(true);
       await menu.getByRole("menuitem", { name: /Add MCP server/ }).click();
 
       const everywhereDialog = page
@@ -1004,11 +983,9 @@ suite.define(() => {
       await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
       await expect
         .poll(() =>
-          menu
-            .getByRole("switch", { name: "global-docs", exact: true })
-            .getAttribute("aria-checked"),
+          menu.getByRole("menuitemcheckbox", { name: /^global-docs.*Enabled/ }).isVisible(),
         )
-        .toBe("true");
+        .toBe(true);
     });
   });
 });

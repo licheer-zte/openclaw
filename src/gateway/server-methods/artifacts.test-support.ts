@@ -1,4 +1,4 @@
-import { assert, expect } from "vitest";
+import { expect } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { selectSessionArtifacts } from "../session-artifact-read.js";
@@ -40,7 +40,10 @@ export function withArtifactFixtureReader(
 ) {
   return {
     ...actual,
-    readSessionArtifacts: (...[scope, query]: Parameters<typeof actual.readSessionArtifacts>) =>
+    readSessionArtifacts: (
+      scope: Parameters<typeof selectSessionArtifacts>[0],
+      query: Parameters<typeof selectSessionArtifacts>[1],
+    ) =>
       selectSessionArtifacts(scope, query, {
         visitSessionMessagesAsync,
         readSessionMessagesPageWithStatsAsync: actual.readSessionMessagesPageWithStatsAsync,
@@ -107,10 +110,12 @@ export function resultImageMessage() {
 }
 
 export function requireNonEmptyString(value: unknown, message: string): string {
-  assert(typeof value === "string" && value.length > 0, message);
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(message);
+  }
   return value;
 }
 
-export const expectFields = (value: unknown, expected: Record<string, unknown>): void => {
+export function expectFields(value: unknown, expected: Record<string, unknown>): void {
   expectRecordFields(value, "fields", expected);
-};
+}

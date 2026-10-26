@@ -19,11 +19,6 @@ describe("runtime config plugin activation", () => {
       },
     };
     const request = vi.fn<GatewayBrowserClient["request"]>();
-    const schema = {
-      schema: { type: "object" },
-      uiHints: {},
-      generatedAt: "2026-10-13T00:00:00Z",
-    };
     request.mockResolvedValueOnce({
       valid: false,
       hash: "saved",
@@ -32,7 +27,12 @@ describe("runtime config plugin activation", () => {
       resolved: {},
       config: {},
     });
-    request.mockResolvedValueOnce({ ...schema, version: "before" });
+    request.mockResolvedValueOnce({
+      schema: { type: "object" },
+      uiHints: {},
+      version: "before",
+      generatedAt: "2026-10-13T00:00:00Z",
+    });
     const { runtimeConfig, publish } = createConfigCapabilityHarness(request);
     await runtimeConfig.ensureLoaded();
     await runtimeConfig.ensureSchemaLoaded();
@@ -51,7 +51,12 @@ describe("runtime config plugin activation", () => {
       resolved: config,
       config,
     });
-    request.mockResolvedValueOnce({ ...schema, version: "active" });
+    request.mockResolvedValueOnce({
+      schema: { type: "object" },
+      uiHints: {},
+      version: "active",
+      generatedAt: "2026-10-13T00:00:00Z",
+    });
     publish(true, undefined, undefined, { generation: 1 });
     await refreshed.promise;
     stop();

@@ -5,8 +5,7 @@ import {
 } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { patchScopedAccountConfig } from "openclaw/plugin-sdk/setup";
-import { resolveBuzzAccountConfig } from "./account-config.js";
-import { decodeBuzzPrivateKey, resolveBuzzPublicKey } from "./types.js";
+import { decodeBuzzPrivateKey, resolveBuzzAccountConfig, resolveBuzzPublicKey } from "./types.js";
 
 function validRelayUrl(value: string | undefined): boolean {
   const url = URL.parse(value ?? "");

@@ -12,12 +12,14 @@ import { createDirectHarness, makeResult } from "./run-entry.test-support.js";
 
 afterEach(() => clearRuntimeConfigSnapshot());
 
-it.each([
+const cleanupCases = [
   { kind: "command-rpc", settlement: "success" },
   { kind: "channel-delivery", settlement: "failure" },
   { kind: "command-rpc", settlement: "late-success" },
   { kind: "channel-delivery", settlement: "late-failure" },
-] as const)(
+] as const;
+
+it.each(cleanupCases)(
   "settles $kind replies and cleanup ownership for $settlement",
   async ({ kind, settlement }) => {
     const cfg = { plugins: { slots: { contextEngine: "cleanup-probe" } } };
@@ -74,6 +76,7 @@ it.each([
               model,
               sessionId: "cleanup-session",
               text: "Completed answer",
+              meta: { durationMs: 1 },
             }),
         }),
       )

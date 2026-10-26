@@ -17,10 +17,6 @@ import * as hostStats from "./host-stats.js";
 const connections: ReturnType<typeof startNodeHostConnection>[] = [];
 const stats = { cpuCount: 8, memoryTotalBytes: 100, memoryFreeBytes: 50 };
 const gateway = { url: "wss://gateway.example.test", protocol: 4, capabilities: [] };
-const launchDeclaration = (launchToolNames: unknown) => ({
-  protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-  workerHost: { enabled: true, capacity: { total: 2, available: 2 }, launchToolNames },
-});
 
 it.each([
   {
@@ -38,11 +34,18 @@ it.each([
 ])(
   "preserves declared launch names or the published 2026.9.6 vocabulary ($declared)",
   ({ declared, expected }) => {
-    const parsed = parseNodeRunnerInventoryDeclaration(launchDeclaration(declared));
-    if (!parsed || !("workerHost" in parsed)) {
+    const declaration = parseNodeRunnerInventoryDeclaration({
+      protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+      workerHost: {
+        enabled: true,
+        capacity: { total: 2, available: 2 },
+        launchToolNames: declared,
+      },
+    });
+    if (!declaration || !("workerHost" in declaration)) {
       throw new Error("Expected the supervisor declaration to parse");
     }
-    const names = resolveNodeWorkerLaunchToolNames(parsed.workerHost);
+    const names = resolveNodeWorkerLaunchToolNames(declaration.workerHost);
     expect(names).toEqual(expected);
     if (!declared) {
       expect(names).not.toContain("presence");
@@ -60,7 +63,12 @@ it.each([
   { reason: "oversized name", value: ["x".repeat(65)] },
   { reason: "oversized array", value: Array.from({ length: 65 }, (_, index) => `tool_${index}`) },
 ])("rejects the whole worker declaration for $reason launch names", ({ value }) => {
-  expect(parseNodeRunnerInventoryDeclaration(launchDeclaration(value))).toBeNull();
+  expect(
+    parseNodeRunnerInventoryDeclaration({
+      protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+      workerHost: { enabled: true, capacity: { total: 2, available: 2 }, launchToolNames: value },
+    }),
+  ).toBeNull();
 });
 
 it.each([
@@ -71,7 +79,7 @@ it.each([
 ])(
   "joins disconnect cleanup before reconnect publication (already failed=$reconnectAfterFailure, fails=$fails)",
   async ({ reconnectAfterFailure, fails }) => {
-    const { connection, request, callbacks, runtime } = startConnectionFixture(true);
+    const { connection, request, start, runtime } = startConnectionFixture(true);
     const retirement = createDeferred();
     const retry = createDeferred();
     runtime.cancelAll.mockReturnValueOnce(retirement.promise);
@@ -83,7 +91,11 @@ it.each([
     const replacement = { request: vi.fn().mockResolvedValue({}) };
     const retired = { request: vi.fn().mockResolvedValue({}) };
     try {
-      callbacks.onRunnerCapacityChanged?.({ total: 1, available: 0, reclaimableIdle: 1 });
+      start.mock.calls[0]![0].onRunnerCapacityChanged?.({
+        total: 1,
+        available: 0,
+        reclaimableIdle: 1,
+      });
       connection.connect(gateway);
       connection.disconnect();
       if (reconnectAfterFailure) {
@@ -100,7 +112,11 @@ it.each([
         expect(retired.request).not.toHaveBeenCalled();
         expect(replacement.request).not.toHaveBeenCalled();
       }
-      callbacks.onRunnerCapacityChanged?.({ total: 1, available: 1, reclaimableIdle: 0 });
+      start.mock.calls[0]![0].onRunnerCapacityChanged?.({
+        total: 1,
+        available: 1,
+        reclaimableIdle: 0,
+      });
       expect(request).toHaveBeenCalledTimes(callsBefore);
       expect(replacement.request).not.toHaveBeenCalled();
       const pending = reconnectAfterFailure ? retry : retirement;
@@ -175,7 +191,7 @@ function startConnectionFixture(
     publications,
     inventory,
     writeStderrLine,
-    callbacks: start.mock.calls[0]![0],
+    start,
     prepared,
     runtime,
   };
@@ -186,8 +202,8 @@ function runnerPublications(request: ReturnType<typeof startConnectionFixture>["
 }
 
 it("publishes retained process changes through the current connection only", async () => {
-  const { connection, request, callbacks } = startConnectionFixture(true);
-  const changed = callbacks.onProcessesChanged!;
+  const { connection, request, start } = startConnectionFixture(true);
+  const changed = start.mock.calls[0]![0].onProcessesChanged!;
   const binding = {
     environmentId: "environment-1",
     sessionId: "session-1",
@@ -213,8 +229,9 @@ it("publishes retained process changes through the current connection only", asy
 });
 
 it("sends permission details only while the connected Gateway advertises support", async () => {
-  const { connection, request, callbacks } = startConnectionFixture();
-  const response = createNodeInvokeResponder(callbacks.client, {
+  const { connection, request, start } = startConnectionFixture();
+  const runtimeClient = start.mock.calls[0]![0].client;
+  const response = createNodeInvokeResponder(runtimeClient, {
     id: "screen-capture",
     nodeId: "test-mac",
     command: "system.run",
@@ -268,7 +285,7 @@ afterEach(async () => {
 it.each(["disconnect", "close", "manifest"] as const)(
   "publishes immediately and every minute until %s retires the connection",
   async (retire) => {
-    const { connection, publications, callbacks, prepared } = startConnectionFixture();
+    const { connection, publications, start, prepared } = startConnectionFixture();
     expect(publications()).toEqual([]);
     connection.connect(gateway);
     expect(publications()).toEqual([
@@ -279,7 +296,7 @@ it.each(["disconnect", "close", "manifest"] as const)(
     await vi.advanceTimersByTimeAsync(1);
     expect(publications()).toHaveLength(2);
     if (retire === "manifest") {
-      callbacks.onManifestChanged?.(prepared.manifest);
+      start.mock.calls[0]?.[0].onManifestChanged?.(prepared.manifest);
     } else {
       await connection[retire]();
     }
@@ -333,7 +350,7 @@ it("fences late failures and sends replacement samples only through the new clie
 });
 
 it("logs runner publication failure changes while continuing retries through recovery", async () => {
-  const { connection, request, callbacks, writeStderrLine } = startConnectionFixture(true);
+  const { connection, request, start, writeStderrLine } = startConnectionFixture(true);
   const approvalMessage = "runner capability surface is awaiting operator approval";
   let failure: string | undefined = approvalMessage;
   request.mockImplementation(async (method) => {
@@ -343,7 +360,7 @@ it("logs runner publication failure changes while continuing retries through rec
     return {};
   });
   const publications = () => runnerPublications(request);
-  const capacityChanged = callbacks.onRunnerCapacityChanged!;
+  const capacityChanged = start.mock.calls[0]![0].onRunnerCapacityChanged!;
   capacityChanged({ total: 2, available: 2 });
   connection.connect(gateway);
   await vi.advanceTimersByTimeAsync(0);
@@ -388,8 +405,8 @@ it("logs runner publication failure changes while continuing retries through rec
 it.each([false, true])(
   "refreshes acknowledged runner facts without changing hosting consent: %s",
   async (enabled) => {
-    const { connection, request, callbacks, inventory } = startConnectionFixture(enabled);
-    callbacks.onRunnerCapacityChanged?.({ total: 1, available: 0 });
+    const { connection, request, start, inventory } = startConnectionFixture(enabled);
+    start.mock.calls[0]?.[0].onRunnerCapacityChanged?.({ total: 1, available: 0 });
     connection.connect(gateway);
     await vi.advanceTimersByTimeAsync(0);
     const callsBefore = request.mock.calls.length;
@@ -414,7 +431,7 @@ it.each([false, true])(
 it.each(["resolve", "reject"] as const)(
   "retires in-flight runner publication and its pending value before late %s",
   async (settle) => {
-    const { connection, request, callbacks } = startConnectionFixture(true);
+    const { connection, request, start } = startConnectionFixture(true);
     const previous = createDeferred<unknown>();
     let first = true;
     request.mockImplementation((method) => {
@@ -424,7 +441,7 @@ it.each(["resolve", "reject"] as const)(
       }
       return Promise.resolve({});
     });
-    const capacityChanged = callbacks.onRunnerCapacityChanged!;
+    const capacityChanged = start.mock.calls[0]![0].onRunnerCapacityChanged!;
     const publications = () => runnerPublications(request);
     try {
       capacityChanged({ total: 2, available: 2 });
@@ -455,14 +472,14 @@ it.each(["resolve", "reject"] as const)(
 );
 
 it("keeps refreshed publication on its replacement connection despite an old acknowledgment", async () => {
-  const { connection, request, callbacks } = startConnectionFixture(true);
+  const { connection, request, start } = startConnectionFixture(true);
   const previous = createDeferred<unknown>();
   request.mockImplementation((method) =>
     method === NODE_RUNNER_INVENTORY_UPDATE_METHOD ? previous.promise : Promise.resolve({}),
   );
   const replacementRequest = vi.fn().mockResolvedValue({});
   try {
-    callbacks.onRunnerCapacityChanged?.({ total: 1, available: 1 });
+    start.mock.calls[0]![0].onRunnerCapacityChanged?.({ total: 1, available: 1 });
     connection.connect(gateway);
     connection.refreshRunnerInventory();
     connection.connect(gateway, { request: replacementRequest });
@@ -489,6 +506,7 @@ it.each([
   { kind: "workspace", platform: "win32", bun: false },
   { kind: "workspace", platform: "darwin", bun: false },
   { kind: "prepared", platform: "linux", bun: false },
+  { kind: "prefetch", platform: "linux", bun: false },
   { kind: "folders", platform: "linux", bun: false, folders: false },
   { kind: "folders", platform: "linux", bun: false, folders: true },
 ] as const)("negotiates $kind inventory per connection ($platform, Bun=$bun)", async (scenario) => {
@@ -501,7 +519,7 @@ it.each([
     value: bun ? "fixture" : undefined,
   });
   const folders = "folders" in scenario && scenario.folders;
-  const { connection, callbacks, inventory } = startConnectionFixture(
+  const { connection, start, inventory } = startConnectionFixture(
     true,
     kind === "prepared",
     true,
@@ -522,15 +540,18 @@ it.each([
     workspace: [
       GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_RESULT,
       GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_QUIESCENCE,
+      GATEWAY_SERVER_CAPS.NODE_WORKER_STATUS_WAIT,
+      GATEWAY_SERVER_CAPS.NODE_WORKER_LAUNCH_TOOL_NAMES,
     ],
     prepared: [GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_PREFETCH],
+    prefetch: [GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_PREFETCH],
     folders: [GATEWAY_SERVER_CAPS.NODE_WORKER_DEVICE_FOLDERS],
   };
   try {
     if (kind === "disabled") {
-      callbacks.onWorkerHostingDisabled?.(disabledReason);
+      start.mock.calls[0]![0].onWorkerHostingDisabled?.(disabledReason);
     } else {
-      callbacks.onRunnerCapacityChanged?.(capacity);
+      start.mock.calls[0]![0].onRunnerCapacityChanged?.(capacity);
     }
     for (const supported of [false, true, false]) {
       connection.connect({ ...gateway, capabilities: supported ? capabilities[kind] : [] });
@@ -550,12 +571,15 @@ it.each([
             idle: { idleRetention: true },
             disabled: { reason: disabledReason },
             workspace: {
+              statusWait: 1,
+              launchToolNames: [...CORE_WORKER_LAUNCH_TOOL_NAMES],
               workspaceResultVersion: 2,
               ...((platform === "linux" || platform === "win32") && !bun
                 ? { workspaceQuiescence: 1 }
                 : {}),
             },
             prepared: {},
+            prefetch: { bundlePrefetch: 1 },
             folders: folders ? { deviceFolders: true } : {},
           }[kind];
       expect(declaration).toEqual({
@@ -577,8 +601,8 @@ it.each([
       });
       expect(parseNodeRunnerInventoryDeclaration(declaration)).toEqual(declaration);
     }
-    if (kind === "prepared" || kind === "optional") {
-      callbacks.onWorkerHostingDisabled?.("test revoked worker consent");
+    if (kind === "prepared" || kind === "prefetch") {
+      start.mock.calls[0]?.[0].onWorkerHostingDisabled?.("test revoked worker consent");
       await vi.advanceTimersByTimeAsync(0);
       expect(inventory()).toMatchObject({ workerHost: { enabled: false } });
     }

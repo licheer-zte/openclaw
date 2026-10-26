@@ -76,12 +76,7 @@ suite.define(() => {
         captureMode: engine,
       });
       for (const view of views) {
-        // Native behavior covers both layouts; visual proof keeps every theme/layout pair.
-        const themes =
-          process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-            ? (["light", "dark"] as const)
-            : ([view.name === "desktop" ? "light" : "dark"] as const);
-        for (const theme of themes) {
+        for (const theme of ["light", "dark"] as const) {
           const options = {
             colorScheme: theme,
             locale: "en-US",

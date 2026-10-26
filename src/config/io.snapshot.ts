@@ -480,7 +480,6 @@ export async function prepareConfigRecoveryFromContext(
     );
     const plan = await prepareSuspiciousConfigRead({
       deps: previewContext.deps,
-      measure: previewContext.deps.measure,
       configPath: context.configPath,
       raw: current.raw,
       parsed: current.parsed,

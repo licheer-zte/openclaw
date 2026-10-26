@@ -54,7 +54,6 @@ import {
   threadInfoMocks,
   transcriptMocks,
   ttsMocks,
-  emptyConfig,
 } from "./dispatch-from-config.shared.test-harness.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -107,20 +106,6 @@ export let runWithReplyOperationLifecycleAdmission: typeof import("./reply-turn-
 type DispatchReplyArgs = Parameters<
   typeof import("./dispatch-from-config.js").dispatchReplyFromConfig
 >[0];
-
-export function createMessageToolOnlyDispatchArgs(
-  ctx: DispatchReplyArgs["ctx"],
-  dispatcher: DispatchReplyArgs["dispatcher"],
-  replyResolver: DispatchReplyArgs["replyResolver"],
-): DispatchReplyArgs {
-  return {
-    ctx,
-    cfg: emptyConfig,
-    dispatcher,
-    replyResolver,
-    replyOptions: { sourceReplyDeliveryMode: "message_tool_only" },
-  };
-}
 
 function shouldUseAcpReplyDispatchHook(eventUnknown: unknown): boolean {
   const event = eventUnknown as {

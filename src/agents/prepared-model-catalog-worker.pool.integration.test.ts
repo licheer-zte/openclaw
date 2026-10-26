@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as checkpoint } from "node:timers/promises";
+import type { Worker } from "node:worker_threads";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   openFixtureReceiptChannel,
@@ -72,7 +73,6 @@ const {
 let receipts: FixtureReceiptChannel;
 const createFleetFixture = createCatalogFleetFixture(makeTempDir, () => receipts.broadcastName);
 type Fleet = Awaited<ReturnType<typeof createFleetFixture>>;
-type Snapshot = Fleet["snapshots"][number];
 
 function currentRuntime(fixture: Fleet, index = 0) {
   const agentId = fixture.agentIds[index]!;
@@ -104,20 +104,12 @@ function loadFleetAuth(fixture: Fleet, providerIds: string[] = []) {
   return Promise.all(fixture.snapshots.map((snapshot) => loadAuth(snapshot, providerIds)));
 }
 
-function loadAuth(snapshot: Snapshot, providerIds = [PROVIDER_ID]) {
+function loadAuth(snapshot: Fleet["snapshots"][number], providerIds = [PROVIDER_ID]) {
   return loadPreparedModelRuntimeAuth(snapshot, { providerIds });
 }
 
-function expectAuth(snapshot: Snapshot) {
+function expectAuth(snapshot: Fleet["snapshots"][number]) {
   return expect(loadAuth(snapshot)).resolves.toMatchObject({ authStore: { version: 1 } });
-}
-
-function renew(snapshot: Snapshot) {
-  return snapshot.loadFullModelCatalog!({ refresh: true });
-}
-
-function retireFleet(fixture: Fleet) {
-  return retirePluginCache(getPluginMetadataSnapshotCache(fixture.snapshots[0]!.metadataSnapshot));
 }
 
 function holdFleet(fixture: Fleet, index = 0) {
@@ -131,13 +123,22 @@ function holdFleet(fixture: Fleet, index = 0) {
 }
 
 function observeFailures() {
-  const failures: Array<{ phase: "catalog-failed"; modelFactsChanged?: boolean }> = [];
-  const unregister = registerPreparedModelRuntimePublicationListener((event) => {
-    if (event.phase === "catalog-failed") {
-      failures.push(event);
+  const failures: string[] = [];
+  const unregister = registerPreparedModelRuntimePublicationListener(({ phase }) => {
+    if (phase === "catalog-failed") {
+      failures.push(phase);
     }
   });
   return { failures, unregister };
+}
+
+function expectWorkerCustody(fixture: Fleet, worker: Worker) {
+  expect(JSON.parse(fs.readFileSync(`${fixture.marker}.worker`, "utf8"))).toEqual({
+    pid: process.pid,
+    cwd: process.cwd(),
+    threadId: worker.threadId,
+    agentDir: fixture.snapshots[0]!.agentDir,
+  });
 }
 
 function expectPool(state: Partial<ReturnType<typeof getPreparedModelCatalogWorkerPoolSnapshot>>) {
@@ -202,6 +203,7 @@ describe("Gateway catalog worker pool", () => {
         config: { skills: { entries: { [skillKey]: { env: { [envKey]: value } } } } },
       });
       try {
+        expect(process.env[envKey]).toBe(value);
         await refresh();
         expect(process.env[envKey]).toBe(value);
       } finally {
@@ -215,6 +217,7 @@ describe("Gateway catalog worker pool", () => {
     const observed = observeWorkers();
     const fixture = await createFleetFixture(observed.subscribe);
     await loadFleetCatalogs(fixture);
+    expect(observed.spawned).toHaveLength(1);
     const { workerFailures } = getPreparedModelCatalogWorkerPoolSnapshot();
     const warnings = workerFailureWarnings().length;
     writeFixturePlugin({ root: fixture.root, spinMs: 0, pluginVersion: "v2" });
@@ -230,7 +233,12 @@ describe("Gateway catalog worker pool", () => {
     expect(observed.spawned).toHaveLength(2);
     expect(observed.peakWorkers).toBe(1);
     // The replacement pool restarts its own counters; the failure survives it.
-    expectPool({ workerFailures: workerFailures + 1 });
+    expectPool({
+      maxWorkers: 1,
+      workers: 1,
+      workersCreated: 1,
+      workerFailures: workerFailures + 1,
+    });
     expect(workerFailureWarnings().slice(warnings)).toEqual([
       expect.stringContaining("worker exited with code 1"),
     ]);
@@ -241,27 +249,39 @@ describe("Gateway catalog worker pool", () => {
   }) => {
     const observed = observeWorkers();
     const fixture = await createFleetFixture(observed.subscribe, true);
-    const [original, queued, sibling] = fixture.snapshots;
-    const { failures: catalogFailures, unregister } = observeFailures();
+    const catalogFailures: Array<{ phase: "catalog-failed"; modelFactsChanged?: boolean }> = [];
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      if (event.phase === "catalog-failed") {
+        catalogFailures.push(event);
+      }
+    });
     const work = pendingCatalogWork(`${fixture.marker}.hold`);
     try {
       const accepted = await loadFleetCatalogs(fixture);
+      for (const catalog of accepted) {
+        expectGeneration(catalog);
+      }
+      expect(observed.spawned).toHaveLength(1);
       const acceptedAuth = accepted.map((catalog) => {
         const auth = getPreparedModelFullCatalogAuth(catalog)!;
         return { ...auth, authStore: { profiles: auth.authStore.profiles } };
       });
       const acceptedRuntime = fixture.snapshots.map((snapshot) => snapshot.readPublishedModels!());
       const worker = observed.spawned[0]!;
-      const entered = observeCatalogEntry(fixture.marker, original!.agentDir);
+      expect(worker.threadId).toBeGreaterThan(0);
+      const entered = observeCatalogEntry(fixture.marker, fixture.snapshots[0]!.agentDir);
       fs.writeFileSync(`${fixture.marker}.hold`, "");
       // This case orders pool failure before the foreground fallback. Keep its clock
       // fixed while real worker entry and recovery run under variable host pressure.
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const renewal = work.track(renew(original!));
+      const renewal = work.track(fixture.snapshots[0]!.loadFullModelCatalog!({ refresh: true }));
       await entered(renewal, signal);
-      expect(original!.readFullModelCatalog!()).toBe(accepted[0]);
-      const queuedAuth = work.track(loadAuth(queued!));
-      const queuedCatalog = work.track(renew(sibling!));
+      expectWorkerCustody(fixture, worker);
+      expect(fixture.snapshots[0]!.readFullModelCatalog!()).toBe(accepted[0]);
+      const queuedAuth = work.track(loadAuth(fixture.snapshots[1]!));
+      const queuedCatalog = work.track(
+        fixture.snapshots[2]!.loadFullModelCatalog!({ refresh: true }),
+      );
       await expect
         .poll(() => getPreparedModelCatalogWorkerPoolSnapshot())
         .toMatchObject({ workers: 1, activeTasks: 1, pendingTasks: 2 });
@@ -280,6 +300,7 @@ describe("Gateway catalog worker pool", () => {
       fs.rmSync(`${fixture.marker}.hold`);
       const replacements = fixture.agentIds.map((_, index) => currentRuntime(fixture, index));
       for (const [index, replacement] of replacements.entries()) {
+        expect(replacement).not.toBe(fixture.snapshots[index]);
         expect(replacement.isCurrent()).toBe(true);
         const retained = replacement.readFullModelCatalog!()!;
         expect(retained.entries).toEqual(accepted[index]!.entries);
@@ -294,6 +315,7 @@ describe("Gateway catalog worker pool", () => {
         expect(retained.pendingProviders).toBeUndefined();
         expect(retained.refreshFailed).toBe(index === 0 ? true : undefined);
       }
+      expect(catalogFailures).toHaveLength(1);
       await expectAuth(replacements[1]!);
       expect(replacements[0]!.readFullModelCatalog!()!.refreshFailed).toBe(true);
       for (const replacement of replacements.slice(1)) {
@@ -353,7 +375,7 @@ describe("Gateway catalog worker pool", () => {
             return timer;
           });
         try {
-          renewal = renew(original);
+          renewal = original.loadFullModelCatalog!({ refresh: true });
         } finally {
           deadlineSpy.mockRestore();
         }
@@ -364,6 +386,7 @@ describe("Gateway catalog worker pool", () => {
         // The foreground deadline returns retained data while acquisition stays behind the barrier.
         await expect(renewal).resolves.toBe(accepted);
         const worker = observed.spawned[0]!;
+        expectWorkerCustody(fixture, worker);
         expect(original.readFullModelCatalog!()).toBe(accepted);
         const terminate = worker.terminate.bind(worker);
         const termination = vi.spyOn(worker, "terminate").mockImplementation(async () => {
@@ -424,6 +447,7 @@ describe("Gateway catalog worker pool", () => {
             }
           }
           expect(previous.isCurrent()).toBe(false);
+          expect(current()).not.toBe(previous);
           expect(current().isCurrent()).toBe(true);
           expect(original.isCurrent()).toBe(false);
         }
@@ -515,20 +539,26 @@ describe("Gateway catalog worker pool", () => {
       const { workerFailures } = getPreparedModelCatalogWorkerPoolSnapshot();
       const warnings = workerFailureWarnings().length;
       const work = holdFleet(fixture);
-      const renewal = work.track(renew(fixture.snapshots[0]!));
+      const renewal = work.track(fixture.snapshots[0]!.loadFullModelCatalog!({ refresh: true }));
       try {
         await work.entered(renewal, signal);
-        const queued = work.track(renew(fixture.snapshots[1]!));
+        const queued = work.track(fixture.snapshots[1]!.loadFullModelCatalog!({ refresh: true }));
         const closing =
           reason === "shutdown"
             ? work.track(closePreparedModelRuntimeSnapshots())
-            : work.track(retireFleet(fixture));
+            : work.track(
+                retirePluginCache(
+                  getPluginMetadataSnapshotCache(fixture.snapshots[0]!.metadataSnapshot),
+                ),
+              );
         work.release();
         await closing;
         await expect(renewal).rejects.toThrow();
         await expect(queued).rejects.toThrow();
         const stopped = fs.readFileSync(fixture.marker, "utf8");
-        await expect(renew(fixture.snapshots[2]!)).rejects.toThrow();
+        await expect(
+          fixture.snapshots[2]!.loadFullModelCatalog!({ refresh: true }),
+        ).rejects.toThrow();
         await checkpoint();
         expect(fs.readFileSync(fixture.marker, "utf8")).toBe(stopped);
         expect(failures).toEqual([]);
@@ -581,7 +611,7 @@ describe("Gateway catalog worker pool", () => {
       let previousCatalog: ReturnType<typeof loadCompletedFullCatalog> | undefined;
       if (predecessorKind === "catalog") {
         fs.writeFileSync(`${fixture.marker}.hold`, "");
-        previousCatalog = renew(previous);
+        previousCatalog = previous.loadFullModelCatalog!({ refresh: true });
         void previousCatalog.catch(() => {});
       }
       const preparing = createDeferredCore();
@@ -698,7 +728,9 @@ describe("Gateway catalog worker pool", () => {
           termination.mockRestore();
         }
         await closing;
-        await retireFleet(fixture);
+        await retirePluginCache(
+          getPluginMetadataSnapshotCache(fixture.snapshots[0]!.metadataSnapshot),
+        );
         await checkpoint();
         expect(observed.spawned).toHaveLength(1);
         expectPool({ workers: 0, activeTasks: 0, pendingTasks: 0 });

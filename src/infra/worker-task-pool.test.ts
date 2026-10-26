@@ -29,8 +29,15 @@ vi.mock("node:os", async (importOriginal) => ({
 }));
 vi.mock("node:worker_threads", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:worker_threads")>();
-  const { observeWorkerConstructors } = await import("../../test/helpers/worker-observer.js");
-  return observeWorkerConstructors(actual, workers);
+  return {
+    ...actual,
+    Worker: class extends actual.Worker {
+      constructor(...args: ConstructorParameters<typeof actual.Worker>) {
+        super(...args);
+        workers.push(this);
+      }
+    },
+  };
 });
 function createPool<Input = PoolFixtureInput, Output = PoolFixtureResult>(
   options: Partial<WorkerTaskPoolOptions<Output>> = {},

@@ -21,10 +21,10 @@ function setRuntime(openKeyedStoreV2: (options: OpenKeyedStoreOptions) => unknow
   } as unknown as PluginRuntime);
 }
 
-function hasParticipation(accountId = "acct", threadRootId = "root-1", channelId = "chan") {
+function hasParticipation(accountId = "acct", threadRootId = "root-1") {
   return hasMattermostThreadParticipationWithPersistence({
     accountId,
-    channelId,
+    channelId: "chan",
     threadRootId,
   });
 }
@@ -59,12 +59,12 @@ describe("mattermost thread participation", () => {
 
   it("isolates participation by account, channel, and thread", async () => {
     await recordMattermostThreadParticipation("acct", "chan", "root-1");
-    for (const [account, thread, channel] of [
-      ["other", "root-1", "chan"],
-      ["acct", "root-1", "other"],
-      ["acct", "root-2", "chan"],
+    for (const probe of [
+      { accountId: "other", channelId: "chan", threadRootId: "root-1" },
+      { accountId: "acct", channelId: "other", threadRootId: "root-1" },
+      { accountId: "acct", channelId: "chan", threadRootId: "root-2" },
     ]) {
-      await expect(hasParticipation(account, thread, channel)).resolves.toBe(false);
+      await expect(hasMattermostThreadParticipationWithPersistence(probe)).resolves.toBe(false);
     }
   });
 
@@ -109,6 +109,12 @@ describe("mattermost thread participation", () => {
       agentId: "historic-agent",
       repliedAt: Date.now(),
     });
-    await expect(hasParticipation("acct", "historic-root")).resolves.toBe(true);
+    await expect(
+      hasMattermostThreadParticipationWithPersistence({
+        accountId: "acct",
+        channelId: "chan",
+        threadRootId: "historic-root",
+      }),
+    ).resolves.toBe(true);
   });
 });

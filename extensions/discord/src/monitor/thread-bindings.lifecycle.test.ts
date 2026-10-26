@@ -21,8 +21,6 @@ const {
   resolveThreadBindingMaxAgeExpiresAt: ageExpiry,
 } = await import("./thread-bindings.state.js");
 const target = { accountId: "default", targetSessionKey: "agent:main:subagent:child" };
-const gone = (status: number, code?: string) =>
-  new DiscordError(new Response(null, { status }), { code, message: "Unknown Channel" });
 
 installThreadBindingLifecycleTestHooks();
 
@@ -59,48 +57,68 @@ describe("thread binding clock-controlled lifecycle", () => {
     }
   });
 
-  it.each([
-    ["max-age", null],
-    ["transient", new Error("ECONNRESET")],
-    ["missing", gone(404)],
-    ["forbidden", gone(403)],
-    ["unknown-channel", gone(400, "10003")],
-  ] as const)("sweeps bindings at %s", async (reason, error) => {
-    const expires = reason === "max-age";
-    const manager = await createTestThreadBindingManager({
-      enableSweeper: true,
-      ...(expires ? { idleTimeoutMs: 0, maxAgeMs: 60_000 } : {}),
-    });
-    const binding = await bindTestThread(manager);
-    if (!expires) {
-      hoisted.restGet.mockRejectedValueOnce(error);
-    }
-    await vi.advanceTimersByTimeAsync(120_000);
-    expect(manager.getByThreadId("thread-1")).toEqual(reason === "transient" ? binding : undefined);
-    expect(hoisted.sendWebhookMessageDiscord).not.toHaveBeenCalled();
-    if (expires) {
-      expect(hoisted.restGet).not.toHaveBeenCalled();
-      expect(hoisted.sendMessageDiscord).toHaveBeenCalledOnce();
-      expect(hoisted.sendMessageDiscord.mock.calls[0]?.[1]).toContain("max age of 1m");
-    }
-  });
+  it.each(["max-age", "transient", "missing", "forbidden", "unknown-channel"] as const)(
+    "sweeps bindings at %s",
+    async (reason) => {
+      const expires = reason === "max-age";
+      const manager = await createTestThreadBindingManager({
+        enableSweeper: true,
+        ...(expires ? { idleTimeoutMs: 0, maxAgeMs: 60_000 } : {}),
+      });
+      const binding = await bindTestThread(manager, expires ? { introText: "intro" } : {});
+      if (expires) {
+        expect(binding).toMatchObject({
+          threadId: "thread-1",
+          targetSessionKey: target.targetSessionKey,
+        });
+        hoisted.sendMessageDiscord.mockClear();
+        hoisted.sendWebhookMessageDiscord.mockClear();
+      } else {
+        hoisted.restGet.mockRejectedValueOnce(
+          reason === "transient"
+            ? new Error("ECONNRESET")
+            : new DiscordError(
+                new Response(null, {
+                  status: reason === "forbidden" ? 403 : reason === "unknown-channel" ? 400 : 404,
+                }),
+                {
+                  code: reason === "unknown-channel" ? "10003" : undefined,
+                  message: "Unknown Channel",
+                },
+              ),
+        );
+      }
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(manager.getByThreadId("thread-1")).toEqual(
+        reason === "transient" ? binding : undefined,
+      );
+      expect(hoisted.sendWebhookMessageDiscord).not.toHaveBeenCalled();
+      if (expires) {
+        expect(hoisted.restGet).not.toHaveBeenCalled();
+        expect(hoisted.sendMessageDiscord).toHaveBeenCalledOnce();
+        expect(hoisted.sendMessageDiscord.mock.calls[0]?.[1]).toContain("max age of 1m");
+      }
+    },
+  );
 
   it("preserves explicitly updated lifecycle windows when rebinding", async () => {
-    vi.setSystemTime(60_000);
+    vi.setSystemTime(new Date("2026-02-20T10:00:00.000Z"));
     const manager = await createTestThreadBindingManager();
     await bindTestThread(manager);
     const idleTimeoutMs = 2 * 60 * 60 * 1000;
     const maxAgeMs = 3 * 60 * 60 * 1000;
-    await setIdle({ ...target, idleTimeoutMs });
-    await setAge({ ...target, maxAgeMs });
-    vi.setSystemTime(31 * 60_000);
+    const idle = await setIdle({ ...target, idleTimeoutMs });
+    const age = await setAge({ ...target, maxAgeMs });
+    expect([idle.length, age.length]).toEqual([1, 1]);
+    vi.setSystemTime(new Date("2026-02-20T10:30:00.000Z"));
     const rebound = await bindTestThread(manager, { agentId: undefined });
     expect(rebound).toMatchObject({ idleTimeoutMs, maxAgeMs });
     const record = manager.getByThreadId("thread-1")!;
+    expect(record).toEqual(rebound);
     expect([
       idleExpiry({ record, defaultIdleTimeoutMs: manager.getIdleTimeoutMs() }),
       ageExpiry({ record, defaultMaxAgeMs: manager.getMaxAgeMs() }),
-    ]).toEqual([151 * 60_000, 211 * 60_000]);
+    ]).toEqual([Date.parse("2026-02-20T12:30:00.000Z"), Date.parse("2026-02-20T13:30:00.000Z")]);
   });
 
   it("rechecks activity touched during the same sweep pass", async () => {

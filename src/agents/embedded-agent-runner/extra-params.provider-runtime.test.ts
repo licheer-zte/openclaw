@@ -5,8 +5,12 @@ import type { Model, SimpleStreamOptions } from "../../llm/types.js";
 import { captureEnv } from "../../test-utils/env.js";
 import type { StreamFn } from "../runtime/index.js";
 import { attachToolAllowlistIntersection } from "../tool-policy.js";
-import { resolveAgentTransportOverride, resolveExplicitSettingsTransport } from "./extra-params.js";
-import { runExtraParamsCase, testing as extraParamsTesting } from "./extra-params.test-support.js";
+import {
+  applyExtraParamsToAgent,
+  resolveAgentTransportOverride,
+  resolveExplicitSettingsTransport,
+} from "./extra-params.js";
+import { testing as extraParamsTesting } from "./extra-params.test-support.js";
 
 vi.mock("../../llm/stream.js", () => createLlmStreamSimpleMock());
 
@@ -28,6 +32,10 @@ describe("extra-params: provider runtime handoff", () => {
       const payload: { tools: Array<Record<string, unknown>> } = {
         tools: [{ type: "function", name: "message" }],
       };
+      const baseStreamFn: StreamFn = (model, _context, options) => {
+        options?.onPayload?.(payload, model);
+        return {} as ReturnType<StreamFn>;
+      };
       extraParamsTesting.setProviderRuntimeDepsForTest({
         prepareProviderExtraParams: ({ context }) => context.extraParams,
         resolveProviderExtraParamsForTransport: () => undefined,
@@ -46,6 +54,7 @@ describe("extra-params: provider runtime handoff", () => {
             });
         },
       });
+      const agent = { streamFn: baseStreamFn };
       const model = {
         api: "openai-responses",
         provider: "openai",
@@ -53,15 +62,21 @@ describe("extra-params: provider runtime handoff", () => {
         baseUrl: "https://api.openai.com/v1",
       } as Model<"openai-responses">;
 
-      runExtraParamsCase({
-        agentId: "main",
+      applyExtraParamsToAgent(
+        agent,
+        undefined,
+        "openai",
+        "gpt-5.4",
+        undefined,
+        undefined,
+        "main",
+        undefined,
         model,
-        runtimeModel: model,
-        payload,
-        policyOptions: {
-          nativeWebSearchPolicyContext: { runtimeToolAllowlist, webSearchEnabled },
-        },
-      });
+        undefined,
+        undefined,
+        { nativeWebSearchPolicyContext: { runtimeToolAllowlist, webSearchEnabled } },
+      );
+      void agent.streamFn?.(model, { messages: [] }, {});
 
       expect(payload.tools.some((tool) => tool.type === "web_search")).toBe(expected);
     },

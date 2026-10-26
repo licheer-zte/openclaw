@@ -1,3 +1,5 @@
+import type { TSchema } from "typebox";
+import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   SessionsCreateResultSchema as CreateResult,
@@ -15,8 +17,10 @@ import {
   validateWorktreesRestoreParams as restore,
   validateWorktreesRetireSnapshotParams as retireSnapshot,
 } from "../index.js";
-import { accepts, rejects } from "./schema.test-support.js";
 
+function check(schema: TSchema, expected: boolean, value: unknown) {
+  expect(Value.Check(schema, value)).toBe(expected);
+}
 const gcResult = { removed: [], orphansDeleted: 0, snapshotsPruned: 0 };
 
 describe("managed worktree protocol schemas", () => {
@@ -34,7 +38,7 @@ describe("managed worktree protocol schemas", () => {
     expect(createSession({ agentId: "main", incognito: true })).toBe(true);
     expect(createSession({ agentId: "main", incognito: "true" })).toBe(false);
     expect(createSession({ agentId: "main", thinkingLevel: "" })).toBe(false);
-    accepts(CreateResult, {
+    check(CreateResult, true, {
       ok: true,
       key: "agent:main:dashboard:test",
       runStarted: false,
@@ -76,16 +80,13 @@ describe("managed worktree protocol schemas", () => {
         expectedRetainedSourceOid: "b".repeat(40),
       }),
     ).toBe(true);
-    accepts(RemoveResult, {
+    check(RemoveResult, true, {
       removed: true,
       recoveryPath: "/state/worktrees/.openclaw-retiring-id",
       recoveryRetainedUntil: 10,
       cleanup: { outcome: "removed-lossless", at: 3 },
     });
-  });
-
-  it("accepts partial GC receipts with protection and pack-maintenance progress", () => {
-    const receipt = {
+    check(GcResult, true, {
       ...gcResult,
       removed: ["removed"],
       orphansRetired: 1,
@@ -96,6 +97,12 @@ describe("managed worktree protocol schemas", () => {
       protectedCount: 1,
       protectionReasons: { "branch-moved": 1 },
       limitsSatisfied: null,
+    });
+  });
+
+  it("accepts pack-maintenance progress and failures in GC receipts", () => {
+    const receipt = {
+      ...gcResult,
       jobId: "gc-job",
       state: "running",
       packsRemoved: 1023,
@@ -106,8 +113,8 @@ describe("managed worktree protocol schemas", () => {
         packsAfter: 7777,
       },
     };
-    accepts(GcResult, receipt);
-    accepts(GcResult, {
+    check(GcResult, true, receipt);
+    check(GcResult, true, {
       ...receipt,
       state: "completed",
       outcome: "partial",
@@ -121,7 +128,7 @@ describe("managed worktree protocol schemas", () => {
     expect(listBranches({ repoRoot: "/repo", includeRepositoryStatus: true })).toBe(true);
     expect(listBranches({ repoRoot: "/repo", includeRepositoryStatus: false })).toBe(true);
     expect(listBranches({})).toBe(false);
-    accepts(BranchesResult, {
+    check(BranchesResult, true, {
       branches: [
         { name: "main", kind: "local" },
         { name: "feature", kind: "remote" },
@@ -131,10 +138,10 @@ describe("managed worktree protocol schemas", () => {
       repositoryStatus: "git",
       branchesUnavailable: true,
     });
-    accepts(BranchesResult, { branches: [], repositoryStatus: "not_git" });
-    accepts(BranchesResult, { branches: [], repositoryStatus: "unavailable" });
-    rejects(BranchesResult, { branches: [], repositoryStatus: "unknown" });
-    accepts(RemoveResult, { removed: true, snapshotError: "snapshot failed: nested gitlink" });
+    check(BranchesResult, true, { branches: [], repositoryStatus: "not_git" });
+    check(BranchesResult, true, { branches: [], repositoryStatus: "unavailable" });
+    check(BranchesResult, false, { branches: [], repositoryStatus: "unknown" });
+    check(RemoveResult, true, { removed: true, snapshotError: "snapshot failed: nested gitlink" });
   });
 
   it("accepts Gateway and node directory-listing targets", () => {

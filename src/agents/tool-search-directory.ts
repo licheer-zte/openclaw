@@ -196,8 +196,7 @@ function formatToolSearchCatalogDirectory(
   const omittedLabel = " additional tools omitted. ";
   // Each line includes its newline; three fixed separators remain outside the rows.
   let lineChars = lines.reduce((chars, line) => chars + line.length + 1, 0);
-  let omitted =
-    deferredEntries.filter((entry) => entry.source === "openclaw").length - lines.length;
+  let omitted = deferredEntries.length - lines.length;
   let guidance: string;
   for (;;) {
     guidance =

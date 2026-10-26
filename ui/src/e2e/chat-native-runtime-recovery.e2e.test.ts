@@ -140,7 +140,7 @@ suite.define(() => {
 
   it.each(
     (["selection", "send"] as const).flatMap((entrypoint) =>
-      (["confirm", "cancel", "mandatory"] as const).map((action) => ({
+      (["confirm", "cancel", "mandatory", "non-admin"] as const).map((action) => ({
         entrypoint,
         action,
       })),
@@ -173,7 +173,8 @@ suite.define(() => {
           sessionInfo: row,
           sessions: [row],
           models: [model],
-          operatorScopes: ["operator.admin"],
+          operatorScopes:
+            action === "non-admin" ? ["operator.read", "operator.write"] : ["operator.admin"],
           deferredMethods: [refusalMethod],
           methodResponses: { "sessions.list": result },
         });
@@ -211,7 +212,7 @@ suite.define(() => {
           expectedSandboxMode: null,
           expectedNativeRuntimeConsent: null,
         };
-        const blocked = action === "mandatory";
+        const blocked = action === "mandatory" || action === "non-admin";
         const reason =
           action === "mandatory"
             ? "sandbox-required"

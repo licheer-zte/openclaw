@@ -86,7 +86,9 @@ describe("compaction summarization fallback", () => {
     const controller = new AbortController();
     controller.abort();
 
-    await finish(expect(summarizeHello(controller.signal)).rejects.toBe(abortErr), 1);
+    const result = expect(summarizeHello(controller.signal)).rejects.toBe(abortErr);
+    // Caller cancellation is terminal and must not be masked as a CompactionError.
+    await finish(result, 1);
   });
 
   it("does not retry transport timeouts", async () => {

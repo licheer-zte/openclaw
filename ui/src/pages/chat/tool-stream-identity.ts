@@ -8,7 +8,6 @@ import {
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
-import { readPreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import type { LiveToolStreamState } from "./tool-stream-contract.ts";
 
 type ToolMessageRef = {
@@ -59,10 +58,7 @@ function isToolMessageContentBlock(block: Record<string, unknown>): boolean {
 }
 
 /** Reads invocation ids without confusing row ids or inventing a missing run owner. */
-export function extractToolMessageRefs(
-  message: unknown,
-  options: { resultsOnly?: boolean } = {},
-): ToolMessageRef[] {
+export function extractToolMessageRefs(message: unknown): ToolMessageRef[] {
   const record = asToolRecord(message);
   if (!record) {
     return [];
@@ -81,18 +77,15 @@ export function extractToolMessageRefs(
   const role = record.role;
   const messageHasToolShape =
     (typeof role === "string" && normalizeRoleForGrouping(role).toLowerCase() === "tool") ||
-    (!options.resultsOnly &&
-      (TOOL_NAME_FIELDS.some((field) => Boolean(normalizeOptionalString(record[field]))) ||
-        blocks.some(isToolMessageContentBlock)));
+    TOOL_NAME_FIELDS.some((field) => Boolean(normalizeOptionalString(record[field]))) ||
+    blocks.some(isToolMessageContentBlock);
 
   if (messageHasToolShape) {
     addToolMessageRef(refs, seen, topLevelToolId, topLevelRunId);
   }
 
   for (const block of blocks) {
-    if (
-      options.resultsOnly ? !isToolResultContentType(block.type) : !isToolMessageContentBlock(block)
-    ) {
+    if (!isToolMessageContentBlock(block)) {
       continue;
     }
     addToolMessageRef(
@@ -141,19 +134,7 @@ export function persistedCurrentToolStreamIds(
     return typeof role === "string" && normalizeRoleForGrouping(role).toLowerCase() === "user";
   });
   for (const message of messages.slice(lastUserIndex + 1)) {
-    // A saved call only proves invocation identity. Retire its live execution
-    // facts when history has an outcome, including prepared receipts whose
-    // result lies outside the rendered page.
-    const settledCalls = new Set(
-      readPreparedActivity(message)
-        .filter((item) => item.phase === "end" && !item.unpairedCall)
-        .map((item) => item.toolCallId ?? item.itemId),
-    );
-    const refs = [
-      ...extractToolMessageRefs(message, { resultsOnly: true }),
-      ...extractToolMessageRefs(message).filter((ref) => settledCalls.has(ref.id)),
-    ];
-    for (const ref of refs) {
+    for (const ref of extractToolMessageRefs(message)) {
       const identity = resolveMatchingLiveToolIdentity(ref, liveToolRefs);
       if (identity) {
         matchedToolIds.add(identity);

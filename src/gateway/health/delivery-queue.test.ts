@@ -2,7 +2,6 @@ import { afterAll, beforeEach, expect, it, vi } from "vitest";
 import * as ingressHealth from "../../channels/message/ingress-queue-health.js";
 import * as deliveryQueueState from "../../infra/delivery-queue-sqlite.js";
 import { buildDeliveryQueueHealthSummary } from "./delivery-queue.js";
-import { createTelegramIngressPressure } from "./delivery-queue.test-support.js";
 
 const countOutbound = vi.fn();
 const countIngress = vi.fn();
@@ -16,7 +15,17 @@ const outboundFailed = [{ queueName: "outbound", count: 2, oldestFailedAt: 1_000
 const ingressFailed = [
   { channelId: "telegram", accountId: "ops", count: 1, oldestFailedAt: 2_000 },
 ];
-const ingressPressure = createTelegramIngressPressure();
+const ingressPressure = [
+  {
+    channelId: "telegram",
+    accountId: "ops",
+    laneCount: 1,
+    pendingCount: 56,
+    claimedCount: 0,
+    blockedCount: 55,
+    oldestReceivedAt: 1_000,
+  },
+];
 
 beforeEach(() => {
   countOutbound.mockReset().mockResolvedValue([]);

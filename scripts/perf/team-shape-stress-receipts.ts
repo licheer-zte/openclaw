@@ -8,7 +8,6 @@ export function createTeamStressFanoutReceipts(clientCount: number, injectionKey
   const expectedInjections = new Set<string>();
   const foregroundEvents = new Set<string>();
   let observingSessions = false;
-  let lastWorkloadEventAt = performance.now();
   const messageKey = (sessionKey: string, messageId: string) =>
     JSON.stringify([sessionKey, messageId]);
   function record(receipts: Map<string, number[]>, key: string, client: number) {
@@ -19,19 +18,10 @@ export function createTeamStressFanoutReceipts(clientCount: number, injectionKey
     }
     counts[client]!++;
   }
-  function pendingInjections() {
-    return [...expectedInjections].filter((identity) => {
-      const counts = injected.get(identity);
-      return !counts || counts.some((count) => count === 0);
-    });
-  }
   return {
     trackForeground(keys: string[], requireEvents = true) {
       // Start after all clients subscribe; setup can publish before that boundary.
       observingSessions = true;
-      // Native child events may precede acceptance. Give their already-recorded
-      // receipts the same settling window when the spawn names its session.
-      lastWorkloadEventAt = performance.now();
       for (const key of keys) {
         foregroundKeys.add(key);
         if (requireEvents) {
@@ -47,9 +37,6 @@ export function createTeamStressFanoutReceipts(clientCount: number, injectionKey
         return;
       }
       const sessionKey = payload.sessionKey;
-      if (foregroundKeys.has(sessionKey)) {
-        lastWorkloadEventAt = performance.now();
-      }
       if (observingSessions) {
         // Native child publications can precede the spawn response naming the session.
         let receipts = sessionReceipts.get(sessionKey);
@@ -77,24 +64,18 @@ export function createTeamStressFanoutReceipts(clientCount: number, injectionKey
         injectionSessions.has(sessionKey) &&
         typeof payload.messageId === "string"
       ) {
-        const identity = messageKey(sessionKey, payload.messageId);
-        record(injected, identity, client);
-        if (expectedInjections.has(identity)) {
-          lastWorkloadEventAt = performance.now();
-        }
+        record(injected, messageKey(sessionKey, payload.messageId), client);
       }
     },
     expectInjection(sessionKey: string, messageId: string) {
       // Publication can arrive before chat.inject returns its committed message ID.
       expectedInjections.add(messageKey(sessionKey, messageId));
-      lastWorkloadEventAt = performance.now();
     },
-    pendingInjections,
-    isDrained(requireWorkloadQuiet = true) {
-      return (
-        (!requireWorkloadQuiet || performance.now() - lastWorkloadEventAt >= 1000) &&
-        pendingInjections().length === 0
-      );
+    pendingInjections() {
+      return [...expectedInjections].filter((identity) => {
+        const counts = injected.get(identity);
+        return !counts || counts.some((count) => count === 0);
+      });
     },
     assertComplete() {
       for (const key of requiredEventKeys) {

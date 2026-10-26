@@ -36,6 +36,7 @@ const enChatCi = {
       automationScheduleDisabled: "Automatically disabled after {count} scheduling errors.",
       automationFailureDisabled: "Automatically disabled after {count} failed runs.",
       automationLastError: "Last error: {error}",
+      automationNoChecks: "No CI checks reported.",
       automationRetry: "Try again",
     },
   },

@@ -83,6 +83,17 @@ type KnownMarketplaceRecord = {
   source?: unknown;
 };
 
+type MarketplacePluginListResult =
+  | {
+      ok: true;
+      manifest: MarketplaceManifest;
+      sourceLabel: string;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
 type MarketplaceInstallResult =
   | ({
       ok: true;
@@ -91,6 +102,18 @@ type MarketplaceInstallResult =
       marketplaceSource: string;
     } & Extract<InstallPluginResult, { ok: true }>)
   | Extract<InstallPluginResult, { ok: false }>;
+
+type MarketplaceShortcutResolution =
+  | {
+      ok: true;
+      plugin: string;
+      marketplaceSource: string;
+    }
+  | {
+      ok: false;
+      error: string;
+    }
+  | null;
 
 function isGitUrl(value: string): boolean {
   return (
@@ -890,7 +913,7 @@ export async function listMarketplacePlugins(params: {
   marketplace: string;
   logger?: MarketplaceLogger;
   timeoutMs?: number;
-}) {
+}): Promise<MarketplacePluginListResult> {
   const loaded = await loadMarketplace({
     source: params.marketplace,
     logger: params.logger,
@@ -901,7 +924,7 @@ export async function listMarketplacePlugins(params: {
   }
   try {
     return {
-      ok: true as const,
+      ok: true,
       manifest: loaded.marketplace.manifest,
       sourceLabel: loaded.marketplace.sourceLabel,
     };
@@ -910,7 +933,9 @@ export async function listMarketplacePlugins(params: {
   }
 }
 
-export async function resolveMarketplaceInstallShortcut(raw: string) {
+export async function resolveMarketplaceInstallShortcut(
+  raw: string,
+): Promise<MarketplaceShortcutResolution> {
   const trimmed = raw.trim();
   const atIndex = trimmed.lastIndexOf("@");
   if (atIndex <= 0 || atIndex >= trimmed.length - 1) {
@@ -933,14 +958,14 @@ export async function resolveMarketplaceInstallShortcut(raw: string) {
     const normalizedSource = normalizeEntrySource(known.source);
     if (!normalizedSource.ok) {
       return {
-        ok: false as const,
+        ok: false,
         error: `known Claude marketplace "${marketplaceName}" has an invalid source: ${normalizedSource.error}`,
       };
     }
   }
 
   return {
-    ok: true as const,
+    ok: true,
     plugin,
     marketplaceSource: marketplaceName,
   };

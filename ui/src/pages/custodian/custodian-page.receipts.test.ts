@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createChannelCapability } from "../../lib/channels/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./custodian-page.test-harness.ts";
@@ -63,30 +62,30 @@ describe("custodian page owner receipts", () => {
     const harness = createContext(request);
     const { context } = harness;
     const { page } = await mountPage(context, { onboarding: false });
-    expect(context.acquireChannels(createChannelCapability).refresh).not.toHaveBeenCalled();
+    expect(context.channels.refresh).not.toHaveBeenCalled();
 
     page.onboarding = true;
     await page.updateComplete;
-    expect(context.acquireChannels(createChannelCapability).refresh).toHaveBeenCalledOnce();
+    expect(context.channels.refresh).toHaveBeenCalledOnce();
     harness.setChannelsError("Status unavailable");
     page.store.setInput("Keep this draft");
     page.onboarding = false;
     page.onboarding = true;
     await page.updateComplete;
-    expect(context.acquireChannels(createChannelCapability).refresh).toHaveBeenCalledOnce();
+    expect(context.channels.refresh).toHaveBeenCalledOnce();
     await waitForFast(() =>
       expect(page.querySelector<HTMLButtonElement>(".custodian__nudge-cta")?.disabled).toBe(false),
     );
     page.querySelector<HTMLButtonElement>(".custodian__nudge-cta")!.click();
-    expect(context.acquireChannels(createChannelCapability).refresh).toHaveBeenCalledTimes(2);
+    expect(context.channels.refresh).toHaveBeenCalledTimes(2);
 
     page.store.dismissChannelOnboardingNudge();
     harness.setChannelsError(null);
-    expect(context.acquireChannels(createChannelCapability).refresh).toHaveBeenCalledTimes(2);
+    expect(context.channels.refresh).toHaveBeenCalledTimes(2);
     const replacement = new CustodianSessionStore();
     page.store = replacement;
     await page.updateComplete;
-    expect(context.acquireChannels(createChannelCapability).refresh).toHaveBeenCalledTimes(3);
+    expect(context.channels.refresh).toHaveBeenCalledTimes(3);
 
     page.remove();
     await page.updateComplete;
@@ -95,6 +94,6 @@ describe("custodian page owner receipts", () => {
     page.onboarding = false;
     page.onboarding = true;
     await page.updateComplete;
-    expect(context.acquireChannels(createChannelCapability).refresh).toHaveBeenCalledTimes(3);
+    expect(context.channels.refresh).toHaveBeenCalledTimes(3);
   });
 });

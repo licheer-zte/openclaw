@@ -5,8 +5,12 @@ import {
   addSessionMember,
   removeSessionMember,
 } from "../../config/sessions/session-sharing-store.native.js";
-import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
+import {
+  loadDeviceIdentityIfPresentAsync,
+  loadOrCreateProcessDeviceIdentityAsync,
+} from "../../infra/device-identity-async.js";
 import { captureSessionControllerSettlement } from "../../sessions/session-controller.lifecycle.js";
+import { getRpcSource } from "../../sessions/session-controller.rpc-sources.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { useUserProfileCatalogForTest } from "../../test-utils/user-profile-catalog.js";
@@ -28,6 +32,7 @@ test.each(["membership", "identity"] as const)(
   "recovery continuation replays one active/completed turn but rejects changed destination %s",
   async (change) => {
     const { storePath } = await createSessionStoreDir();
+    expect(await loadDeviceIdentityIfPresentAsync()).toBeNull();
     await prepareProfiles();
     const { launchSessionRecoveryContinuation } =
       await import("./session-recovery-continuation.js");
@@ -76,20 +81,30 @@ test.each(["membership", "identity"] as const)(
         client,
         req: { type: "req", id: "recovery", method: "sessions.recover" },
       });
+    let restoreRead: (() => void) | undefined;
     try {
       expect(await launch()).toEqual({ status: "started", runId: idempotencyKey });
       await entered.promise;
+      expect(getRpcSource(idempotencyKey)).toBeDefined();
       expect(await launch()).toEqual({ status: "started", runId: idempotencyKey });
       await loadOrCreateProcessDeviceIdentityAsync();
       expect(await launch()).toEqual({ status: "started", runId: idempotencyKey });
+      expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+
       await settle();
+      expect(getRpcSource(idempotencyKey)).toBeUndefined();
+      expect(context.dedupe.get(`chat:${idempotencyKey}`)).toMatchObject({
+        ok: true,
+        payload: { runId: idempotencyKey, status: "ok" },
+      });
       expect(await launch()).toEqual({ status: "started", runId: idempotencyKey });
+      expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
 
       // The destination was authorized before this awaited read. A cached outcome
       // cannot replace its identity/participation check when freshness is lost.
       const readSessionEntry = sessionStores.withGatewaySessionEntry;
       let destinationChanged = false;
-      using _ = vi
+      const interruptRead = vi
         .spyOn(sessionStores, "withGatewaySessionEntry")
         .mockImplementation(async (...args) => {
           await readSessionEntry(...args);
@@ -103,10 +118,12 @@ test.each(["membership", "identity"] as const)(
           }
           throw new GatewaySessionFactsChangedDuringReadError();
         });
+      restoreRead = () => interruptRead.mockRestore();
       expect(await launch()).toMatchObject({ status: "rejected" });
       expect(destinationChanged).toBe(true);
       expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
     } finally {
+      restoreRead?.();
       await settle();
       dispatchInboundMessageMock.mockReset();
     }

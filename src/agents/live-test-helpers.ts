@@ -8,7 +8,6 @@ import {
 import type { OpenClawConfig } from "../config/types.js";
 import { completeSimple } from "../llm/stream.js";
 import type { Api, Model } from "../llm/types.js";
-import { configFor, modelDefinition } from "./model-auth.fixtures.test-support.js";
 
 export {
   createSingleUserPromptMessage,
@@ -80,12 +79,27 @@ export function createLiveResponsesConfig(
   maxTokens: number,
 ): Pick<OpenClawConfig, "models" | "agents"> {
   return {
-    ...configFor("openai", "https://api.openai.com/v1", {
-      api: "openai-responses",
-      auth: "api-key",
-      timeoutSeconds: 90,
-      models: [modelDefinition(modelId, { contextWindow: 200_000, maxTokens })],
-    }),
+    models: {
+      providers: {
+        openai: {
+          api: "openai-responses",
+          auth: "api-key",
+          baseUrl: "https://api.openai.com/v1",
+          timeoutSeconds: 90,
+          models: [
+            {
+              id: modelId,
+              name: modelId,
+              reasoning: true,
+              input: ["text"],
+              contextWindow: 200_000,
+              maxTokens,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            },
+          ],
+        },
+      },
+    },
     agents: {
       entries: { main: { workspace: workspaceDir } },
       defaults: {

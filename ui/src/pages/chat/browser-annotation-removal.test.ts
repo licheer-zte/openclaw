@@ -1,29 +1,43 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import * as toast from "../../lib/toast.ts";
-import type { ToastOptions } from "../../lib/toast.ts";
-import * as payloads from "./attachment-payload-store.ts";
+import { showToast, type ToastOptions } from "../../lib/toast.ts";
+import { releaseChatAttachmentPayload } from "./attachment-payload-store.ts";
 import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
 
-const annotation = (id: string): ChatAttachment => ({
-  id,
-  mimeType: "image/png",
-  browserAnnotation: {
-    modelContext: `Context ${id}`,
-    title: `Title ${id}`,
-    displayUrl: "example.com",
-    markedRegionCount: 1,
-    inspectedElement: false,
-  },
-});
+// mock-isolation: Observe Undo without registering a toast host or retaining attachment URLs.
+vi.mock("../../lib/toast.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/toast.ts")>()),
+  showToast: vi.fn(),
+}));
+// mock-isolation: Observe release without retaining shared attachment blobs and object URLs.
+vi.mock("./attachment-payload-store.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./attachment-payload-store.ts")>()),
+  releaseChatAttachmentPayload: vi.fn(),
+}));
+const releasePayload = vi.mocked(releaseChatAttachmentPayload);
+
+function annotation(id: string): ChatAttachment {
+  return {
+    id,
+    mimeType: "image/png",
+    browserAnnotation: {
+      modelContext: `Context ${id}`,
+      title: `Title ${id}`,
+      displayUrl: "example.com",
+      markedRegionCount: 1,
+      inspectedElement: false,
+    },
+  };
+}
 let target: ChatAttachment;
 let state: ReturnType<typeof createTestChatPane>["state"];
 let pane: TestChatPane & {
   removeBrowserAnnotation: (attachment: ChatAttachment) => void;
   registerBrowserAnnotationFocus: (id: string, button: HTMLButtonElement) => () => void;
 };
+let restoredButton: HTMLButtonElement;
 let restoredFocus: MockInstance<HTMLButtonElement["focus"]>;
 let toasts: ToastOptions[];
 afterEach(() => vi.restoreAllMocks());
@@ -35,15 +49,17 @@ beforeEach(() => {
   pane = fixture.pane as typeof pane;
   Object.assign(pane, { stagedAttachmentGatewayOwner: {} });
   vi.spyOn(pane, "awaitDomCommit").mockResolvedValue(true);
-  const restoredButton = document.createElement("button");
+  restoredButton = document.createElement("button");
   restoredFocus = vi.spyOn(restoredButton, "focus");
   pane.registerBrowserAnnotationFocus(target.id, restoredButton);
   toasts = [];
-  vi.spyOn(payloads, "releaseChatAttachmentPayload").mockImplementation(() => {});
-  vi.spyOn(toast, "showToast").mockImplementation((options) => {
-    toasts.push(options);
-    return true;
-  });
+  releasePayload.mockClear();
+  vi.mocked(showToast)
+    .mockReset()
+    .mockImplementation((options) => {
+      toasts.push(options);
+      return true;
+    });
 });
 function remove() {
   pane.removeBrowserAnnotation(target);
@@ -65,29 +81,33 @@ it("preserves siblings and restores the complete package once at its original po
   expect(state.chatAttachments[1]).toBe(target);
   await Promise.resolve();
   expect(restoredFocus).toHaveBeenCalledOnce();
-  expect(payloads.releaseChatAttachmentPayload).not.toHaveBeenCalled();
+  expect(releasePayload).not.toHaveBeenCalled();
 });
 
-it.each(["expires", "cannot be presented"])("releases once when Undo %s", (reason) => {
-  if (reason === "cannot be presented") {
-    vi.mocked(toast.showToast).mockReturnValue(false);
-  }
+it("finalizes payload ownership once when Undo expires", () => {
   remove();
   toasts[0]?.onDismiss?.("timeout");
   toasts[0]?.onDismiss?.("timeout");
-  expect(payloads.releaseChatAttachmentPayload).toHaveBeenCalledOnce();
+  expect(releasePayload).toHaveBeenCalledOnce();
   expect(state.chatAttachments).toEqual([]);
 });
 
-it("never restores into a replacement session", async () => {
-  remove();
-  state.sessionKey = "agent:other";
-  undo();
-  expect(state.chatAttachments).toEqual([]);
-  expect(payloads.releaseChatAttachmentPayload).toHaveBeenCalledOnce();
-  await Promise.resolve();
-  expect(restoredFocus).not.toHaveBeenCalled();
-});
+it.each(["session", "composer owner"])(
+  "never restores into a replacement %s",
+  async (replacement) => {
+    remove();
+    if (replacement === "session") {
+      state.sessionKey = "agent:other";
+    } else {
+      Object.assign(pane, { stagedAttachmentGatewayOwner: {} });
+    }
+    undo();
+    expect(state.chatAttachments).toEqual([]);
+    expect(releasePayload).toHaveBeenCalledOnce();
+    await Promise.resolve();
+    expect(restoredFocus).not.toHaveBeenCalled();
+  },
+);
 
 it("releases instead of exceeding the bound when Undo follows a replacement", () => {
   state.chatAttachments = [target, ...["second", "third", "fourth"].map(annotation)];
@@ -96,5 +116,14 @@ it("releases instead of exceeding the bound when Undo follows a replacement", ()
   undo();
   expect(state.chatAttachments).toHaveLength(4);
   expect(state.chatAttachments).not.toContain(target);
-  expect(payloads.releaseChatAttachmentPayload).toHaveBeenCalledOnce();
+  expect(releasePayload).toHaveBeenCalledOnce();
+  expect(toasts[1]?.message).toBe(
+    "Undo is unavailable because the browser annotation limit has been reached.",
+  );
+});
+
+it("releases immediately when no toast host can present Undo", () => {
+  vi.mocked(showToast).mockReturnValue(false);
+  remove();
+  expect(releasePayload).toHaveBeenCalledOnce();
 });

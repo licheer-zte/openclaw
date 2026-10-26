@@ -70,7 +70,6 @@ export type ClawHubInstallParams = ClawHubSkillRef & {
   /** True when a Claw lifecycle caller already owns package coordination. */
   clawManaged?: boolean;
   beforePersistentApply?: () => void;
-  beforePersistentEffect?: () => void | Promise<void>;
   assertOwned?: () => void;
   expectedClawHubState?: ClawHubSkillFileState | null;
   deferCommit?: boolean;
@@ -429,7 +428,6 @@ export async function performClawHubSkillInstall(
               : rootDir,
             mode: installParams.force ? "update" : "install",
             beforePersistentApply: installParams.beforePersistentApply,
-            beforePersistentEffect: installParams.beforePersistentEffect,
             assertOwned: installParams.assertOwned,
             deferCommit: installParams.deferCommit,
             logger: installParams.logger,
@@ -545,7 +543,6 @@ export async function performClawHubSkillInstall(
           installedVersion: version,
         };
         installedLockEntry = clawHubSkillLockEntry(origin, verification);
-        await params.beforePersistentEffect?.();
         await (files?.recordClawHubSkillInstall ?? recordClawHubSkillInstall)({
           workspaceDir: params.workspaceDir,
           skillDir: install.targetDir,

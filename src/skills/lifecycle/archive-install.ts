@@ -33,6 +33,8 @@ import type {
   SkillRootApplyResult,
 } from "./workspace-types.js";
 
+export type { SkillArchiveInstallFailureKind } from "./workspace-types.js";
+
 const DEFAULT_SKILL_ARCHIVE_ROOT_MARKERS = ["SKILL.md"] as const;
 const log = createSubsystemLogger("skills");
 export const CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS = [
@@ -92,10 +94,7 @@ function archiveFailureKind(error: string): SkillArchiveInstallFailureKind {
 }
 
 export async function installExtractedSkillRoot(
-  params: SkillRootInstallFiles & {
-    policy?: SkillArchiveInstallPolicy;
-    beforePersistentEffect?: () => void | Promise<void>;
-  },
+  params: SkillRootInstallFiles & { policy?: SkillArchiveInstallPolicy },
 ): Promise<SkillArchiveInstallResult> {
   try {
     const changeSource = resolveCommittedSkillChangeSource(params.policy?.origin.type);
@@ -118,21 +117,13 @@ export async function installExtractedSkillRoot(
       );
     }
     const applyRoot = access?.applySkillRoot ?? applyExtractedSkillRoot;
-    const { policy: _policy, beforePersistentEffect, ...files } = params;
+    const { policy: _policy, ...files } = params;
     params.beforePersistentApply?.();
     const result = await applyRoot({
       ...files,
-      ...(beforePersistentEffect
-        ? {
-            authorizeMutation: async () => {
-              await beforePersistentEffect();
-            },
-          }
-        : {}),
       ...(captureChanges ? { changes: { source: changeSource, sourceVersion } } : {}),
       beforeInstall: async (mode) => {
         if (!params.policy) {
-          await params.beforePersistentEffect?.();
           return undefined;
         }
         const scanResult = await evaluateSkillInstallPolicy({
@@ -147,7 +138,6 @@ export async function installExtractedSkillRoot(
           skillName: params.slug,
           sourceDir: params.extractedRoot,
         });
-        await params.beforePersistentEffect?.();
         params.beforePersistentApply?.();
         return scanResult?.blocked
           ? {

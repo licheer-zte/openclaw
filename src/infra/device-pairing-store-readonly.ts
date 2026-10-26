@@ -58,7 +58,11 @@ async function readPairing<Command extends DevicePairingReadCommand>(
     } else if (!reply) {
       publication.publish("missing", [], true);
     }
-    return { reply, nodes: prepareNodes ? publication.readNodes() : undefined };
+    const preparedNodes =
+      prepareNodes && (!reply || "list" in reply)
+        ? publication.prepareNodes(reply?.revision ?? "missing", reply?.list.paired ?? [])
+        : undefined;
+    return { reply, nodes: preparedNodes };
   };
   const observed = await read();
   if (observed) {

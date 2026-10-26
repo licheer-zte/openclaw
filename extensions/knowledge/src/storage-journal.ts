@@ -1,3 +1,4 @@
+import { jsonPathValue } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -19,7 +20,7 @@ import { digest } from "./vault.js";
 export class StorageJournal extends StorageBase {
   resume(access: VaultAccess, requestId: string): Receipt {
     access.assertCurrent();
-    const published = this.transaction("knowledge.resume", (db) => {
+    const published = this.transaction((db) => {
       const row = this.row(db, scopeKey(access.scope), requestId);
       if (!row) {
         throw new Error("Mutation unavailable in this scope.");
@@ -190,12 +191,8 @@ export class StorageJournal extends StorageBase {
       if (id !== undefined) {
         query = query.where((eb) =>
           eb.or([
-            eb(eb.fn<string | null>("json_extract", [eb.ref("receipt"), eb.val("$.id")]), "=", id),
-            eb(
-              eb.fn<string | null>("json_extract", [eb.ref("receipt"), eb.val("$.targetId")]),
-              "=",
-              id,
-            ),
+            eb(jsonPathValue(db, eb.ref("receipt"), eb.val("$.id")), "=", id),
+            eb(jsonPathValue(db, eb.ref("receipt"), eb.val("$.targetId")), "=", id),
           ]),
         );
       }

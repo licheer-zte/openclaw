@@ -89,10 +89,14 @@ it("settles accepted media provenance cleanup across the close prelude before sh
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(pruning).toHaveBeenCalledOnce();
     vi.useRealTimers();
-    using database = new DatabaseSync(resolveOpenClawStateSqlitePath(fixture.state.env), {
+    const database = new DatabaseSync(resolveOpenClawStateSqlitePath(fixture.state.env), {
       readOnly: true,
     });
-    expect(database.prepare("SELECT realpath FROM outbound_media_provenance").all()).toEqual([]);
+    try {
+      expect(database.prepare("SELECT realpath FROM outbound_media_provenance").all()).toEqual([]);
+    } finally {
+      database.close();
+    }
   } finally {
     vi.useRealTimers();
     releasePruning.resolve();

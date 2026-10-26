@@ -15,7 +15,7 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-bound
 const mistralMockState = vi.hoisted(() => ({
   payloads: [] as unknown[],
   requestOptions: [] as unknown[],
-  nextUUID: 429244,
+  randomUUIDs: [] as string[],
   requestThroughHttpClient: false,
   streamResult: undefined as unknown,
 }));
@@ -24,8 +24,7 @@ vi.mock("node:crypto", async () => {
   const actual = await vi.importActual<typeof import("node:crypto")>("node:crypto");
   return {
     ...actual,
-    randomUUID: () =>
-      `00000000-0000-4000-8000-${String(mistralMockState.nextUUID++).padStart(12, "0")}`,
+    randomUUID: () => mistralMockState.randomUUIDs.shift() ?? actual.randomUUID(),
   };
 });
 
@@ -146,7 +145,14 @@ function runner(stream: typeof streamMistral | typeof streamSimpleMistral) {
 const runMistralFixture = runner(streamMistral);
 const runSimpleMistralFixture = runner(streamSimpleMistral);
 
-async function runMistralToolFixture(responseId: string, rawChunks: unknown[][]) {
+async function runMistralToolFixture(
+  responseId: string,
+  rawChunks: unknown[][],
+  randomUUID?: string,
+) {
+  if (randomUUID) {
+    mistralMockState.randomUUIDs = [randomUUID];
+  }
   const parsedChunks = rawChunks.map((chunk) => chunk.map(parseMistralToolCall));
   mistralMockState.streamResult = mistralToolStream(responseId, ...parsedChunks);
   const result = await runMistralFixture();
@@ -221,7 +227,7 @@ describe("Mistral provider", () => {
   beforeEach(() => {
     mistralMockState.payloads = [];
     mistralMockState.requestOptions = [];
-    mistralMockState.nextUUID = 429244;
+    mistralMockState.randomUUIDs = [];
     mistralMockState.requestThroughHttpClient = false;
     mistralMockState.streamResult = undefined;
   });
@@ -352,6 +358,10 @@ describe("Mistral provider", () => {
   });
 
   it("keeps omitted streamed tool ids stable within a response and unique across responses", async () => {
+    mistralMockState.randomUUIDs = [
+      "00000000-0000-4000-8000-000000429244",
+      "00000000-0000-4000-8000-000000429245",
+    ];
     const responseIds: string[][] = [];
     for (const responseId of ["response-a", "response-b"]) {
       mistralMockState.streamResult = mistralToolStream(
@@ -390,7 +400,11 @@ describe("Mistral provider", () => {
       mode === "explicit IDs"
         ? [identified, [firstCall(":1}"), secondCall(":2}")]]
         : [[firstCall('{"value":1}'), secondCall('{"value"', { index: 1 })], [secondCall(":2}")]];
-    const { toolCalls } = await runMistralToolFixture("response-unindexed", chunks);
+    const { toolCalls } = await runMistralToolFixture(
+      "response-unindexed",
+      chunks,
+      "00000000-0000-4000-8000-000000429247",
+    );
     expect(toolCalls).toMatchObject([
       { name: "first_tool", arguments: { value: 1 } },
       { name: "second_tool", arguments: { value: 2 } },
@@ -404,10 +418,11 @@ describe("Mistral provider", () => {
     ["nameless", "first_tool", "second_tool", "", "value"],
     ["same-name", "computer", "computer", "computer", "step"],
   ])("rejects ambiguous %s omitted-index continuation", async (kind, first, second, name, key) => {
-    const { result, toolCalls } = await runMistralToolFixture(`response-${kind}-unindexed`, [
-      [wireTool(first, `{"${key}"`), wireTool(second, `{"${key}"`)],
-      [wireTool(name, ":2}")],
-    ]);
+    const { result, toolCalls } = await runMistralToolFixture(
+      `response-${kind}-unindexed`,
+      [[wireTool(first, `{"${key}"`), wireTool(second, `{"${key}"`)], [wireTool(name, ":2}")]],
+      "00000000-0000-4000-8000-000000429249",
+    );
     if (kind === "same-name") {
       expect(toolCalls).toHaveLength(0);
     }
@@ -418,6 +433,7 @@ describe("Mistral provider", () => {
   });
 
   it("keeps a later same-name call distinct when it has a nonzero index", async () => {
+    mistralMockState.randomUUIDs = ["00000000-0000-4000-8000-000000429250"];
     const calls = [1, 2].map((step, index) =>
       parseMistralToolCall(wireTool("computer", JSON.stringify({ step }), { index })),
     );

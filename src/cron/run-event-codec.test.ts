@@ -9,10 +9,9 @@ describe("cronRunLogEntryFromEvent", () => {
         action: "finished",
         status: "error",
         error: "cron script failed after a tool side effect: request timed out",
-        provider: "anthropic",
       },
       1,
-      undefined,
+      { kind: "permanent" },
     );
 
     expect(entry.errorReason).toBeUndefined();
@@ -28,7 +27,7 @@ describe("cronRunLogEntryFromEvent", () => {
         error: "cron script failed",
       },
       1,
-      "timeout",
+      { kind: "reason", reason: "timeout" },
     );
 
     expect(entry).toMatchObject({ errorReason: "timeout", completionStatus: "failed" });

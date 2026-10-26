@@ -71,21 +71,7 @@ class WearReplyTextProjectionTest {
         WearProxyController(
           requestGateway = { method, _ ->
             assertEquals("chat.history", method)
-            buildJsonObject {
-              put(
-                "messages",
-                buildJsonArray {
-                  add(source.getValue("message"))
-                  add(
-                    buildJsonObject {
-                      put("role", "assistant")
-                      put("__openclaw", buildJsonObject { put("id", "stable-entry") })
-                      put("content", full)
-                    },
-                  )
-                },
-              )
-            }
+            buildJsonObject { put("messages", buildJsonArray { add(source.getValue("message")) }) }
           },
           isGatewayConnected = { true },
           gatewayStatusText = { "Connected" },
@@ -96,26 +82,16 @@ class WearReplyTextProjectionTest {
           },
         )
       val history = controller.handle(WearMessage.Request(requestId = "history", method = WearRpcMethod.ChatHistory, params = buildJsonObject { put("sessionKey", "global") }), "watch")
-      WearProtocolCodec.encode(history)
-      val previews =
+      val preview =
         history.result!!
           .jsonObject
           .getValue("messages")
           .jsonArray
-      assertEquals(
-        listOf("canonical", "stable-entry"),
-        previews.map {
-          it.jsonObject
-            .getValue("entryId")
-            .jsonPrimitive
-            .content
-        },
-      )
-      for (message in previews) {
-        val preview = message.jsonObject
-        assertEquals(JsonPrimitive(true), preview["textTruncated"])
-        assertFalse(wearReplyText(preview).contains("TRAILING SENTINEL"))
-      }
+          .single()
+          .jsonObject
+      assertEquals("canonical", preview.getValue("entryId").jsonPrimitive.content)
+      assertEquals(JsonPrimitive(true), preview["textTruncated"])
+      assertFalse(wearReplyText(preview).contains("TRAILING SENTINEL"))
       var offset = 0
       var revision: String? = null
       val recovered = StringBuilder()

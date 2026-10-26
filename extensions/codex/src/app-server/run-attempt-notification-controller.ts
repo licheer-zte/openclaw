@@ -119,11 +119,7 @@ export function createCodexAttemptNotificationController(
             }
           }
           if (item?.type === "userMessage" && typeof item.clientId === "string") {
-            if (steeringQueueRef.current?.confirmConsumed(item.clientId)) {
-              // A confirmed steer starts a new input's answer. Historical send
-              // receipts remain intact; only the current answer's suppression ends.
-              attemptTools.toolBridge.telemetry.finalSourceReplyDelivered = undefined;
-            }
+            steeringQueueRef.current?.confirmConsumed(item.clientId);
           }
         }
         if (

@@ -31,8 +31,8 @@ afterEach(() => {
 
 it.each(["source-replaced", "released", "gateway-closed", "settled"] as const)(
   "retains the admitted source through yield but fences %s events",
-  (ending) =>
-    withOpenClawTestState({ scenario: "minimal" }, async () => {
+  async (ending) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot({});
       const context = createContext();
       const resolver = () => context;
@@ -96,5 +96,6 @@ it.each(["source-replaced", "released", "gateway-closed", "settled"] as const)(
         stop();
       }
       expect(getActiveGatewayRootWorkCount()).toBe(0);
-    }),
+    });
+  },
 );

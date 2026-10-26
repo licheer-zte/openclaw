@@ -58,9 +58,8 @@ it.each<[WorkerPlacementMoveTarget, boolean, string]>([
         { agentId: "main", sessionKey: SESSION_KEY, storePath: config.session.store },
         entry,
       );
-      const environments = {
-        supportsExecutionMode: (profileId: string) => profileId === "compatible",
-      };
+      const supportsExecutionMode = vi.fn((profileId: string) => profileId === "compatible");
+      const environments = { supportsExecutionMode };
       bindDeviceWorkerAvailability(environments, async (deviceId) => ({
         available: true,
         node: {
@@ -92,16 +91,21 @@ it.each<[WorkerPlacementMoveTarget, boolean, string]>([
       const runMoveBarrier = vi.fn(async () => {
         throw new Error("source placement barrier started");
       });
-      const mutate = vi.fn();
+      const mutations = {
+        reclaimSource: vi.fn(),
+        dispatch: vi.fn(),
+        beginPlacementMove: vi.fn(),
+        destroy: vi.fn(),
+      };
       const moves = createWorkerPlacementMoveService({
         placements: {
           getPlacementMoveAsync: async () => undefined,
-          beginPlacementMove: mutate,
+          beginPlacementMove: mutations.beginPlacementMove,
         } as never,
-        environments: { get: () => undefined, destroy: mutate } as never,
+        environments: { get: () => undefined, destroy: mutations.destroy } as never,
         runMoveBarrier,
-        dispatch: mutate,
-        reclaimSource: mutate,
+        dispatch: mutations.dispatch,
+        reclaimSource: mutations.reclaimSource,
         validateAbandonSource: vi.fn(),
         abandonSource: vi.fn(),
         resolveDestination,
@@ -118,7 +122,9 @@ it.each<[WorkerPlacementMoveTarget, boolean, string]>([
       ).rejects.toThrow(expectedError);
 
       expect(runMoveBarrier).toHaveBeenCalledTimes(Number(supported));
-      expect(mutate).not.toHaveBeenCalled();
+      for (const mutation of Object.values(mutations)) {
+        expect(mutation).not.toHaveBeenCalled();
+      }
       if (supported) {
         await expect(resolveDestination.mock.results[0]?.value).resolves.toMatchObject({
           executionMode: "remote-exec",
@@ -127,6 +133,9 @@ it.each<[WorkerPlacementMoveTarget, boolean, string]>([
             ? { machineClass: target.machineClass, os: target.os }
             : {}),
         });
+      }
+      if (target.kind === "profile") {
+        expect(supportsExecutionMode).toHaveBeenCalledWith(target.profileId, "remote-exec");
       }
     }),
 );

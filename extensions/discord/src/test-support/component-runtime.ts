@@ -1,4 +1,6 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
+import type { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-runtime";
 import { vi } from "vitest";
 import { setDiscordRuntime } from "../runtime.js";
 
@@ -7,13 +9,14 @@ type AsyncUnknownFn = (...args: unknown[]) => Promise<unknown>;
 type DispatchReplyWithBufferedBlockDispatcherFn =
   typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithBufferedBlockDispatcher;
 const runtimeMocks = vi.hoisted(() => ({
+  buildPluginBindingResolvedTextMock: vi.fn<UnknownFn>(),
   dispatchPluginInteractiveHandlerMock: vi.fn<AsyncUnknownFn>(),
   dispatchReplyMock: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(),
   enqueueSystemEventMock: vi.fn<UnknownFn>(),
-  readAllowFromStoreMock: vi.fn<(...args: string[]) => Promise<string[]>>(),
+  readAllowFromStoreMock: vi.fn<AsyncUnknownFn>(),
   readSessionUpdatedAtMock: vi.fn<UnknownFn>(),
-  recordInboundSessionMock: vi.fn<(...args: unknown[]) => Promise<void>>(),
-  resolveStorePathMock: vi.fn<(...args: unknown[]) => string>(),
+  recordInboundSessionMock: vi.fn<AsyncUnknownFn>(),
+  resolveStorePathMock: vi.fn<UnknownFn>(),
   resolvePluginConversationBindingApprovalMock:
     vi.fn<
       typeof import("openclaw/plugin-sdk/conversation-runtime").resolvePluginConversationBindingApproval
@@ -31,7 +34,8 @@ export const {
   readSessionUpdatedAtMock,
   resolveStorePathMock,
 } = runtimeMocks;
-const { resolvePluginConversationBindingApprovalMock } = runtimeMocks;
+const { resolvePluginConversationBindingApprovalMock, buildPluginBindingResolvedTextMock } =
+  runtimeMocks;
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
@@ -42,8 +46,10 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
       createPluginRuntimeMock({
         channel: {
           session: {
-            resolveStorePath: resolveStorePathMock,
-            recordInboundSession: recordInboundSessionMock,
+            resolveStorePath: (...args) => resolveStorePathMock(...args) as string,
+            recordInboundSession: async (...args) => {
+              await recordInboundSessionMock(...args);
+            },
           },
           reply: { dispatchReplyWithBufferedBlockDispatcher: dispatchReplyMock },
         },
@@ -55,21 +61,55 @@ vi.mock("openclaw/plugin-sdk/channel-ingress-runtime", async (importOriginal) =>
     await importOriginal<typeof import("openclaw/plugin-sdk/channel-ingress-runtime")>();
   return {
     ...actual,
-    readChannelIngressStoreAllowFromForDmPolicy: (
-      params: Parameters<typeof actual.readChannelIngressStoreAllowFromForDmPolicy>[0],
-    ) =>
-      actual.readChannelIngressStoreAllowFromForDmPolicy({
-        ...params,
-        readStore: readAllowFromStoreMock,
-      }),
+    readChannelIngressStoreAllowFromForDmPolicy: async ({
+      provider,
+      accountId,
+      dmPolicy,
+      shouldRead,
+    }: Parameters<typeof actual.readChannelIngressStoreAllowFromForDmPolicy>[0]) =>
+      shouldRead === false || dmPolicy === "allowlist" || dmPolicy === "open"
+        ? []
+        : await readAllowFromStoreMock(provider, accountId),
   };
 });
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>()),
   upsertChannelPairingRequest: runtimeMocks.upsertPairingRequestMock,
+  buildPluginBindingResolvedText: runtimeMocks.buildPluginBindingResolvedTextMock,
   resolvePluginConversationBindingApproval:
     runtimeMocks.resolvePluginConversationBindingApprovalMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>()),
+  createReplyReferencePlanner: vi.fn(
+    (params: Partial<Parameters<typeof createReplyReferencePlanner>[0]>) => {
+      let hasReplied = params.hasReplied ?? false;
+      let nextId = params.existingId ?? params.startId;
+      return {
+        hasReplied: () => hasReplied,
+        markSent() {
+          hasReplied = true;
+        },
+        use() {
+          if (
+            params.replyToMode === "off" ||
+            (isSingleUseReplyToMode(params.replyToMode ?? "off") && hasReplied)
+          ) {
+            return undefined;
+          }
+          const value = nextId;
+          hasReplied = true;
+          nextId = undefined;
+          return value;
+        },
+      };
+    },
+  ),
+  finalizeInboundContext: vi.fn((ctx) => ctx),
+  resolveChunkMode: vi.fn(() => "sentences"),
+  resolveTextChunkLimit: vi.fn(() => 2000),
 }));
 
 vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => ({
@@ -93,16 +133,6 @@ vi.mock("../interactive-dispatch.js", async (importOriginal) => ({
 }));
 
 export function resetDiscordComponentRuntimeMocks() {
-  const plugin = {
-    pluginId: "openclaw-codex-app-server",
-    pluginName: "OpenClaw App Server",
-    pluginRoot: "/plugins/codex",
-  };
-  const conversation = {
-    channel: "discord",
-    accountId: "default",
-    conversationId: "user:123456789",
-  };
   setDiscordRuntime(createPluginRuntimeMock());
   dispatchPluginInteractiveHandlerMock.mockReset().mockResolvedValue({
     matched: false,
@@ -120,15 +150,26 @@ export function resetDiscordComponentRuntimeMocks() {
     status: "approved",
     binding: {
       bindingId: "binding-1",
-      ...plugin,
-      ...conversation,
+      pluginId: "openclaw-codex-app-server",
+      pluginName: "OpenClaw App Server",
+      pluginRoot: "/plugins/codex",
+      channel: "discord",
+      accountId: "default",
+      conversationId: "user:123456789",
       boundAt: Date.now(),
     },
     request: {
       id: "approval-1",
-      ...plugin,
-      conversation,
+      pluginId: "openclaw-codex-app-server",
+      pluginName: "OpenClaw App Server",
+      pluginRoot: "/plugins/codex",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "user:123456789",
+      },
     },
     decision: "allow-once",
   });
+  buildPluginBindingResolvedTextMock.mockReset().mockReturnValue("Binding approved.");
 }

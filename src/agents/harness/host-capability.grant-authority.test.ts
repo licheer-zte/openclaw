@@ -4,7 +4,10 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
-import * as configSnapshot from "../../plugin-sdk/runtime-config-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../plugin-sdk/runtime-config-snapshot.js";
 import { setGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
@@ -58,7 +61,7 @@ afterEach(async () => {
   }
   resetAgentRunRegistryForTest();
   resetPluginRuntimeStateForTest();
-  configSnapshot.clearRuntimeConfigSnapshot();
+  clearRuntimeConfigSnapshot();
   await fs.rm(tempDir, { recursive: true, force: true });
 });
 
@@ -74,7 +77,7 @@ async function createSurface(scenario: "forged options" | "mutated attempt" | "a
     },
   };
   await fs.mkdir(workspaceDir, { recursive: true });
-  configSnapshot.setRuntimeConfigSnapshot(config, config);
+  setRuntimeConfigSnapshot(config, config);
   return withPluginCache(createPluginCache(), async () => {
     resetPluginRuntimeStateForTest();
     setGatewayPluginMetadataSnapshot(
@@ -88,6 +91,8 @@ async function createSurface(scenario: "forged options" | "mutated attempt" | "a
         runId: "host-grant-authority",
         cwd: path.join(tempDir, "worktree"),
         workspaceDir,
+        currentChannelId: "chat-1",
+        messageChannel: "telegram",
         runtimePluginToolGrant: scenario === "absent grant" ? undefined : grant,
       });
     cleanups.push(closeAdmission, closeHost);
@@ -115,13 +120,17 @@ it.each(["forged options", "mutated attempt", "absent grant"] as const)(
     const tools = await createSurface(scenario);
     const names = tools.map((tool) => tool.name);
     expect(names).not.toContain(TOOL_B);
-    expect(names.includes(TOOL_A)).toBe(scenario !== "absent grant");
-    if (scenario === "forged options") {
-      await tools.find((tool) => tool.name === TOOL_A)?.execute("call-1", {});
-      expect(await fs.readFile(ioPath("a"), "utf8")).toBe("io-performed");
-    }
-    if (scenario === "mutated attempt") {
-      await expect(fs.stat(ioPath("b"))).rejects.toThrow();
+    if (scenario === "absent grant") {
+      expect(names).not.toContain(TOOL_A);
+    } else {
+      expect(names).toContain(TOOL_A);
+      if (scenario === "forged options") {
+        const result = await tools.find((tool) => tool.name === TOOL_A)?.execute("call-1", {});
+        expect(JSON.stringify(result)).toContain(`grant-ok:${TOOL_A}`);
+        expect(await fs.readFile(ioPath("a"), "utf8")).toBe("io-performed");
+      } else {
+        await expect(fs.stat(ioPath("b"))).rejects.toThrow();
+      }
     }
   },
 );

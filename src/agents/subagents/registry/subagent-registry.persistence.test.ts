@@ -157,12 +157,6 @@ describe("subagent registry persistence", () => {
       execution: { status: "running", startedAt: now },
     });
   };
-  const writeRunSession = (entry: SubagentRunRecord) =>
-    writeChildSessionEntry({
-      sessionKey: entry.childSessionKey,
-      sessionId: entry.childSessionIdentity?.sessionId,
-      updatedAt: entry.createdAt,
-    });
   const holdSessionRead = (entry: SubagentRunRecord, beforeRead = false, fail = false) => {
     const entered = createDeferred();
     const release = createDeferred();
@@ -635,7 +629,11 @@ describe("subagent registry persistence", () => {
     const now = entry.createdAt;
     await addSubagentRunForTests(entry);
     if (change === "worker read failure") {
-      await writeRunSession(entry);
+      await writeChildSessionEntry({
+        sessionKey: entry.childSessionKey,
+        sessionId: entry.childSessionIdentity?.sessionId,
+        updatedAt: now,
+      });
     }
     if (change === "run Gateway replacement") {
       bindGatewayContextResolver(subagentRuns.get(runId)!, resolveGatewayContext);
@@ -682,7 +680,11 @@ describe("subagent registry persistence", () => {
           return { value: undefined, postimages: new Map([[runId, next]]) };
         });
       } else if (change === "session publication") {
-        await writeRunSession(entry);
+        await writeChildSessionEntry({
+          sessionKey: entry.childSessionKey,
+          sessionId: entry.childSessionIdentity?.sessionId,
+          updatedAt: now,
+        });
         await mutateSubagentRuns([runId], (rows) => ({
           value: undefined,
           postimages: new Map([[runId, { ...rows.get(runId)!, label: "published session" }]]),

@@ -95,14 +95,6 @@ import { ensureProfileForEmail } from "./user-profiles.js";
 
 let context: OpenClawStateWorkerContext;
 let root: string;
-const requester = {
-  version: 1 as const,
-  actor: { kind: "system" as const },
-  scopes: ["operator.admin"],
-  grant: null,
-};
-const requesterJson =
-  '{"version":1,"actor":{"kind":"system"},"scopes":["operator.admin"],"grant":null}';
 const scopes = new Set<ReturnType<typeof createGitHubPublicationWorkerScope>>();
 const sources = new Set<Awaited<ReturnType<typeof prepareGitHubPublicationSource>>>();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -291,7 +283,7 @@ it("creates the lazy shared schema and replaces a missing lifecycle binding on i
       requestDigest: digestGitHubPublicationRequest({ ...request, sessionId }),
       sessionId,
       lifecycleRevision,
-      requester,
+      requester: { version: 1, actor: { kind: "system" }, scopes: ["operator.admin"], grant: null },
       now: 1000,
       worktree,
       identity: {
@@ -311,7 +303,8 @@ it("creates the lazy shared schema and replaces a missing lifecycle binding on i
     expectNoWorkerRequests(async () => {
       const expected = {
         lifecycle_revision: lifecycleRevision,
-        requester_authority_json: requesterJson,
+        requester_authority_json:
+          '{"version":1,"actor":{"kind":"system"},"scopes":["operator.admin"],"grant":null}',
       };
       expect(
         (
@@ -755,6 +748,14 @@ describe("retained publication lifecycle authority", () => {
       requestId: randomUUID(),
     })),
   );
+  const requester = {
+    version: 1 as const,
+    actor: { kind: "system" as const },
+    scopes: ["operator.admin"],
+    grant: null,
+  };
+  const requesterJson =
+    '{"version":1,"actor":{"kind":"system"},"scopes":["operator.admin"],"grant":null}';
   const unavailable = "lifecycle authority is unavailable";
 
   function personalRow(requestId: string): PersonalGitHubPublicationRow {

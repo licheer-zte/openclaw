@@ -14,12 +14,14 @@ import { settleLitElement } from "../test-helpers/lit-settle.ts";
 
 it("keeps selected owners across agents and resumes the selected agent's own conversation", async () => {
   const rows: GatewaySessionRow[] = [
-    ownedSession("agent:main:mine", "viewer"),
+    ownedSession("agent:main:mine", "viewer", { label: "My working session" }),
     ownedSession("agent:research:shared", "other", {
+      label: "Another user's shared session",
       updatedAt: 3000,
       unread: true,
     }),
     ownedSession("agent:research:dashboard:00000002-0000-4000-8000-000000000000", "viewer", {
+      label: "My research session",
       updatedAt: 2000,
       unread: true,
     }),
@@ -42,6 +44,10 @@ it("keeps selected owners across agents and resumes the selected agent's own con
     for (const row of [rows[1]!, rows[0]!, rows[1]!]) {
       await visit(row);
 
+      expect(sidebar.sidebarSessionOwnerFilter()).toEqual({
+        ownerId: "viewer",
+        involvingMe: false,
+      });
       expect(context.agentSelection.state.selectedId).toBe(row.agentId);
       expect(sidebar.getRouteSessionKey()).toBe(row.key);
       expect(sidebar.querySelector('[data-session-key="agent:main:mine"]')).not.toBeNull();
@@ -63,6 +69,7 @@ it("keeps selected owners across agents and resumes the selected agent's own con
 
     const onNavigate = vi.fn();
     sidebar.onNavigate = onNavigate;
+    await sidebar.sidebarMenus.preloadMenuRenderer();
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")!.click();
     await settleLitElement(sidebar);
     const researchMenuItem = sidebar.querySelector<HTMLElement>(
@@ -92,14 +99,5 @@ it("keeps selected owners across agents and resumes the selected agent's own con
         '.sidebar-agent-menu [data-value="agent:research"] [aria-label="Unread"]',
       ),
     ).toBeNull();
-  });
-});
-
-it("keeps an explicitly empty route selection instead of discovering ambient Home", async () => {
-  await withOwnerSidebar([], [viewer], "personal", async ({ sidebar, context }) => {
-    context.gateway.snapshot.sessionKey = "agent:main:main";
-    sidebar.sessionKey = "";
-    await settleLitElement(sidebar);
-    expect(sidebar.getRouteSessionKey()).toBe("");
   });
 });

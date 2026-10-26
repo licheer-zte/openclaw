@@ -132,14 +132,9 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
     });
     await registry.addSubagentRunForTests(recovered);
   }
-  it.for([
-    { firstKind: "cohort", expectedOrder: ["first", "later-a", "later-b"] },
-    { firstKind: "individual", expectedOrder: ["first", "later-a", "later-b"] },
-    // Interrupted recovery reserves after reconciliation; ready cohorts already own FIFO slots.
-    { firstKind: "interrupted predecessor", expectedOrder: ["later-a", "later-b", "first"] },
-  ] as const)(
-    "drains restored $firstKind in ready FIFO order when registry order differs",
-    async ({ firstKind, expectedOrder }, { signal }) => {
+  it.for(["cohort", "individual", "interrupted predecessor"] as const)(
+    "drains a restored %s before later cohorts when registry order differs",
+    async (firstKind, { signal }) => {
       vi.setSystemTime(100_000);
       const registryOrder = ["later-a", "later-b", "first"];
       for (const [index, runId] of registryOrder.entries()) {
@@ -190,7 +185,7 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
       try {
         await withinTest(flushOwnedWork(), signal);
         const firstChild = firstKind === "interrupted predecessor" ? "later-a" : "first";
-        const expected = expectedOrder.map((runId) =>
+        const expected = ["first", "later-a", "later-b"].map((runId) =>
           runId === "first" && firstKind !== "cohort"
             ? `announce:v1:agent:main:subagent:${firstChild}:first`
             : `announce:requester-settle:main:${requesterSessionKey}:${runId}:yield-1`,

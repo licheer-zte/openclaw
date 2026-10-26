@@ -253,7 +253,9 @@ export async function resolveReusableWorkspaceSkillSnapshot(
   const rebuilt = await cachedRebuild();
   let snapshot = rebuilt;
   if (rebuilt && retainedSnapshot) {
-    const discoverySkills = rebuilt.discoverySkills ?? rebuilt.resolvedSkills ?? [];
+    const discoverySkills = (rebuilt.discoverySkills ?? rebuilt.resolvedSkills ?? []).filter(
+      matchesSnapshotSkill,
+    );
     snapshot = {
       ...retainedSnapshot,
       resolvedSkills: catalog.flatMap(({ name }) =>

@@ -544,21 +544,14 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         ? captureRecord(record, resolveDatabasePath({ path: pathname })).captureIntegrity?.()
         : undefined;
     },
-    publish(
-      pathname: string,
-      preparedIdentity?: DatabasePathIdentity,
-    ): {
+    publish(pathname: string): {
       identity: DatabasePathIdentity;
       admission: OpenClawStateDatabaseReadAdmission;
     } {
       const resolvedPath = resolveDatabasePath({ path: pathname });
-      const identity = preparedIdentity ?? readDatabasePathIdentitySync(resolvedPath);
+      const identity = readDatabasePathIdentitySync(resolvedPath);
       const previous = recordsByPath.get(resolvedPath);
-      // Warm worker publication keeps captured facts; cold binding still retires vanished aliases.
-      let record =
-        preparedIdentity && previous?.identity.key === identity.key
-          ? records.get(identity.key)
-          : findPhysicalRecord(identity);
+      let record = findPhysicalRecord(identity);
       if (previous && previous.identity.key !== identity.key) {
         if (previous.identity.key.startsWith("path:") && !record) {
           // First canonical creation binds the same captured admission to its file.
@@ -581,8 +574,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         record = resolve(resolvedPath, identity);
       }
       bindPath(record, resolvedPath);
-      // A retained actor's opening path cannot restore an alias retired by relocation.
-      bindPath(record, record.identity.canonicalPath);
+      bindPath(record, identity.canonicalPath);
       // Private native binding may publish while reads are sealed. Retain its
       // generation now; every later worker use still checks the seal and lifetime.
       return { identity, admission: captureRecord(record, resolvedPath) };

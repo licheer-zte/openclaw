@@ -4,11 +4,14 @@ import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { openClientCredentialCustody } from "./client-credential-store.js";
 import {
   clearDeviceAuthToken,
-  loadDeviceAuthToken as readCachedToken,
   loadOriginDeviceToken,
   storeDeviceAuthToken,
-  storeOriginDeviceToken as seedOriginDeviceToken,
 } from "./device-auth-store.js";
+import {
+  readDeviceAuthTokenForTest as readCachedToken,
+  seedDeviceAuthToken,
+  seedOriginDeviceToken,
+} from "./device-auth-store.test-support.js";
 import { approveDevicePairing } from "./device-pairing-approval.js";
 import {
   requireValue,
@@ -65,7 +68,7 @@ async function legacyNodeRecovery() {
   });
   const before = requireValue(await getPairedDevice("device-1", dir), "expected paired device");
   const token = requireToken(before.tokens?.node?.token);
-  const cached = await storeDeviceAuthToken({
+  const cached = seedDeviceAuthToken({
     deviceId: "device-1",
     role: "node",
     token,
@@ -95,7 +98,7 @@ describe("device pairing local credential cleanup", () => {
     await expect(
       rotateDeviceToken({ deviceId: "device-1", role: "node", baseDir: dir }),
     ).resolves.toEqual({ ok: false, reason: "scope-outside-approved-baseline" });
-    expect(await readCachedToken({ deviceId: "device-1", role: "node", env })).toEqual(cached);
+    expect(readCachedToken({ deviceId: "device-1", role: "node", env })).toEqual(cached);
 
     const entry = requireRotatedEntry(
       await rotateDeviceToken({ deviceId: "device-1", role: "node", scopes: [], baseDir: dir }),
@@ -103,7 +106,7 @@ describe("device pairing local credential cleanup", () => {
 
     expect(entry.scopes).toEqual([]);
     expect(entry.token).not.toBe(token);
-    expect(await readCachedToken({ deviceId: "device-1", role: "node", env })).toBeNull();
+    expect(readCachedToken({ deviceId: "device-1", role: "node", env })).toBeNull();
     expect(await getPairedDevice("device-1", dir)).toEqual({
       ...before,
       tokens: { ...before.tokens, node: entry },
@@ -132,20 +135,10 @@ describe("device pairing local credential cleanup", () => {
       env,
       expectedToken: token,
     });
-    const operator = await storeDeviceAuthToken({
-      deviceId: "device-1",
-      role: "operator",
-      token,
-      env,
-    });
-    const otherDevice = await storeDeviceAuthToken({
-      deviceId: "device-2",
-      role: "node",
-      token,
-      env,
-    });
+    const operator = seedDeviceAuthToken({ deviceId: "device-1", role: "operator", token, env });
+    const otherDevice = seedDeviceAuthToken({ deviceId: "device-2", role: "node", token, env });
     const gatewayScope = "wss://other-gateway.example/rpc";
-    const origin = await seedOriginDeviceToken({
+    const origin = seedOriginDeviceToken({
       gatewayScope,
       deviceId: "device-1",
       role: "node",
@@ -156,7 +149,7 @@ describe("device pairing local credential cleanup", () => {
       ...process.env,
       OPENCLAW_STATE_DIR: await suiteRootTracker.make("other-profile"),
     };
-    const otherProfile = await storeDeviceAuthToken({
+    const otherProfile = seedDeviceAuthToken({
       deviceId: "device-1",
       role: "node",
       token,
@@ -168,15 +161,13 @@ describe("device pairing local credential cleanup", () => {
     );
 
     expect(refreshed).not.toBeNull();
-    expect(await readCachedToken({ deviceId: "device-1", role: "node", env })).toEqual(refreshed);
-    expect(await readCachedToken({ deviceId: "device-1", role: "operator", env })).toEqual(
-      operator,
-    );
-    expect(await readCachedToken({ deviceId: "device-2", role: "node", env })).toEqual(otherDevice);
+    expect(readCachedToken({ deviceId: "device-1", role: "node", env })).toEqual(refreshed);
+    expect(readCachedToken({ deviceId: "device-1", role: "operator", env })).toEqual(operator);
+    expect(readCachedToken({ deviceId: "device-2", role: "node", env })).toEqual(otherDevice);
     expect(
       await loadOriginDeviceToken({ gatewayScope, deviceId: "device-1", role: "node", env }),
     ).toEqual(origin);
-    expect(await readCachedToken({ deviceId: "device-1", role: "node", env: otherEnv })).toEqual(
+    expect(readCachedToken({ deviceId: "device-1", role: "node", env: otherEnv })).toEqual(
       otherProfile,
     );
   });
@@ -217,11 +208,11 @@ describe("device pairing local credential cleanup", () => {
       custody.close();
     }
 
-    expect(await readCachedToken({ deviceId: "device-1", role: "node", env })).toEqual(cached);
+    expect(readCachedToken({ deviceId: "device-1", role: "node", env })).toEqual(cached);
     await expect(
       clearDeviceAuthToken({ deviceId: "device-1", role: "node", expectedToken: token, env }),
     ).resolves.toBe(true);
-    expect(await readCachedToken({ deviceId: "device-1", role: "node", env })).toBeNull();
+    expect(readCachedToken({ deviceId: "device-1", role: "node", env })).toBeNull();
   });
 
   test("valid node rotation to empty scopes does not apply legacy cache cleanup", async () => {
@@ -233,7 +224,7 @@ describe("device pairing local credential cleanup", () => {
     );
     await approveDevicePairing(request.requestId, dir);
     const before = requireValue(await getPairedDevice("node-1", dir), "expected paired node");
-    const cached = await storeDeviceAuthToken({
+    const cached = seedDeviceAuthToken({
       deviceId: "node-1",
       role: "node",
       token: requireToken(before.tokens?.node?.token),
@@ -246,7 +237,7 @@ describe("device pairing local credential cleanup", () => {
     );
 
     expect(entry.scopes).toEqual([]);
-    expect(await readCachedToken({ deviceId: "node-1", role: "node", env })).toEqual(cached);
+    expect(readCachedToken({ deviceId: "node-1", role: "node", env })).toEqual(cached);
     expect((await getPairedDevice("node-1", dir))?.approvedScopes).toEqual(["node.exec"]);
   });
 });

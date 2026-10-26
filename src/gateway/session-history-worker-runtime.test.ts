@@ -54,7 +54,6 @@ vi.mock("../config/sessions/session-cold-storage-read.js", () => ({
 }));
 
 type RpcRequest = Extract<SessionHistoryWorkerRequest, { kind: "rpc" }>;
-type HttpRequest = Extract<SessionHistoryWorkerRequest, { kind: "http" }>;
 const queued: Array<{
   prepare: () => SessionTranscriptHistoryWorkerInput;
   result: ReturnType<typeof createDeferred<SessionHistoryWorkerResult>>;
@@ -223,15 +222,12 @@ function historyTarget() {
   };
 }
 
-function httpRequest(overrides: Partial<HttpRequest["params"]> = {}): HttpRequest {
+function deltaRequest(
+  limits: Extract<SessionHistoryWorkerRequest, { kind: "delta" }>["params"]["limits"] = {},
+): Extract<SessionHistoryWorkerRequest, { kind: "delta" }> {
   return {
-    kind: "http",
-    params: {
-      target: { ...historyTarget(), sessionEntry: request().params.entry },
-      limit: 10,
-      maxChars: 8000,
-      ...overrides,
-    },
+    kind: "delta",
+    params: { target: { ...historyTarget(), sessionEntry: request().params.entry }, limits },
   };
 }
 
@@ -296,20 +292,24 @@ it.each([false, true])(
   },
 );
 
-it.each([
-  request(),
-  httpRequest({ target: historyTarget() }),
-  { kind: "delta", params: { target: historyTarget(), limits: {} } },
-  {
-    kind: "inline-visibility",
-    params: { target: historyTarget(), lookup: { kind: "run", runId: "run", messageSeq: 1 } },
-  },
-] satisfies SessionHistoryWorkerRequest[])(
-  "retains auxiliary registry refusal for $kind lineage projection",
-  async (input) => {
+it.each(["rpc", "http", "delta", "inline-visibility"] as const)(
+  "retains auxiliary registry refusal for %s lineage projection",
+  async (kind) => {
     const failure = new Error("Auxiliary registry changed during discovery");
     vi.spyOn(storeSources, "prepareGatewaySessionStoreReadSourcesAsync").mockRejectedValue(failure);
-    await expect(readSessionHistoryPageInWorker(input)).rejects.toBe(failure);
+    const target = historyTarget();
+    const pending =
+      kind === "rpc"
+        ? readSessionHistoryPageInWorker(request())
+        : kind === "http"
+          ? readSessionHistoryPageInWorker({ kind, params: { target, maxChars: 8000, limit: 10 } })
+          : kind === "inline-visibility"
+            ? readSessionHistoryPageInWorker({
+                kind,
+                params: { target, lookup: { kind: "run", runId: "run", messageSeq: 1 } },
+              })
+            : readSessionHistoryPageInWorker({ kind, params: { target, limits: {} } });
+    await expect(pending).rejects.toBe(failure);
     expect(runWorker).not.toHaveBeenCalled();
   },
 );
@@ -328,18 +328,22 @@ it.each(["rpc", "http"] as const)(
       });
       return kind === "rpc"
         ? rpc
-        : httpRequest({
-            target: {
-              ...historyTarget(),
-              sessionEntry: rpc.params.entry,
-              env: {
-                OPENCLAW_STATE_DIR: "/tmp/http-history-captured-state",
-                ...(includeUnrelatedEnv ? { UNRELATED_SECRET: "synthetic" } : {}),
+        : {
+            kind: "http",
+            params: {
+              target: {
+                ...historyTarget(),
+                sessionEntry: rpc.params.entry,
+                env: {
+                  OPENCLAW_STATE_DIR: "/tmp/http-history-captured-state",
+                  ...(includeUnrelatedEnv ? { UNRELATED_SECRET: "synthetic" } : {}),
+                },
               },
+              limit: 20,
+              maxChars: 8000,
+              cursor: "7",
             },
-            limit: 20,
-            cursor: "7",
-          });
+          };
     };
     const supplied = makeRequest(true);
     const expected = makeRequest();
@@ -414,7 +418,12 @@ it.each(["rpc", "http"] as const)(
     expect.soft(dispatched).toHaveLength(1);
     for (const { input, bytes } of dispatched) {
       expect.soft(input.request).toEqual(expected);
-      expect.soft(input.target.transcript).toMatchObject(historyTarget());
+      expect.soft(input.target.transcript).toMatchObject({
+        agentId: "main",
+        sessionId: "history-worker",
+        sessionKey: "agent:main:history-worker",
+        storePath: "/tmp/history-worker-fixture/sessions.json",
+      });
       expect.soft(bytes).toBe(JSON.stringify(input).length * 2);
     }
   },
@@ -530,49 +539,46 @@ it.each([false, true])(
   async (failed) => {
     const capture = stateContext.captureOpenClawStateWorkerContext;
     const assertions: Array<ReturnType<typeof vi.fn>> = [];
-    vi.spyOn(stateContext, "captureOpenClawStateWorkerContext").mockImplementation((...args) => {
-      const bound = capture(...args);
-      const assertCurrent = vi.fn(bound.admission.assertCurrent);
-      assertions.push(assertCurrent);
-      return { ...bound, admission: { ...bound.admission, assertCurrent } };
-    });
-    const input = {
-      kind: "delta",
-      params: {
-        target: { ...historyTarget(), sessionEntry: request().params.entry },
-        limits: { maxEvents: 200, maxBytes: 1_000_000 },
-      },
-    } satisfies SessionHistoryWorkerRequest;
-    const first = readSessionHistoryPageInWorker(input);
-    const second = readSessionHistoryPageInWorker(input);
-    await waitForReaderAdmission(2);
-    expect(queued).toHaveLength(1);
-    const partial: SessionHistoryDelta = {
-      delta: { kind: "missing" },
-      subagentCoordination: { sessions: [["source", false]], runMessages: [] },
-    };
-    queued[0]!.prepare();
-    if (failed) {
-      queued[0]!.result.reject(new SessionHistoryDeltaPreparationError(partial));
-    } else {
-      queued[0]!.result.resolve({ kind: "delta", ...partial });
+    const context = vi
+      .spyOn(stateContext, "captureOpenClawStateWorkerContext")
+      .mockImplementation((...args) => {
+        const bound = capture(...args);
+        const assertCurrent = vi.fn(bound.admission.assertCurrent);
+        assertions.push(assertCurrent);
+        return { ...bound, admission: { ...bound.admission, assertCurrent } };
+      });
+    try {
+      const input = deltaRequest({ maxEvents: 200, maxBytes: 1_000_000 });
+      const first = readSessionHistoryPageInWorker(input);
+      const second = readSessionHistoryPageInWorker(input);
+      await waitForReaderAdmission(2);
+      expect(queued).toHaveLength(1);
+      const partial: SessionHistoryDelta = {
+        delta: { kind: "missing" },
+        subagentCoordination: { sessions: [["source", false]], runMessages: [] },
+      };
+      queued[0]!.prepare();
+      if (failed) {
+        queued[0]!.result.reject(new SessionHistoryDeltaPreparationError(partial));
+      } else {
+        queued[0]!.result.resolve({ kind: "delta", ...partial });
+      }
+      const [a, b] = await Promise.all([first, second]);
+      a.subagentCoordination.sessions[0]![1] = true;
+      expect(b.subagentCoordination.sessions[0]![1]).toBe(false);
+      assertions[0]!.mockImplementation(() => {
+        throw new Error("original source revoked");
+      });
+      expect(a.assertCurrent).toThrow("original source revoked");
+      expect(b.assertCurrent).not.toThrow();
+    } finally {
+      context.mockRestore();
     }
-    const [a, b] = await Promise.all([first, second]);
-    a.subagentCoordination.sessions[0]![1] = true;
-    expect(b.subagentCoordination.sessions[0]![1]).toBe(false);
-    assertions[0]!.mockImplementation(() => {
-      throw new Error("original source revoked");
-    });
-    expect(a.assertCurrent).toThrow("original source revoked");
-    expect(b.assertCurrent).not.toThrow();
   },
 );
 
 it("does not recover partial delta facts when worker retirement fails", async () => {
-  const pending = readSessionHistoryPageInWorker({
-    kind: "delta",
-    params: { target: { ...historyTarget(), sessionEntry: request().params.entry }, limits: {} },
-  });
+  const pending = readSessionHistoryPageInWorker(deltaRequest());
   const failure = sessionHistoryCleanupError(
     new SessionHistoryDeltaPreparationError({
       delta: { kind: "missing" },
@@ -625,26 +631,37 @@ it("shares queued equivalent pages but starts a fresh read after dispatch", asyn
   ]);
 });
 
-it.each([
-  ["rpc limit", request(), request({ max: 2 })],
-  [
-    "rpc store",
-    request(),
-    request({ storePath: "/tmp/another-history-worker-fixture/sessions.json" }),
-  ],
-  ["rpc deflate", request(), request({ deflateResponse: true })],
-  ["http cursor", httpRequest(), httpRequest({ cursor: "7" })],
-] satisfies [string, SessionHistoryWorkerRequest, SessionHistoryWorkerRequest][])(
+it.each(["rpc limit", "rpc store", "rpc deflate", "http cursor"] as const)(
   "keeps distinct %s selectors separate in coalescing and byte admission",
-  async (_, initial, changed) => {
-    const first = readSessionHistoryPageInWorker(initial);
-    const second = readSessionHistoryPageInWorker(changed);
+  async (selector) => {
+    const makeRequest = (different: boolean): SessionHistoryWorkerRequest =>
+      selector === "http cursor"
+        ? {
+            kind: "http",
+            params: {
+              target: { ...historyTarget(), sessionEntry: request().params.entry },
+              limit: 10,
+              maxChars: 8000,
+              cursor: different ? "7" : undefined,
+            },
+          }
+        : request(
+            different
+              ? selector === "rpc limit"
+                ? { max: 2 }
+                : selector === "rpc deflate"
+                  ? { deflateResponse: true }
+                  : { storePath: "/tmp/another-history-worker-fixture/sessions.json" }
+              : {},
+          );
+    const first = readSessionHistoryPageInWorker(makeRequest(false));
+    const second = readSessionHistoryPageInWorker(makeRequest(true));
     await waitForReaderAdmission(2);
     expect(queued).toHaveLength(2);
     for (const [index, job] of queued.entries()) {
       const input = job.prepare();
       expect(runWorker.mock.calls[index]![1]).toBe(JSON.stringify(input).length * 2);
-      job.result.resolve(initial.kind === "http" ? httpPage() : page("selected page"));
+      job.result.resolve(selector === "http cursor" ? httpPage() : page("selected page"));
     }
     await Promise.all([first, second]);
   },

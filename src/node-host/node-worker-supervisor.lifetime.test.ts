@@ -141,14 +141,18 @@ describe("node worker environment lifetime", () => {
   it.skipIf(process.platform === "win32")(
     "reclaims a killed worker's descendants before releasing its slot without disturbing a peer",
     async () => {
-      await using f = supervisorFixture({ capacity: 2 });
-      const { supervisor, workspaceDir, capacities: capacitySnapshots } = f;
+      const capacitySnapshots: Array<{ total: number; available: number }> = [];
+      const { env, supervisor, workspaceDir } = supervisorFixture({
+        capacity: 2,
+        onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
+      });
       const victim = launchInput(workspaceDir, "killed-owner", "tree");
       const peer = launchInput(workspaceDir, "surviving-peer", "wait");
+      const store = new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env }));
       let grandchild: NodeWorkerProcessIdentity | undefined;
       try {
-        const running = await f.launch(victim);
-        const unrelated = await f.launch(peer);
+        const running = await supervisor.launch(victim, TEST_WORKER_ENDPOINT);
+        const unrelated = await supervisor.launch(peer, TEST_WORKER_ENDPOINT);
         const pidPath = path.join(workspaceDir, "grandchild.pid");
         await vi.waitFor(() => expect(fs.existsSync(pidPath)).toBe(true));
         grandchild = requireNodeWorkerProcessIdentity(Number(fs.readFileSync(pidPath, "utf8")));
@@ -164,21 +168,25 @@ describe("node worker environment lifetime", () => {
         );
         expect(inspectNodeWorkerProcessIdentity(grandchild)).toMatch(/^(dead|reused)$/u);
         expect(inspectNodeWorkerProcessIdentity(running.worker!)).toMatch(/^(dead|reused)$/u);
-        expect((await f.receipt(victim.launchId))?.state).toBe("failed");
+        expect((await store.get(victim.launchId))?.state).toBe("failed");
         expect(inspectNodeWorkerProcessIdentity(unrelated.worker!)).toBe("live");
         expect((await supervisor.status(peer.launchId))?.state).toBe("running");
 
         const replacement = launchInput(workspaceDir, "replacement-owner", "wait");
-        await f.launch(replacement);
+        await supervisor.launch(replacement, TEST_WORKER_ENDPOINT);
         expect(capacitySnapshots.at(-1)).toEqual({ total: 2, available: 0 });
       } finally {
-        if (grandchild) {
-          if (inspectNodeWorkerProcessIdentity(grandchild) === "live") {
-            process.kill(grandchild.pid, "SIGKILL");
+        try {
+          if (grandchild) {
+            if (inspectNodeWorkerProcessIdentity(grandchild) === "live") {
+              process.kill(grandchild.pid, "SIGKILL");
+            }
+            await vi.waitFor(() =>
+              expect(inspectNodeWorkerProcessIdentity(grandchild!)).toMatch(/^(dead|reused)$/u),
+            );
           }
-          await vi.waitFor(() =>
-            expect(inspectNodeWorkerProcessIdentity(grandchild!)).toMatch(/^(dead|reused)$/u),
-          );
+        } finally {
+          await supervisor.close();
         }
       }
     },
@@ -186,7 +194,7 @@ describe("node worker environment lifetime", () => {
 
   it("reuses a retained worker at capacity across turns and cancellation until its environment stops", async () => {
     await using f = supervisorFixture({ capacity: 1 });
-    const { supervisor, workspaceDir, capacities: capacitySnapshots } = f;
+    const { env, supervisor, workspaceDir, capacities: capacitySnapshots } = f;
     const first = testWorkerLaunchInput(workspaceDir, "preview-start", "background-start");
     const nextTurn = (turnId: string, prompt: string) => {
       const input = testWorkerLaunchInput(workspaceDir, turnId, prompt);
@@ -201,6 +209,7 @@ describe("node worker environment lifetime", () => {
       return input;
     };
     const environment = testNodeWorkerEnvironmentIdentity(first);
+    const store = new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env }));
 
     const running = await f.launch(first);
     const completed = await f.terminal(first.launchId);
@@ -211,7 +220,7 @@ describe("node worker environment lifetime", () => {
     await using connection = await observeBackgroundConnection(background.url);
     expect(completed.state).toBe("completed");
     expect(await supervisor.hasActiveWork()).toBe(true);
-    expect(await f.receipt(first.launchId)).toMatchObject({
+    expect(await store.get(first.launchId)).toMatchObject({
       state: "running",
       worker: running.worker,
     });

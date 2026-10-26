@@ -15,8 +15,10 @@ vi.mock("node:child_process", async () => {
 });
 import {
   getWindowsInstallRoots,
+  getWindowsPowerShellExePath,
   getWindowsProgramFilesRoots,
   getWindowsSystem32ExePath,
+  getWindowsWmicExePath,
 } from "./windows-install-roots.js";
 
 afterEach(() => {
@@ -25,7 +27,7 @@ afterEach(() => {
   execFileSyncMock.mockReset();
 });
 
-describe("Windows install roots and executables", () => {
+describe("getWindowsInstallRoots", () => {
   it("prefers HKLM registry roots over process environment values", () => {
     vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
     execFileSyncMock.mockImplementation((_file, args: string[]) => {
@@ -46,6 +48,10 @@ describe("Windows install roots and executables", () => {
     const roots = getWindowsInstallRoots();
 
     expect(roots).toEqual(installRoots);
+    expect(execFileSyncMock).toHaveBeenCalled();
+    for (const [file] of execFileSyncMock.mock.calls) {
+      expect(file).toBe("C:\\Windows\\System32\\reg.exe");
+    }
   });
 
   it("retains first-lookup environment fallbacks when Program Files is requested later", async () => {
@@ -89,6 +95,9 @@ describe("Windows install roots and executables", () => {
       programW6432: null,
     });
   });
+});
+
+describe("getWindowsProgramFilesRoots", () => {
   it("prefers ProgramW6432 and dedupes roots case-insensitively", () => {
     expect(
       getWindowsProgramFilesRoots({
@@ -98,11 +107,27 @@ describe("Windows install roots and executables", () => {
       }),
     ).toEqual(["D:\\Programs", "E:\\Programs (x86)"]);
   });
+});
+
+describe("Windows system executable helpers", () => {
+  it("resolves trusted Windows process-inspection tools", () => {
+    const env = { SystemRoot: "D:\\Windows" };
+
+    expect(getWindowsSystem32ExePath("netstat.exe", env)).toBe(
+      "D:\\Windows\\System32\\netstat.exe",
+    );
+    expect(getWindowsPowerShellExePath(env)).toBe(
+      "D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    );
+    expect(getWindowsWmicExePath(env)).toBe("D:\\Windows\\System32\\wbem\\wmic.exe");
+  });
+
   it("rejects unsafe System32 executable names", () => {
-    for (const name of ["..\\netstat.exe", "netstat"]) {
-      expect(() => getWindowsSystem32ExePath(name)).toThrow(
-        /Invalid Windows System32 executable name/u,
-      );
-    }
+    expect(() => getWindowsSystem32ExePath("..\\netstat.exe")).toThrow(
+      /Invalid Windows System32 executable name/u,
+    );
+    expect(() => getWindowsSystem32ExePath("netstat")).toThrow(
+      /Invalid Windows System32 executable name/u,
+    );
   });
 });

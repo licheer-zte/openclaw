@@ -53,11 +53,8 @@ it.each([
   ["stop", undefined, true],
 ] as const)("finalizes non-visible %s/%s (projected=%s)", (stop, text, projected) => {
   expect(
-    recover(stop, text, projected ? { currentAttemptAssistant: undefined } : {}),
-  ).toMatchObject({
-    disableTools: true,
-    instruction: expect.any(String),
-  });
+    recover(stop, text, projected ? { currentAttemptAssistant: undefined } : {})?.instruction,
+  ).toContain("Tools are unavailable in this step");
 });
 
 it("preserves a meaningful length-stop partial answer for truncation delivery", () => {

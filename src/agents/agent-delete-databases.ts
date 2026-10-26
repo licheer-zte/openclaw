@@ -38,6 +38,15 @@ import { closeAuthProfileReadPool } from "./auth-profiles/sqlite-read-pool.js";
 
 export { AgentSharedStoreOwnerError } from "./agent-delete-session-store-safety.js";
 
+export type AgentDeleteDatabasePlan = {
+  agentDirs: string[];
+  registrationPaths: string[];
+  // Stale registrations can name a survivor's database; path-only readers must exclude it.
+  readerPaths: string[];
+  fileGroups: string[][];
+  relocatedFileGroups: string[][];
+};
+
 function resolveAgentDeleteRuntimeDirs(
   agentId: string,
   agentDir: string,
@@ -235,7 +244,7 @@ export async function prepareAgentDeleteDatabases(
   agentDir: string,
   options: OpenClawStateDatabaseOptions = {},
   deletion?: AgentDeletionOperation,
-) {
+): Promise<AgentDeleteDatabasePlan> {
   const registeredDatabases = await readAgentDeleteDatabaseRegistry(options);
   const survivingDatabaseFilePaths = resolveSurvivingDatabaseFilePaths(
     registeredDatabases,
@@ -299,7 +308,6 @@ export async function prepareAgentDeleteDatabases(
   return {
     agentDirs: resolveAgentDeleteRuntimeDirs(agentId, agentDir, registeredDatabases),
     registrationPaths: [...registeredDatabasePaths],
-    // Stale registrations can name a survivor's database; path-only readers must exclude it.
     readerPaths: databasePaths,
     fileGroups,
     relocatedFileGroups,

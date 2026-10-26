@@ -37,11 +37,20 @@ function register(close: () => void): () => void {
   return dispose;
 }
 
-it.each([false, true])("preserves order and listener budget (interleaved: %s)", (interleaved) => {
-  const startupOwners = interleaved ? 0 : 8;
-  const owners = interleaved
-    ? ["agent", "finalizer", "shared-state"]
-    : ["agent", "readonly", "auth"];
+it.each([
+  {
+    name: "adjacent caches beside eight startup owners",
+    startupOwners: 8,
+    owners: ["agent-readonly", "agent", "auth-profile"],
+    nonSqlite: [],
+  },
+  {
+    name: "caches separated by non-SQLite finalizers",
+    startupOwners: 0,
+    owners: ["agent", "capture-finalizer", "shared-state", "capture-store", "last-owner"],
+    nonSqlite: ["capture-finalizer", "last-owner"],
+  },
+])("preserves order and listener budget for $name", ({ startupOwners, owners, nonSqlite }) => {
   for (let index = 0; index < startupOwners; index++) {
     exits.once("exit", () => {});
   }
@@ -50,7 +59,7 @@ it.each([false, true])("preserves order and listener budget (interleaved: %s)", 
     const close = () => {
       closed.push(owner);
     };
-    if (owner === "finalizer") {
+    if (nonSqlite.includes(owner)) {
       exits.once("exit", close);
     } else {
       register(close);

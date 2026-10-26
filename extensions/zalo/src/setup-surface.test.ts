@@ -15,21 +15,23 @@ import type { ZaloConfig } from "./types.js";
 
 const config = (zalo: ZaloConfig): OpenClawConfig => ({ channels: { zalo } });
 const zaloConfigure = createPluginSetupWizardConfigure({
-  ...zaloPlugin,
+  id: zaloPlugin.id,
+  meta: zaloPlugin.meta,
+  capabilities: zaloPlugin.capabilities,
+  config: zaloPlugin.config,
   setup: zaloSetupAdapter,
   setupWizard: zaloSetupWizard,
 });
 
 describe("zalo setup wizard", () => {
   it.each([
-    { accountId: "default", replaceToken: false, fresh: false },
-    { accountId: "work", replaceToken: false, fresh: false },
-    { accountId: "default", replaceToken: true, fresh: false },
-    { accountId: "work", replaceToken: true, fresh: false },
-    { accountId: "default", replaceToken: true, fresh: true },
+    { accountId: "default", replaceToken: false },
+    { accountId: "work", replaceToken: false },
+    { accountId: "default", replaceToken: true },
+    { accountId: "work", replaceToken: true },
   ])(
-    "configures $accountId polling (replace=$replaceToken, fresh=$fresh)",
-    async ({ accountId, replaceToken, fresh }) => {
+    "switches $accountId to polling (replaceToken=$replaceToken)",
+    async ({ accountId, replaceToken }) => {
       const account = {
         enabled: false,
         botToken: "old-token",
@@ -48,42 +50,58 @@ describe("zalo setup wizard", () => {
         confirm: vi.fn(async ({ message }) =>
           message === "Zalo token already configured. Keep it?" ? !replaceToken : false,
         ),
-        select: vi.fn(async () => "plaintext") as WizardPrompter["select"],
-        text: vi.fn(async ({ message }) => {
-          expect(message).toBe("Enter Zalo bot token");
-          return "new-token";
-        }) as WizardPrompter["text"],
+        text: vi.fn(async () => "new-token") as WizardPrompter["text"],
       });
-      const options = { secretInputMode: "plaintext" as const };
-      const result = fresh
-        ? await runSetupWizardConfigure({ configure: zaloConfigure, cfg: {}, prompter, options })
-        : await runSetupWizardFinalize({
-            finalize: zaloSetupWizard.finalize,
-            cfg,
-            accountId,
-            prompter,
-            options,
-          });
+
+      const result = await runSetupWizardFinalize({
+        finalize: zaloSetupWizard.finalize,
+        cfg,
+        accountId,
+        prompter,
+        options: { secretInputMode: "plaintext" as const },
+      });
       const channel = result?.cfg?.channels?.zalo;
       const selected = accountId === "default" ? channel : channel?.accounts?.work;
       expect(selected).toMatchObject({
         enabled: replaceToken,
         botToken: replaceToken ? "new-token" : "old-token",
-        ...(fresh ? {} : { allowFrom: ["123456789"] }),
+        allowFrom: ["123456789"],
       });
       expect(selected).not.toHaveProperty("webhookUrl");
       expect(selected).not.toHaveProperty("webhookSecret");
       expect(selected).not.toHaveProperty("webhookPath");
       expect(channel?.enabled).toBe(replaceToken);
-      if (fresh) {
-        expect(result).toMatchObject({ accountId: "default" });
-      } else {
-        expect(channel?.accounts?.alerts).toEqual(sibling);
-      }
+      expect(channel?.accounts?.alerts).toEqual(sibling);
       expect(cfg.channels?.zalo?.enabled).toBe(false);
       expect(account.webhookUrl).toBe("https://example.com/zalo");
     },
   );
+
+  it("configures a polling token flow", async () => {
+    const prompter = createTestWizardPrompter({
+      select: vi.fn(async () => "plaintext") as WizardPrompter["select"],
+      text: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Enter Zalo bot token") {
+          return "12345689:abc-xyz";
+        }
+        throw new Error(`Unexpected prompt: ${message}`);
+      }) as WizardPrompter["text"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: zaloConfigure,
+      cfg: {} as OpenClawConfig,
+      prompter,
+      options: { secretInputMode: "plaintext" as const },
+    });
+
+    expect(result.accountId).toBe("default");
+    expect(result.cfg.channels?.zalo).toMatchObject({
+      enabled: true,
+      botToken: "12345689:abc-xyz",
+    });
+    expect(result.cfg.channels?.zalo?.webhookUrl).toBeUndefined();
+  });
 
   installChannelDmPolicyContractSuite({
     dmPolicy: zaloDmPolicy,

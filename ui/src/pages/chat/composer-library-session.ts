@@ -26,6 +26,7 @@ export type ComposerLibraryProps = {
   loading: boolean;
   busy: boolean;
   error: string | null;
+  notice: string | null;
   canWrite: boolean;
   onReload: () => void;
   onRead: (skillId: string, revision: string) => void;
@@ -42,6 +43,7 @@ export class ComposerLibrarySession {
   loading = false;
   busy = false;
   error: string | null = null;
+  notice: string | null = null;
   read: SkillsLibraryReadResult | null = null;
   selectedFile = "SKILL.md";
   private target: LibrarySessionTarget | null = null;
@@ -64,6 +66,7 @@ export class ComposerLibrarySession {
     this.loading = false;
     this.busy = false;
     this.error = null;
+    this.notice = null;
     this.closeRead();
   }
   private current(target: LibrarySessionTarget) {
@@ -138,13 +141,14 @@ export class ComposerLibrarySession {
     action: SkillsLibraryActivateParams["action"],
     skillId?: string,
     revision?: string,
-  ): Promise<string | null> {
+  ) {
     const target = this.target;
     if (!target || !this.current(target) || this.busy || this.loading) {
-      return null;
+      return;
     }
     this.busy = true;
     this.error = null;
+    this.notice = null;
     this.notify();
     try {
       await target.client.request<SkillsLibraryActivateResult>("skills.library.activate", {
@@ -154,8 +158,9 @@ export class ComposerLibrarySession {
         ...(revision ? { revision } : {}),
       });
       if (!this.current(target)) {
-        return null;
+        return;
       }
+      this.notice = t("skillLibrary.session.queued");
       this.result = null;
       this.closeRead();
       // Both catalog owners must retire their previous pins after an explicit activation.
@@ -163,12 +168,10 @@ export class ComposerLibrarySession {
       invalidateSessionSlashCommands(target.client, scope);
       invalidateChatMetadataStore(target.client, scope);
       await Promise.all([this.load(), revalidateChatMetadata(target.client, scope)]);
-      return this.current(target) && !this.error ? t("skillLibrary.session.queued") : null;
     } catch (error) {
       if (this.current(target)) {
         this.error = formatUiError(error);
       }
-      return null;
     } finally {
       this.finish(target, "busy");
     }

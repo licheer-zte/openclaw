@@ -1,9 +1,9 @@
 import "./web-search-runtime.test-support.js";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginWebSearchProviderEntry, WebSearchProviderPlugin } from "../../plugins/types.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
-import { holdPushStorage as holdAsyncBoundary } from "./push.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 const { preparedWebSearchCatalog: preparedCatalog, webSearchRuntimeMocks: runtimeMocks } =
   await import("./web-search-runtime.test-support.js");
@@ -68,17 +68,22 @@ it.each([
   ["redirect", "config"],
   ["redirect", "none"],
 ] as const)("Search provider authority at %s with %s revocation", async (stage, loss) => {
-  const boundary = holdAsyncBoundary();
+  const entered = createDeferred();
+  const release = createDeferred();
+  const pause = async () => {
+    entered.resolve();
+    await release.promise;
+  };
   const fetch = vi.fn(async () =>
     Response.json({
       results: [{ title: "Source", url: "https://example.com", excerpts: ["text"] }],
     }),
   );
   if (stage === "lazy import") {
-    mocks.beforeImport.mockImplementationOnce(() => boundary.wait());
+    mocks.beforeImport.mockImplementationOnce(pause);
   } else {
     fetch.mockImplementationOnce(async () => {
-      await boundary.wait();
+      await pause();
       return new Response(null, {
         status: 307,
         headers: { location: "https://api.parallel.ai/v1/redirected-search" },
@@ -94,17 +99,18 @@ it.each([
     respond: vi.fn(),
   } as unknown as GatewayRequestHandlerOptions;
   const pending = webSearchHandlers["webSearch.test"]!(options);
-  await boundary.settle(Promise.resolve(pending), () => {
-    if (loss === "client") {
-      options.client!.invalidated = true;
-    } else if (loss === "profile") {
-      mocks.assertProfile.mockImplementation(() => {
-        throw new Error("profile authority changed");
-      });
-    } else if (loss === "config") {
-      config = { tools: { web: { search: { enabled: false } } } };
-    }
-  });
+  await entered.promise;
+  if (loss === "client") {
+    options.client!.invalidated = true;
+  } else if (loss === "profile") {
+    mocks.assertProfile.mockImplementation(() => {
+      throw new Error("profile authority changed");
+    });
+  } else if (loss === "config") {
+    config = { tools: { web: { search: { enabled: false } } } };
+  }
+  release.resolve();
+  await pending;
   const succeeded = loss === "none";
   expect(fetch).toHaveBeenCalledTimes(stage === "lazy import" ? 0 : succeeded ? 2 : 1);
   expect(options.respond).toHaveBeenCalledWith(

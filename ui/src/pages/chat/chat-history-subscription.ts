@@ -245,11 +245,11 @@ async function synchronizeSelectedSessionMessageSubscription(
           if (!(await openingDispatch) || !isCurrent()) {
             return null;
           }
+          paneRequests.initialSnapshotHydration?.adoptReadySnapshot?.();
         }
-        // Read validated facts without publishing their retained base rows at dispatch.
+        // Storage can hydrate during connect preparation. Capture its latest cursor
+        // at dispatch, without holding the network behind a slow storage read.
         const cursor = opts?.initialHistory ? readChatHistoryCursor(state) : undefined;
-        const hydration = paneRequests.initialSnapshotHydration;
-        const ready = opts?.initialHistory && !cursor ? hydration?.readReadyHistory?.() : undefined;
         const requestAgentId = isUiSelectedGlobalSessionKey(state, nextKey)
           ? resolveUiSelectedSessionAgentId(state)
           : undefined;
@@ -258,9 +258,9 @@ async function synchronizeSelectedSessionMessageSubscription(
               "chat.startup",
               nextKey,
               requestAgentId,
-              cursor ?? ready?.deltaCursor,
+              cursor,
               readChatInputRunIds(state),
-              ready?.historyState ?? readChatHistoryState(state, cursor),
+              readChatHistoryState(state, cursor),
             )
           : undefined;
         admit();
@@ -284,10 +284,6 @@ async function synchronizeSelectedSessionMessageSubscription(
           },
           opts?.beforeHello ? { beforeHello: true } : undefined,
         );
-        if (ready) {
-          // Admit the retained base before exposing its delta to the history consumer.
-          await hydration?.adoptReadySnapshot?.();
-        }
         if (params && observation && subscribed.initialHistory) {
           initialHistoryReceipt = {
             paramsKey: JSON.stringify(params),

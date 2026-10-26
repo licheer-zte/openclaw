@@ -48,7 +48,6 @@ import {
   nativeDelegation,
   nativeResult,
   requireString,
-  settleNativeBackend,
   talkEventTypes,
   upstream,
   withParkedNativeTask,
@@ -220,7 +219,9 @@ describe("native Talk action ownership through public plugin registration", () =
         await flushNativeTranscript(result, () => socket.serverEvent(nativeTranscript(spoken)));
         socket.serverEvent(nativeDelegation("custody-request", delegated));
         await providerStarted.promise;
+        expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
         const run = upstream.runEmbeddedAgent.mock.calls[0]![0];
+        expect(run.prompt).toContain(delegated);
         const modelMessages = streamMocks.streamSimple.mock.calls[0]![1].messages;
         expect(
           modelMessages.filter((message: unknown) => JSON.stringify(message).includes(delegated)),
@@ -392,6 +393,7 @@ describe("native Talk action ownership through public plugin registration", () =
         expect(assertions).not.toHaveBeenCalled();
         expect(finish).toHaveBeenCalledOnce();
         expect(publish).toHaveBeenCalledOnce();
+        expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
         expect(await providerStream.result()).toBe(answer);
         expect(session.isStreaming).toBe(false);
         expect(Boolean(getActiveNativeAttempt(SESSION_ID))).toBe(false);
@@ -565,6 +567,7 @@ describe("native Talk action ownership through public plugin registration", () =
       try {
         socket.serverEvent(nativeDelegation("original-task", "Keep working."));
         await started.promise;
+        expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
         expect(Boolean(getActiveNativeAttempt(SESSION_ID))).toBe(false);
         const before = socket.sent.length;
         socket.serverEvent(nativeDelegation("startup-control", "use the release branch instead"));
@@ -579,7 +582,12 @@ describe("native Talk action ownership through public plugin registration", () =
         await vi.waitFor(() => expectResult(socket.sent));
         expect(socket.readyState).toBe(upstream.NativeSocket.OPEN);
       } finally {
-        await settleNativeBackend(release.resolve);
+        release.resolve();
+        await Promise.allSettled(
+          upstream.runEmbeddedAgent.mock.results.flatMap((result) =>
+            result.type === "return" ? [result.value] : [],
+          ),
+        );
       }
     });
   });
@@ -656,6 +664,7 @@ describe("native Talk action ownership through public plugin registration", () =
       await flushNativeTranscript(result, () => socket.serverEvent(nativeTranscript(text)));
       expect.soft(queueMessage, "final ASR must not steer the old task").not.toHaveBeenCalled();
       expect.soft(spokenMessages(socket.sent.slice(beforeTranscript))).toEqual([]);
+      expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
       await settleBackend();
       await vi.waitFor(() => expectResult(socket.sent));
       expect(activeRun.abortSignal.aborted).toBe(false);

@@ -11,7 +11,6 @@ import {
 } from "solid-js";
 import type { CronStatus } from "../../../api/types.ts";
 import type { MenuControls } from "../../../components/solid/menu.tsx";
-import { isCronInventoryInvalidation } from "../../../lib/cron/inventory-connection.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
@@ -119,7 +118,7 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
         })
       : undefined;
     stopEvents = source?.subscribeEvents((event) => {
-      if (isCronInventoryInvalidation(event, source.snapshot)) {
+      if (event.event === "cron" || event.event === "config.changed") {
         invalidate();
       }
     });
@@ -507,20 +506,16 @@ function ChatCiAutomationContent(props: Props, host: SolidBridgeElement<Props>) 
   );
 }
 
-export const ChatCiAutomationControl = defineSolidBridge<Props>(
-  "openclaw-chat-ci-automation",
-  ChatCiAutomationContent,
-  {
-    propertyChanged: (host, key) => inputHandlers.get(host)?.(key),
-    properties: {
-      gateway: { default: undefined, attribute: false },
-      pullRequest: { default: undefined, attribute: false },
-      sessionKey: { default: "", attribute: false },
-      sessionId: { default: "", attribute: false },
-      presented: { default: true, type: Boolean },
-      inline: { default: false, attribute: false },
-      menuPresentation: { default: false, attribute: false },
-      controls: { default: undefined, attribute: false },
-    },
+defineSolidBridge<Props>("openclaw-chat-ci-automation", ChatCiAutomationContent, {
+  propertyChanged: (host, key) => inputHandlers.get(host)?.(key),
+  properties: {
+    gateway: { default: undefined, attribute: false },
+    pullRequest: { default: undefined, attribute: false },
+    sessionKey: { default: "", attribute: false },
+    sessionId: { default: "", attribute: false },
+    presented: { default: true, type: Boolean },
+    inline: { default: false, attribute: false },
+    menuPresentation: { default: false, attribute: false },
+    controls: { default: undefined, attribute: false },
   },
-);
+});

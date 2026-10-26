@@ -1,28 +1,59 @@
 import { expect, it } from "vitest";
 import { getChatChannelMeta } from "../channels/chat-meta.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
-import { channelFixture, registrationFixture } from "./registry-registration.test-support.js";
+import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
+import { createPluginRecord } from "./status.test-fixtures.js";
 
 function createChannelRegistry(pluginId = "demo-plugin", source = "/tmp/demo/index.ts") {
-  const { registry, register } = registrationFixture();
+  const builder = createTestPluginRegistry();
+  const record = createPluginRecord({ id: pluginId, source });
+  builder.registry.plugins.push(record);
+  const api = builder.createApi(record, { config: {}, registrationMode: "full" });
   return {
-    registry,
+    registry: builder.registry,
     register: (overrides: Partial<ChannelPlugin>) => {
-      register({ id: pluginId, source }, (api) =>
-        api.registerChannel({ plugin: { ...channelFixture("demo", "Demo"), ...overrides } }),
-      );
-      return registry.channels[0]?.plugin;
+      api.registerChannel({ plugin: createChannelPlugin(overrides) });
+      return builder.registry.channels[0]?.plugin;
     },
     expectDiagnostic: (message: string, level = "warn") => {
-      expect(registry.diagnostics).toEqual([{ level, pluginId, source, message }]);
+      expect(builder.registry.diagnostics).toEqual([{ level, pluginId, source, message }]);
     },
+  };
+}
+
+function createChannelPlugin(overrides?: Partial<ChannelPlugin>): ChannelPlugin {
+  return {
+    id: "demo",
+    meta: {
+      id: "demo",
+      label: "Demo",
+      selectionLabel: "Demo",
+      docsPath: "/channels/demo",
+      blurb: "demo channel",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => [],
+      resolveAccount: () => ({ accountId: "default" }),
+    },
+    ...overrides,
   };
 }
 
 const { label, selectionLabel, docsPath, blurb } = getChatChannelMeta("telegram");
 it.each([
   ["telegram", { label, selectionLabel, docsPath, blurb }, false],
-  ["external-chat", { ...channelFixture("external-chat").meta, blurb: "" }, true],
+  [
+    "external-chat",
+    {
+      id: "external-chat",
+      label: "external-chat",
+      selectionLabel: "external-chat",
+      docsPath: "/channels/external-chat",
+      blurb: "",
+    },
+    true,
+  ],
 ] as const)("fills incomplete metadata for %s", (id, meta, exact) => {
   const { register, expectDiagnostic } = createChannelRegistry();
   const normalized = register({ id, meta: { id } as never });
@@ -37,11 +68,20 @@ it.each([
 });
 
 it("fills official external channel aliases omitted by the runtime plugin", () => {
-  const { registry, register } = createChannelRegistry("openclaw-weixin");
+  const { registry, register } = createChannelRegistry(
+    "openclaw-weixin",
+    "/tmp/openclaw-weixin/index.ts",
+  );
 
   const normalized = register({
     id: "openclaw-weixin",
-    meta: channelFixture("openclaw-weixin").meta,
+    meta: {
+      id: "openclaw-weixin",
+      label: "openclaw-weixin",
+      selectionLabel: "openclaw-weixin (long-poll)",
+      docsPath: "/channels/openclaw-weixin",
+      blurb: "Weixin channel",
+    },
   });
 
   expect(normalized?.meta.aliases).toEqual(["weixin", "wechat", "微信"]);
@@ -52,7 +92,7 @@ it("warns and repairs mismatched meta ids", () => {
   const { register, expectDiagnostic } = createChannelRegistry();
   const normalized = register({
     id: "demo",
-    meta: { ...channelFixture("demo", "Demo").meta, id: "other-demo" },
+    meta: { ...createChannelPlugin().meta, id: "other-demo" },
   });
 
   expect(normalized).toMatchObject({ id: "demo", meta: { id: "demo" } });

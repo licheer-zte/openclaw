@@ -1,5 +1,4 @@
 import { assert, describe, expect, it, vi } from "vitest";
-import { createProviderConfigFixture } from "../../config/runtime-snapshot.test-fixtures.js";
 import type { ImageGenerationProvider } from "../../image-generation/types.js";
 import * as mediaGenerationRegistry from "../../media-generation/registry.js";
 import { withEnv } from "../../test-utils/env.js";
@@ -23,7 +22,11 @@ describe("image generation credential availability", () => {
       const agentDir = state.agentDir();
       const provider: ImageGenerationProvider = {
         id: "fixture-image",
-        capabilities: { generate: {}, edit: { enabled: false } },
+        defaultModel: "fixture-model",
+        capabilities: {
+          generate: { maxCount: 1 },
+          edit: { enabled: false, maxInputImages: 0 },
+        },
         generateImage: async () => {
           throw new Error("Provider listing must not generate images");
         },
@@ -97,7 +100,19 @@ describe("image generation credential availability", () => {
         const tool = createImageGenerateTool({
           config: {
             plugins: { allow: ["openai"] },
-            ...(pinned ? createProviderConfigFixture("openai:siwc") : {}),
+            ...(pinned
+              ? {
+                  models: {
+                    providers: {
+                      openai: {
+                        baseUrl: "https://api.openai.com/v1",
+                        apiKey: "openai:siwc",
+                        models: [],
+                      },
+                    },
+                  },
+                }
+              : {}),
           },
           authProfileStore: createAuthProfileStoreFixture({
             "openai:siwc": { ...oauth, authFlow },

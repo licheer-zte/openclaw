@@ -9,16 +9,13 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareModelRequestBody } from "../../../packages/ai/src/transports/model-request-body.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { WorkerTaskPool } from "../../infra/worker-task-pool.js";
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { prepareProviderPrompt } from "./provider-prompt-serialization.js";
 import {
   clearProviderPromptState,
   getProviderPromptState,
   markLastProviderPromptContextRejected,
-  type PromptPreparationResult,
-  type PromptPreparationTask,
   type ProviderPromptState,
   wrapStreamFnWithProviderPromptState,
 } from "./provider-prompt-state.js";
@@ -292,14 +289,8 @@ describe("provider prompt state", () => {
     };
     const prepared = prepareProviderPrompt({ payload, encode: false });
     const entries = vi.spyOn(Array.prototype, "entries");
-    // A prior file can own the pool through an earlier module evaluation;
-    // replace only its transport so admission and payload observation stay real.
-    const pool = resolveGlobalSingleton<
-      WorkerTaskPool<PromptPreparationTask, PromptPreparationResult>
-    >(Symbol.for("openclaw.providerPromptHashPool"), () => {
-      throw new Error("Expected provider prompt state to initialize its worker pool");
-    });
-    const worker = vi.spyOn(pool, "run").mockResolvedValueOnce({
+    // Replace only the worker transport; admission and payload observation stay real.
+    const worker = vi.spyOn(WorkerTaskPool.prototype, "run").mockResolvedValueOnce({
       kind: "provider",
       prompt: prepared,
     });

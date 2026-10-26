@@ -85,8 +85,25 @@ it("rejects disabled workspace registration before reading channel data", () => 
   });
 });
 
-it("defaults absent chat capabilities before channel registration", () => {
+it("keeps channel registration available for trusted workspace plugins", () => {
+  const { registry, record, api } = fixture({
+    id: "trusted-workspace-shadow",
+    origin: "workspace",
+    enabled: true,
+  });
   const plugin = createChannelPlugin("telegram", "Trusted Workspace Telegram");
   plugin.capabilities = undefined as never;
-  expect(createChatChannelPlugin({ base: plugin }).capabilities.chatTypes).toEqual(["direct"]);
+
+  api.registerChannel({ plugin: createChatChannelPlugin({ base: plugin }) });
+
+  expect(registry.channelSetups).toMatchObject([
+    {
+      pluginId: "trusted-workspace-shadow",
+      enabled: true,
+      origin: "workspace",
+      plugin: { id: "telegram", capabilities: { chatTypes: ["direct"] } },
+    },
+  ]);
+  expect(registry.channels).toHaveLength(0);
+  expect(record.channelIds).toEqual(["telegram"]);
 });

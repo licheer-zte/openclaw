@@ -1,14 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withEnv } from "../../test-utils/env.js";
 import { saveAuthProfileStore } from "../auth-profiles/store-runtime.js";
-import {
-  apiKey,
-  authStore,
-  model,
-  providerConfig,
-} from "../model-catalog-fixtures.test-support.js";
+import { apiKey, authStore, model } from "../model-catalog-fixtures.test-support.js";
 import type { ModelCatalogSnapshot } from "../model-catalog.types.js";
 import {
   CATALOG_ALIAS_ID,
@@ -45,13 +41,17 @@ export async function expectLegacyWorkerCatalogRetention(params: {
       fixture.agentDir,
     ),
   );
-  const config = {
+  const config: OpenClawConfig = {
     ...fixture.config,
-    ...providerConfig(PROVIDER_ID, {
-      baseUrl: "https://worker-catalog.invalid/v1",
-      api: "openai-completions",
-      models: [model("configured-row", "Configured-only model", { contextWindow: 8192 })],
-    }),
+    models: {
+      providers: {
+        [PROVIDER_ID]: {
+          baseUrl: "https://worker-catalog.invalid/v1",
+          api: "openai-completions",
+          models: [model("configured-row", "Configured-only model", { contextWindow: 8192 })],
+        },
+      },
+    },
   };
   const input = catalogInput({ ...fixture, config });
   const retirement = new AbortController();

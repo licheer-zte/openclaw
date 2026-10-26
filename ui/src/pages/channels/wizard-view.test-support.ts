@@ -15,9 +15,12 @@ export function setupWizardTests() {
   beforeEach(async () => {
     await i18n.setLocale("en");
   });
-  afterEach(() => {
+  afterEach(async () => {
+    await i18n.setLocale("en");
     disposeChannelViews();
     document.body.replaceChildren();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 }
 

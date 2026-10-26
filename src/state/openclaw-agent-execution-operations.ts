@@ -73,7 +73,7 @@ async function loadAgentReplacementOperations() {
           captureFullFacts: true,
           postimages,
         });
-        const candidate = { maintenancePlans: result.maintenancePlans, publication };
+        const candidate = { ...result, publication };
         if (publication.source && publication.fullEntries?.size) {
           sealSessionEntryPublicationSource(publication.source);
         }
@@ -571,7 +571,6 @@ export function createAgentWorkerOperationLoaders(
     "session.maintenance.prepare": loadMaintenanceOperations,
     "session.maintenance.metadata": loadMaintenanceOperations,
     "usageCache.writeRollup": loadUsageCacheOperations,
-    "usageCache.writeQuarters": loadUsageCacheOperations,
     "usageCache.prune": loadUsageCacheOperations,
     "usageCache.retireLegacy": loadUsageCacheOperations,
     "session.rowTranscript.backfill": loadSessionRowBackfillOperations,

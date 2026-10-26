@@ -74,26 +74,7 @@ export async function restoreDoctorGatewayService(params: {
       assertInspectionCurrent();
       assertRestoreAdmission?.();
     };
-    const assertAutoStartCurrent = async () => {
-      assertMaintenanceCurrent();
-      if (before.serviceAutoStartEnabled === undefined) {
-        return;
-      }
-      const readEnabled = service.isEnabled;
-      if (!readEnabled) {
-        throw new Error(
-          "Gateway native autostart policy could not be verified after Doctor repair.",
-        );
-      }
-      const enabled = await settle(() => readEnabled({ env: serviceEnv }));
-      assertMaintenanceCurrent();
-      if (enabled !== before.serviceAutoStartEnabled) {
-        throw new Error(
-          "Gateway native autostart policy changed during Doctor repair; automatic restoration was refused. Inspect gateway status --deep before starting it.",
-        );
-      }
-    };
-    await assertAutoStartCurrent();
+    assertMaintenanceCurrent();
     const readCurrent = () =>
       settle(() =>
         readGatewayServiceState(service, {
@@ -235,7 +216,6 @@ export async function restoreDoctorGatewayService(params: {
           params.assertInstallationAdmission?.();
         };
         assertInstallationCurrent();
-        await assertAutoStartCurrent();
         const [{ maybeRepairGatewayServiceConfig }, { createDoctorPrompter }] = await Promise.all([
           import("./doctor-gateway-services.js"),
           import("./doctor-prompter.js"),
@@ -276,7 +256,6 @@ export async function restoreDoctorGatewayService(params: {
                       managerUid: before.serviceManagerUid,
                       assertCurrent: assertInstallationCurrent,
                       assertReadCurrent: assertInspectionCurrent,
-                      beforeMutation: assertAutoStartCurrent,
                     },
                   },
                 ),
@@ -351,8 +330,6 @@ export async function restoreDoctorGatewayService(params: {
         env: current?.env ?? serviceEnv,
         stdout: params.options.json ? process.stderr : process.stdout,
         preserveDefinition: true,
-        preserveAutoStart: true,
-        beforeMutation: assertAutoStartCurrent,
         assertCurrent: assertMaintenanceCurrent,
         ...(before.serviceSystemdIdentity
           ? { systemdIdentity: before.serviceSystemdIdentity }

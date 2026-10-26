@@ -1,6 +1,10 @@
 import os from "node:os";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { resolveLegacyConfigAuditLogPath, scrubConfigAuditLog } from "../config/io.audit.js";
+import {
+  resolveLegacyConfigAuditLogPath,
+  scrubConfigAuditLog,
+  type ConfigAuditScrubResult,
+} from "../config/io.audit.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 
 const NOTE_TITLE = "Config audit";
@@ -13,7 +17,7 @@ function formatEntryCount(count: number): string {
 export async function detectConfigAuditScrubIssue(params?: {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
-}): Promise<Awaited<ReturnType<typeof scrubConfigAuditLog>> & { auditPath: string }> {
+}): Promise<ConfigAuditScrubResult & { auditPath: string }> {
   const env = params?.env ?? process.env;
   const homedir = params?.homedir ?? os.homedir;
   const result = await scrubConfigAuditLog({
@@ -28,7 +32,7 @@ export async function detectConfigAuditScrubIssue(params?: {
 }
 
 export function configAuditScrubToHealthFinding(
-  result: Awaited<ReturnType<typeof scrubConfigAuditLog>> & { auditPath: string },
+  result: ConfigAuditScrubResult & { auditPath: string },
 ): HealthFinding {
   return {
     checkId: CONFIG_AUDIT_SCRUB_CHECK_ID,
@@ -43,7 +47,7 @@ export function configAuditScrubToHealthFinding(
 }
 
 export function configAuditScrubToRepairEffect(
-  result: Awaited<ReturnType<typeof scrubConfigAuditLog>> & { auditPath: string },
+  result: ConfigAuditScrubResult & { auditPath: string },
 ): HealthRepairEffect {
   return {
     kind: "file",

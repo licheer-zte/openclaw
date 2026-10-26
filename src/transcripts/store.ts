@@ -12,8 +12,8 @@ import { readSqliteDatabaseWriteTokenForPath } from "../infra/sqlite-database-ad
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
-  withOpenClawStateLeaseAsync,
-  type OpenClawStateAsyncLeaseContext,
+  withOpenClawStateLease,
+  type OpenClawStateLeaseContext,
 } from "../state/openclaw-state-lease.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
 import type {
@@ -147,7 +147,7 @@ export class TranscriptsStore {
     exportedHashes: Readonly<Record<string, string>>,
     removedExports: ReadonlySet<string>,
     operation: TranscriptStoreOperation,
-    lease?: OpenClawStateAsyncLeaseContext,
+    lease?: OpenClawStateLeaseContext,
   ): Promise<void> {
     const input = {
       session: { sessionId: session.sessionId, startedAt: session.startedAt },
@@ -165,7 +165,7 @@ export class TranscriptsStore {
     session: TranscriptSessionDescriptor,
     sessionDir: string,
     operation: TranscriptStoreOperation,
-    lease?: OpenClawStateAsyncLeaseContext,
+    lease?: OpenClawStateLeaseContext,
   ): Promise<void> {
     let entries;
     try {
@@ -581,30 +581,20 @@ export class TranscriptsStore {
       throw new Error(`transcripts session not found: ${selector}`);
     }
     operation.assertCurrent();
-    if (operation.databaseOptions.readOnly) {
-      throw new Error("State lease acquisition requires writable storage");
-    }
-    return await withOpenClawStateLeaseAsync(
+    return await withOpenClawStateLease(
       {
         scope: "meeting-transcript.export",
         key: transcriptSessionExportKey(session),
+        database: { scope: "shared", options: operation.databaseOptions },
         leaseMs: 60_000,
         waitMs: 10_000,
         leaseLabel: "meeting transcript export lease",
         operationLabel: "meeting-transcripts.export.lease",
       },
-      operation.context,
       async (lease) => {
         const assertOwner = () => {
           operation.assertCurrent();
-          lease.assertCurrent();
-        };
-        const authority = {
-          assertCurrent: assertOwner,
-          async prepareEffect() {
-            await lease.assertOwned();
-            assertOwner();
-          },
+          lease.assertOwned();
         };
         const sessionDir = this.sessionDir(session);
         const includeTranscript = kind === "all" || kind === "transcript";
@@ -635,7 +625,7 @@ export class TranscriptsStore {
           },
           lease,
         );
-        await authority.prepareEffect();
+        assertOwner();
         const ensured = await ensureAbsoluteDirectory(sessionDir, {
           mode: 0o700,
           scopeLabel: "transcript export directory",
@@ -650,7 +640,7 @@ export class TranscriptsStore {
           sessionDir,
           "metadata.json",
           `${JSON.stringify(session, null, 2)}\n`,
-          authority,
+          assertOwner,
         );
         if (includeTranscript) {
           assertOwner();
@@ -658,7 +648,7 @@ export class TranscriptsStore {
             sessionDir,
             session,
             operation,
-            authority,
+            assertOwner,
             signal: lease.signal,
           });
         }
@@ -675,14 +665,14 @@ export class TranscriptsStore {
           for (const [fileName, content] of Object.entries(summaries)) {
             assertOwner();
             if (content === undefined) {
-              await removeTranscriptArtifact(sessionDir, fileName, authority);
+              await removeTranscriptArtifact(sessionDir, fileName, assertOwner);
               removedExports.add(fileName);
             } else {
               exportedHashes[fileName] = await writeTranscriptArtifact(
                 sessionDir,
                 fileName,
                 content,
-                authority,
+                assertOwner,
               );
             }
           }

@@ -12,7 +12,6 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { gatewayRequest } from "../request-frame.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import { createSessionGoalFixture } from "../session-goal.test-support.js";
 import * as sessionAuthorization from "../session-sharing-authorization-async.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
@@ -64,8 +63,17 @@ function readGoal() {
   return loadSessionEntry(scope)?.goal;
 }
 
-const initialGoal = (): SessionGoal =>
-  createSessionGoalFixture("original-goal", "Finish the release checklist", { status: "paused" });
+const initialGoal = (): SessionGoal => ({
+  schemaVersion: 1,
+  id: "original-goal",
+  objective: "Finish the release checklist",
+  status: "paused",
+  createdAt: 1,
+  updatedAt: 1,
+  tokenStart: 0,
+  tokensUsed: 0,
+  continuationTurns: 0,
+});
 
 async function seedSession(patch: Partial<SessionEntry> = {}) {
   await upsertSessionEntryCore(scope, {

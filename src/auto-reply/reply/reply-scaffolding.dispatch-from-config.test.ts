@@ -25,15 +25,37 @@ beforeEach(() => {
   mocks.tryFastAbortFromMessage.mockReset().mockResolvedValue({ handled: false, aborted: false });
 });
 
-it("sanitizes reasoning snapshots and copied inbound context at final dispatch without mutating source payloads", async () => {
-  const conversationContext = [
-    "[Chat messages since your last reply - for context]",
-    "[Telegram] Alice: private history",
-    "",
-    "[Current message - respond to this]",
-    '<function_calls><invoke name="exec">private XML</invoke></function_calls>',
-    "private inbound paragraph",
-  ].join("\n");
+async function dispatch(
+  body: string,
+  sessionKey: string,
+  replyResolver: Parameters<typeof dispatchReplyFromConfig>[0]["replyResolver"],
+  replyOptions?: GetReplyOptions,
+) {
+  const delivered: ReplyPayload[] = [];
+  const dispatcher = createReplyDispatcher({
+    deliver: async (payload) => {
+      delivered.push(payload);
+    },
+  });
+  const result = await dispatchReplyFromConfig({
+    ctx: buildTestCtx({
+      Body: body,
+      BodyForAgent: body,
+      From: "user1",
+      Surface: "telegram",
+      SessionKey: sessionKey,
+    }),
+    cfg: emptyConfig,
+    dispatcher,
+    replyResolver,
+    replyOptions,
+  });
+  dispatcher.markComplete();
+  await dispatcher.waitForIdle();
+  return { result, delivered };
+}
+
+it("sanitizes reasoning snapshots without changing source payloads or presentation metadata", async () => {
   const internal =
     "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nprivate metadata\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
   const visible: Array<Parameters<NonNullable<GetReplyOptions["onReasoningStream"]>>[0]> = [
@@ -55,39 +77,40 @@ it("sanitizes reasoning snapshots and copied inbound context at final dispatch w
   ];
   const original = structuredClone(source);
   const observed: typeof visible = [];
-  const delivered: ReplyPayload[] = [];
-  const dispatcher = createReplyDispatcher({
-    deliver: async (payload) => {
-      delivered.push(payload);
-    },
-  });
-  const result = await dispatchReplyFromConfig({
-    ctx: buildTestCtx({
-      Body: conversationContext,
-      BodyForAgent: conversationContext,
-      From: "user1",
-      Surface: "telegram",
-      SessionKey: "agent:test:scaffolding",
-    }),
-    cfg: emptyConfig,
-    dispatcher,
-    replyResolver: async (_ctx, options) => {
+  await dispatch(
+    "Show status.",
+    "agent:test:reasoning-scaffolding",
+    async (_ctx, options) => {
       for (const payload of source) {
         await options?.onReasoningStream?.(payload);
       }
-      return { text: `${conversationContext}\n\nVisible answer.` };
+      return { text: "Visible answer." };
     },
-    replyOptions: {
+    {
       onReasoningStream: (payload) => {
         observed.push(payload);
         return false;
       },
     },
-  });
-  dispatcher.markComplete();
-  await dispatcher.waitForIdle();
+  );
   expect(source).toEqual(original);
   expect(observed).toEqual(visible);
+});
+
+it("binds the finalized inbound prompt before raw final replies reach the dispatcher", async () => {
+  const conversationContext = [
+    "[Chat messages since your last reply - for context]",
+    "[Telegram] Alice: private history",
+    "",
+    "[Current message - respond to this]",
+    '<function_calls><invoke name="exec">private XML</invoke></function_calls>',
+    "private inbound paragraph",
+  ].join("\n");
+  const { result, delivered } = await dispatch(
+    conversationContext,
+    "agent:test:scaffolding-provenance",
+    async () => ({ text: `${conversationContext}\n\nVisible answer.` }),
+  );
   expect(result.queuedFinal).toBe(true);
   expect(delivered).toEqual([expect.objectContaining({ text: "Visible answer." })]);
 });

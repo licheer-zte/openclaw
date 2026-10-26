@@ -184,8 +184,7 @@ export function createNativeWorkerResource(
       return await runSqliteReadOnlyWorkerOnce(
         request.pathname,
         {
-          // The surviving token session owns this directory; the killable child fills only payload.
-          mode: request.mode === "sync" ? "staged-sync" : "staged-async",
+          mode: request.mode,
           stagingRoot: request.stagingRoot,
           expectedSourceIdentity: request.expectedSourceIdentity,
           signal: controller.signal,

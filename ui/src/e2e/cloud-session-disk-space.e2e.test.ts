@@ -53,11 +53,10 @@ suite.define(() => {
           label: string,
         ): Promise<void> => {
           await expect.poll(() => cloudBadge.getAttribute("data-disk-space-status")).toBe(status);
-          await expect
-            .poll(() => sidebarRow.getByRole("img", { name: label, exact: true }).count())
-            .toBe(1);
-          await cloudBadge.hover();
-          await page.getByRole("tooltip").getByText(label, { exact: true }).waitFor();
+          await expect.poll(() => cloudBadge.getAttribute("aria-label")).toBe(label);
+          const descriptionId = await cloudBadge.getAttribute("aria-describedby");
+          expect(descriptionId).toBeTruthy();
+          await expect.poll(() => page.locator(`#${descriptionId}`).textContent()).toBe(label);
         };
         const refresh = async (diskSpace: SessionPlacementDiskSpace): Promise<void> => {
           const requestCount = (await gateway.getRequests("sessions.list")).length;

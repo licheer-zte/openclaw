@@ -19,7 +19,6 @@ import { resolveSessionTranscriptDatabasePath } from "../config/sessions/session
 import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-storage-codec.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
-import { maintenanceConfig } from "../config/sessions/session-cold-storage.test-support.js";
 import { withSessionTranscriptSourcePublication } from "../config/sessions/transcript-write-context.js";
 import { stripEnvelopeFromMessages } from "../gateway/chat-sanitize.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -139,7 +138,13 @@ describe("persistUserTurnTranscript", () => {
     const owner = database.db.prepare("SELECT current_session_id FROM session_nodes").get();
     expect(
       await runSessionColdStorageMaintenance({
-        config: maintenanceConfig(target.storePath),
+        config: {
+          agents: { entries: { [target.agentId]: {} } },
+          session: {
+            store: target.storePath,
+            maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
+          },
+        },
       }),
     ).toMatchObject({ archivedTranscripts: 1, externalizedTranscripts: 0 });
     const descriptor = readSessionColdTranscript(database.db, target.sessionId)!;

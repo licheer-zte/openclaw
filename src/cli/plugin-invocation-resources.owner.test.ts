@@ -31,7 +31,6 @@ import {
 } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 import { CliPluginInvocationResources } from "./plugin-invocation-resources.js";
 import { registerCommandGroups } from "./program/register-command-groups.js";
 import {
@@ -178,11 +177,14 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   };`,
   );
   if (options.sdkProvider) {
-    writeFixtureJsonSync(path.join(plugin.dir, "openclaw.plugin.json"), {
-      id,
-      providers: [id],
-      configSchema: { type: "object", properties: {}, additionalProperties: false },
-    });
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id,
+        providers: [id],
+        configSchema: { type: "object", properties: {}, additionalProperties: false },
+      }),
+    );
   }
   const config = { plugins: { allow: [id], load: { paths: [plugin.dir] } } };
   const env = {
@@ -499,7 +501,7 @@ it("leaves standalone command programs with their caller after registration retu
   fixture.state.resume.resolve();
   const program = new Command();
   const configPath = path.join(fixture.env.HOME, "openclaw.json");
-  writeFixtureJsonSync(configPath, fixture.config);
+  fs.writeFileSync(configPath, JSON.stringify(fixture.config));
   await withEnvAsync({ ...fixture.env, OPENCLAW_CONFIG_PATH: configPath }, () =>
     registerPluginCliCommandsFromValidatedConfig(program, fixture.env),
   );

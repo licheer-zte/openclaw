@@ -50,6 +50,7 @@ it.each(["absent", "unavailable", "warm", "cancelled", "cancelled after discover
     }
     await expect(
       prewarmGatewaySessionHistory(config, {
+        onlyIfCold: scenario === "warm",
         isCancelled: () => cancelled,
       }),
     ).resolves.toBeUndefined();

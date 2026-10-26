@@ -36,7 +36,6 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { killPidIfAlive } from "../../test-utils/process-tree.js";
-import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import * as shared from "./shared.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import { prepareUpdateCommand } from "./update-command-run.js";
@@ -113,12 +112,15 @@ function expectPreview(note: RegExp, targetVersion?: string) {
 }
 function writeRunnablePackage(root: string, entry = 'import "./dist/index.js";\n') {
   fs.writeFileSync(path.join(root, "openclaw.mjs"), entry);
-  writeFixtureJsonSync(path.join(root, "package.json"), {
-    name: "openclaw",
-    version: "1.0.0",
-    type: "module",
-    bin: { openclaw: "openclaw.mjs" },
-  });
+  fs.writeFileSync(
+    path.join(root, "package.json"),
+    JSON.stringify({
+      name: "openclaw",
+      version: "1.0.0",
+      type: "module",
+      bin: { openclaw: "openclaw.mjs" },
+    }),
+  );
 }
 function prepareRunnablePreview(
   f: Parameters<typeof preparePreview>[0] & { launcher: string },

@@ -1,6 +1,6 @@
 import { getEventListeners } from "node:events";
 import { describe, expect, it } from "vitest";
-import { createDeferred, nextEventLoopTurn } from "../../test/helpers/promise.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createAbortError,
   isAbortError,
@@ -151,7 +151,9 @@ describe("racePromiseWithAbortSignal", () => {
         deferred.reject(sourceError);
       }
       // Let Node report an unobserved rejection before this regression finishes.
-      await nextEventLoopTurn();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
     },
   );
@@ -163,7 +165,9 @@ describe("racePromiseWithAbortSignal", () => {
     controller.abort();
     await expect(raced).rejects.toMatchObject({ name: "AbortError" });
     source.reject(new Error("late source failure"));
-    await nextEventLoopTurn();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
   });
 

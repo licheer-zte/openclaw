@@ -1,7 +1,6 @@
 /** Cron receipts own running work; history records only durable outcomes. */
 import { randomUUID } from "node:crypto";
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
-import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import { cronRunLogEntryFromEvent } from "../run-event-codec.js";
 import { cronRunLogEntryToDetail, cronRunStorageStatus } from "../run-history-detail.js";
 import { createCronExecutionId } from "../run-id.js";
@@ -58,11 +57,7 @@ export async function finishCronRun(
   const entry = cronRunLogEntryFromEvent(
     result.event,
     state.deps.nowMs(),
-    resolveCronRunErrorReason(
-      result.event.error,
-      result.event.provider,
-      result.errorClassification,
-    ),
+    result.errorClassification,
   );
   const startedAt = entry.runAtMs ?? entry.ts;
   const job = result.job ?? result.event.job;

@@ -547,7 +547,7 @@ export const controlUiHandlers: GatewayRequestHandlers = {
       preparedSession?.release();
     }
   },
-  "controlUi.sessionPullRequests.subscribe": ({ params, client, context, respond }) => {
+  "controlUi.sessionPullRequests.subscribe": async ({ params, client, context, respond }) => {
     const parsed = parseControlUiSessionPullRequestsSubscribeParams(params);
     if (!parsed) {
       respondError(
@@ -567,19 +567,20 @@ export const controlUiHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    // The owner records the replace-set now; preparation and guarded updates settle later.
-    void subscriptions
-      .replace(
+    await new Promise<void>((resolve) => {
+      const replacement = subscriptions.replace(
         connId,
         parsed.sessionKeys,
         parsed.refreshSessionKeys.length > 0 ? new Set(parsed.refreshSessionKeys) : undefined,
+        resolve,
         parsed.passiveSessionKeys ? new Set(parsed.passiveSessionKeys) : undefined,
-      )
-      .catch((error: unknown) => {
+      );
+      void replacement.catch((error: unknown) => {
         context.logGateway.warn(
           `Failed to prepare Control UI pull request subscriptions; retry the subscription: ${String(error)}`,
         );
       });
+    });
     respond(
       true,
       { subscribed: parsed.sessionKeys.length > 0 || Boolean(parsed.passiveSessionKeys?.length) },

@@ -41,15 +41,13 @@ async function snapshotCandidateState(): Promise<unknown> {
     | {
         mode: "database-generations";
         paths: string[];
-        stateDir: string;
-        generationFormat?: "committed" | "paired";
         pluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
       };
   if (input.mode === "runtime-retention") {
     const { prepareRetainedRuntimeFiles } = await import("./update-retained-runtime-files.js");
     return prepareRetainedRuntimeFiles(input);
   }
-  if ("stateDir" in input && input.mode !== "database-generations" && input.mode !== "snapshot") {
+  if ("stateDir" in input) {
     // Older installed drivers omit this from their restricted environment payload.
     // Metadata discovery must use the same installation as the inspected databases.
     input.env = { ...input.env, OPENCLAW_STATE_DIR: input.stateDir };
@@ -70,19 +68,9 @@ async function snapshotCandidateState(): Promise<unknown> {
       return prepareUpdateDatabaseRestoreSourceInProcess(input);
     }
     case "database-generations": {
-      const { readUpdatePhysicalDatabaseGenerationPair, isLegacyUpdateGenerationRequest } =
+      const { readUpdatePhysicalDatabaseGenerations } =
         await import("./update-physical-database-generations.js");
-      const pair = await readUpdatePhysicalDatabaseGenerationPair(input.paths, input.pluginOwners);
-      if (input.generationFormat === "paired") {
-        return pair;
-      }
-      return input.generationFormat === undefined &&
-        (await isLegacyUpdateGenerationRequest({
-          ...process.env,
-          OPENCLAW_STATE_DIR: input.stateDir,
-        }))
-        ? pair.physical
-        : pair.committed;
+      return readUpdatePhysicalDatabaseGenerations(input.paths, input.pluginOwners);
     }
     case "inventory": {
       const { resolveDatabaseFamilyEngines } = await import("./database-engine/registry.js");

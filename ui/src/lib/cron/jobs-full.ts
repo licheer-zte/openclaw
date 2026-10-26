@@ -1,6 +1,5 @@
 import { sortCronJobs } from "../../../../src/cron/service/list-page-sort.js";
 import type { CronJob } from "../../api/types.ts";
-import { readCronInventory } from "./inventory.ts";
 import {
   loadCronJobsProjectionPage,
   type CronJobsPageOptions,
@@ -9,7 +8,6 @@ import {
 import type { CronJobsState } from "./types.ts";
 
 const fullCronJobsProjection: CronJobsProjection<CronJob> = {
-  read: (client, params, options) => readCronInventory(client, params, options),
   applyRuntime: (state, index, { updatedAtMs, runtime }) => {
     const previous = state.cronJobs[index]!;
     state.cronJobs = sortCronJobs(

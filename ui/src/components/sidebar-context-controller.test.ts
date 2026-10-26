@@ -17,8 +17,10 @@ it("restores destination offsets and updates fades after content commits", async
   const { sidebar } = await mountEmptySidebar();
   const scroller = sidebar.querySelector<HTMLElement>(".sidebar-shell__body")!;
   let contentHeight = 500;
-  Object.defineProperty(scroller, "clientHeight", { value: 100 });
-  Object.defineProperty(scroller, "scrollHeight", { get: () => contentHeight });
+  Object.defineProperties(scroller, {
+    clientHeight: { configurable: true, value: 100 },
+    scrollHeight: { configurable: true, get: () => contentHeight },
+  });
   const expectFade = (state: string) =>
     waitForSolid(() =>
       expect(scroller.classList.contains(`sidebar-shell__body--scroll-${state}`)).toBe(true),
@@ -62,25 +64,36 @@ it("updates contextual navigation from its router and retires the subscription o
     pending ? "loading machines" : "machine inventory",
   );
   router.getRoute("systems")!.loader = () => loaded.promise;
-  const { sidebar } = await mountEmptySidebar();
+  const { provider, sidebar } = await mountEmptySidebar();
+  const element = provider.querySelector<HTMLElement>("openclaw-app-sidebar")!;
+  const owner = getAppSidebarOwner(element);
+  expect(owner).toBeDefined();
   sidebar.router = router;
   await sidebar.updateComplete;
+  expect(getAppSidebarOwner(element)).toBe(owner);
   const navigation = router.navigate("systems", {});
   await vi.waitFor(() => expect(sidebar.contextualSidebar?.loaderPending).toBe(true));
-  loaded.resolve({ machine: "worker-one" });
+  const pending = sidebar.contextualSidebar;
+  const data = { machine: "worker-one" };
+  loaded.resolve(data);
   await navigation;
   await sidebar.updateComplete;
   expect(sidebar.contextualSidebar?.loaderPending).toBe(false);
+  expect(sidebar.contextualSidebar?.data).toBe(data);
+  expect(pending?.loaderPending).toBe(true);
   expect(sidebar.querySelector(".sidebar-shell__body")?.textContent).toContain("machine inventory");
-  const replacement = createSidebarTestRouter(() => "replacement");
+  const replacement = createSidebarTestRouter(() => "replacement machines");
   sidebar.router = replacement;
   await replacement.navigate("systems", {});
   await sidebar.updateComplete;
   await router.navigate("cron", {});
   await sidebar.updateComplete;
-  expect(sidebar.querySelector(".sidebar-shell__body")?.textContent).toContain("replacement");
+  expect(sidebar.querySelector(".sidebar-shell__body")?.textContent).toContain(
+    "replacement machines",
+  );
   sidebar.remove();
-  await waitForSolid(() => expect(getAppSidebarOwner(sidebar.hostElement)).toBeUndefined());
+  await waitForSolid(() => expect(getAppSidebarOwner(element)).toBeUndefined());
+  expect(sidebar.contextualSidebar).toBeUndefined();
   await replacement.navigate("cron", {});
   await replacement.navigate("systems", {});
   expect(sidebar.contextualSidebar).toBeUndefined();

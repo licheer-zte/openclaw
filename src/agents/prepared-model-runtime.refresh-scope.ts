@@ -7,10 +7,7 @@ import { withAgentRosterFactsBatch } from "./agent-scope-config.js";
 import { PreparedModelRuntimeRecoveryError } from "./prepared-model-runtime-admission-errors.js";
 import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
 import { listConfiguredOwnerInputs } from "./prepared-model-runtime.configured.js";
-import {
-  capturePreparedModelRuntimeRefreshError,
-  PreparedModelRuntimePublicationSupersededError,
-} from "./prepared-model-runtime.errors.js";
+import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   PreparedModelRuntimeClosedError,
   retirePreparedModelRuntimeGeneration,
@@ -151,7 +148,7 @@ export function updateOwnersForScopedRefresh(
     owner.generation += 1;
     retirePreparedModelRuntimeGeneration(owner);
     owner.needsRefresh = true;
-    owner.refreshError = capturePreparedModelRuntimeRefreshError(staleError);
+    owner.refreshError = staleError;
     if (options.clearPending) {
       owner.pending = undefined;
     }
@@ -280,10 +277,9 @@ export function createPreparedModelRuntimeRecovery(host: {
         error instanceof Error &&
         !(error instanceof PreparedModelRuntimePublicationSupersededError)
       ) {
-        const refreshError = capturePreparedModelRuntimeRefreshError(error);
-        const recovery = { error: refreshError, scheduledAttempted: false, retryAfter: 0 };
+        const recovery = { error, scheduledAttempted: false, retryAfter: 0 };
         for (const owner of affected) {
-          if (owners.get(ownerKey(owner.input)) === owner && owner.refreshError === refreshError) {
+          if (owners.get(ownerKey(owner.input)) === owner && owner.refreshError === error) {
             owner.catalogRecovery = recovery;
           }
         }
@@ -374,9 +370,9 @@ export function createPreparedModelRuntimeRecovery(host: {
           !(error instanceof PreparedModelRuntimePublicationSupersededError) &&
           host.owners.get(ownerKey(owner.input)) === owner &&
           owner.catalogRecovery === recovery &&
-          owner.refreshError === capturePreparedModelRuntimeRefreshError(error)
+          owner.refreshError === error
         ) {
-          recovery.error = owner.refreshError;
+          recovery.error = error;
           recovery.retryAfter = Date.now() + CATALOG_RECOVERY_DEMAND_COOLDOWN_MS;
           throw new PreparedModelRuntimeRecoveryError(
             agentId,

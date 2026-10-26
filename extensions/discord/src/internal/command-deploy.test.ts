@@ -1,6 +1,9 @@
 /* oxlint-disable typescript/unbound-method -- vitest mocks of RequestClient methods (createRest) intentionally expose vi.fn refs via `restA.get`/`.post`; not unbound class methods. */
+import type { APIApplicationCommand } from "discord-api-types/v10";
 import { describe, expect, test, vi } from "vitest";
 import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
+import { commandsEqual } from "./command-comparison.js";
+import { DiscordCommandDeployer } from "./command-deploy.js";
 import type { RequestClient } from "./rest.js";
 import {
   attachRestMock,
@@ -9,8 +12,56 @@ import {
   createTestHashStore,
 } from "./test-builders.test-support.js";
 
+// Discord's normalization must not trigger another PATCH on every startup (#76588).
+describe("commandsEqual", () => {
+  const option = { type: 3 as const, name: "name", description: "Skill name" };
+  const desired = {
+    name: "ping",
+    description: "ping the bot",
+    type: 1,
+    default_member_permissions: null,
+    options: [option],
+  };
+  function currentFromDiscord(overrides: Partial<APIApplicationCommand>): APIApplicationCommand {
+    return {
+      ...desired,
+      id: "cmd-1",
+      application_id: "app",
+      version: "v1",
+      dm_permission: true,
+      nsfw: false,
+      ...overrides,
+    } as APIApplicationCommand;
+  }
+
+  test("ignores Discord null localization maps when local command omits them", () => {
+    const current = currentFromDiscord({
+      name_localizations: null,
+      description_localizations: null,
+      options: [
+        {
+          ...option,
+          name_localizations: null,
+          description_localizations: null,
+        },
+      ],
+    });
+    expect(commandsEqual(current, desired)).toBe(true);
+  });
+
+  test("treats option localized descriptions with CJK whitespace as equal to Discord's collapsed form", () => {
+    const current = currentFromDiscord({
+      options: [{ ...option, description_localizations: { "zh-CN": "技能名称。直接输入。" } }],
+    });
+    const localized = {
+      ...desired,
+      options: [{ ...option, description_localizations: { "zh-CN": "技能名称。\n直接输入。" } }],
+    };
+    expect(commandsEqual(current, localized)).toBe(true);
+  });
+});
 // #77359: identical command sets must not suppress another application’s deploy.
-describe("Client.deployCommands cache", () => {
+describe("DiscordCommandDeployer SQLite cache", () => {
   function createRest(): RequestClient {
     const client = createInternalTestClient();
     attachRestMock(client, { get: vi.fn(async () => []) });
@@ -22,12 +73,12 @@ describe("Client.deployCommands cache", () => {
     hashStore: DiscordCommandDeployHashStore,
     clientId = "app-default",
   ) {
-    const client = createInternalTestClient(
-      [createTestCommand("ping", undefined, { description: "ping the bot" })],
-      { clientId, commandDeployHashStore: hashStore },
-    );
-    client.rest = rest;
-    return client;
+    return new DiscordCommandDeployer({
+      clientId,
+      commands: [createTestCommand("ping", undefined, { description: "ping the bot" })],
+      hashStore,
+      rest: () => rest,
+    });
   }
 
   test("two applications with identical command sets each reconcile their own application", async () => {
@@ -36,8 +87,8 @@ describe("Client.deployCommands cache", () => {
     const restB = createRest();
 
     await Promise.all([
-      deployer(restA, store).deployCommands(),
-      deployer(restB, store, "app-secondary").deployCommands(),
+      deployer(restA, store).deploy(),
+      deployer(restB, store, "app-secondary").deploy(),
     ]);
 
     expect(restA.get).toHaveBeenCalledTimes(1);
@@ -64,7 +115,7 @@ describe("Client.deployCommands cache", () => {
       const rest = createRest();
       const cached = deployer(rest, store);
       for (let index = 0; index < deployments; index += 1) {
-        await cached.deployCommands();
+        await cached.deploy();
       }
       expect(rest.get).toHaveBeenCalledTimes(1);
       expect(rest.post).toHaveBeenCalledTimes(1);

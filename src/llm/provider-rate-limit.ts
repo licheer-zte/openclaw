@@ -166,7 +166,7 @@ export function createProviderRateLimitRequest<T extends SimpleStreamOptions>(
   return {
     // Delegating transports carry one admission to the physical request. A different
     // account must enter its own gate; unrelated calls do not inherit ambient admission.
-    options: key && !inherited ? { ...options, [admittedAccount]: key } : options,
+    options: key ? { ...options, [admittedAccount]: key } : options,
     async wait(
       onWait?: (retryAt: number) => () => void,
       priority: "interactive" | "background" = "background",
@@ -201,12 +201,19 @@ export function createProviderRateLimitRequest<T extends SimpleStreamOptions>(
       });
     },
     // Observation can outlive consumption; never capture request options or its signal.
-    observe: key && !inherited ? observeProviderRateLimit.bind(undefined, scope, key) : undefined,
+    observe: observeProviderRateLimit.bind(undefined, scope, key, inherited),
   };
 }
 
-function observeProviderRateLimit(scope: string, key: string, message: AssistantMessage): void {
+function observeProviderRateLimit(
+  scope: string,
+  key: string | undefined,
+  inherited: boolean,
+  message: AssistantMessage,
+): void {
   if (
+    !key ||
+    inherited ||
     message.stopReason !== "error" ||
     !hasOrganizationTpmRateLimitEvidence(message.errorMessage) ||
     message.retryAfterMs === null

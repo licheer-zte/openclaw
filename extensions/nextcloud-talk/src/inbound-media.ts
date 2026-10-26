@@ -41,7 +41,7 @@ export type NextcloudTalkAttachmentReferenceResult =
   | { ok: true; origin: string; hostname: string; fileName: string }
   | { ok: false; reason: "media_invalid_link" | "media_origin_mismatch" };
 
-type NextcloudTalkAuthenticatedMediaSourceResult =
+export type NextcloudTalkAuthenticatedMediaSourceResult =
   | {
       ok: true;
       url: string;
@@ -428,7 +428,7 @@ export async function resolveNextcloudTalkAuthenticatedMediaSource(params: {
 
 type NextcloudTalkSaveRemoteMedia = PluginRuntime["channel"]["media"]["saveRemoteMedia"];
 
-type NextcloudTalkMediaFailure = {
+export type NextcloudTalkMediaFailure = {
   reason: Extract<
     NextcloudTalkMediaOutcomeReason,
     "media_download_oversize" | "media_unavailable" | "media_fetch_failed" | "media_stage_failed"

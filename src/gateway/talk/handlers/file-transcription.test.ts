@@ -1,10 +1,8 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.js";
-import type {
-  MediaUnderstandingCapabilityConfig,
-  MediaUnderstandingModelConfig,
-} from "../../../config/types.tools.js";
+import type { MediaUnderstandingModelConfig } from "../../../config/types.tools.js";
+import { acquireStateDatabaseSchemaLease } from "../../../infra/gateway-state-owner.js";
 import type {
   AudioTranscriptionConfigContext,
   AudioTranscriptionRequest,
@@ -14,6 +12,8 @@ import type { RealtimeTranscriptionProviderPlugin } from "../../../plugins/capab
 import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
+import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import type { GatewayRequestHandlers } from "../../server-methods/types.js";
 import { cleanupTalkConnection } from "../session-registry.js";
@@ -22,11 +22,14 @@ import { talkHandlers } from "./index.js";
 import { expectRespondError, expectRespondOk } from "./responses.test-support.js";
 import { talkSessionHandlers } from "./session.js";
 
-const localProvider = { baseUrl: "https://unused.invalid", models: [] };
 const cfg: OpenClawConfig = {
   models: {
     providers: {
-      "local-stt": { ...localProvider, apiKey: "synthetic-fixture-key" },
+      "local-stt": {
+        baseUrl: "https://unused.invalid",
+        apiKey: "synthetic-fixture-key",
+        models: [],
+      },
     },
   },
   tools: {
@@ -43,12 +46,9 @@ const audioModel = (model = "whisper", maxBytes?: number): MediaUnderstandingMod
   capabilities: ["audio"],
   ...(maxBytes === undefined ? {} : { maxBytes }),
 });
-const withModels = (
-  models: MediaUnderstandingModelConfig[],
-  audio: MediaUnderstandingCapabilityConfig | undefined = cfg.tools?.media?.audio,
-): OpenClawConfig => ({
+const withModels = (models: MediaUnderstandingModelConfig[]): OpenClawConfig => ({
   ...cfg,
-  tools: { media: { ...cfg.tools?.media, audio, models } },
+  tools: { media: { ...cfg.tools?.media, models } },
 });
 
 function fileRpc(
@@ -125,14 +125,17 @@ function withFileProvider(
     {
       pluginRegistry: registry,
       metadataSnapshot: createPluginMetadataSnapshotFixture({
-        plugins: (
-          ["mediaUnderstandingProviders", "realtimeTranscriptionProviders"] as const
-        ).flatMap((kind) =>
-          registry[kind].map(({ pluginId, provider }) => ({
-            id: pluginId,
-            contracts: { [kind]: [provider.id] },
-          })),
-        ),
+        plugins: [
+          { id: "local-stt", contracts: { mediaUnderstandingProviders: ["local-stt"] } },
+          ...(streamingProvider
+            ? [
+                {
+                  id: "streaming-stt",
+                  contracts: { realtimeTranscriptionProviders: ["streaming-stt"] },
+                },
+              ]
+            : []),
+        ],
       }),
     },
     () => run(requests),
@@ -153,23 +156,48 @@ describe("configured file transcription through Talk RPCs", () => {
           ...cfg,
           agents: {
             ownership: "explicit",
-            entries: { main: {}, researcher: { workspace: state.workspaceDir } },
+            entries: {
+              main: {},
+              researcher: { workspace: state.workspaceDir },
+            },
           },
           talk: { agentId: "main" },
-          models: { providers: { "local-stt": localProvider } },
+          models: {
+            providers: {
+              "local-stt": { baseUrl: "https://unused.invalid", models: [] },
+            },
+          },
         };
         await state.writeConfig(config);
-        for (const agentId of ["main", "researcher"]) {
-          const credential = {
-            type: "api_key",
-            provider: "local-stt",
-            key: `synthetic-${agentId}-key`,
-          };
-          const profiles =
-            agentId === "researcher" || defaultHasCredentials
-              ? { "local-stt:audio": credential }
-              : {};
-          await state.writeAuthProfiles({ version: 1, profiles }, agentId);
+        const lease = acquireStateDatabaseSchemaLease(resolveOpenClawStateSqlitePath(state.env));
+        const maintenance = createOpenClawDatabaseMaintenanceScope({
+          schemaMaintenance: true,
+          assertOwnerCurrent: lease.assertCurrent,
+          assertDatabaseAccess: lease.assertDatabaseAccess,
+        });
+        try {
+          await maintenance.run(async () => {
+            for (const agentId of ["main", "researcher"]) {
+              await state.writeAuthProfiles(
+                {
+                  version: 1,
+                  profiles:
+                    agentId === "researcher" || defaultHasCredentials
+                      ? {
+                          "local-stt:audio": {
+                            type: "api_key",
+                            provider: "local-stt",
+                            key: `synthetic-${agentId}-key`,
+                          },
+                        }
+                      : {},
+                },
+                agentId,
+              );
+            }
+          });
+        } finally {
+          await maintenance.close().finally(() => lease.release());
         }
         await withFileProvider(async (requests) => {
           const { open, append, call } = fileRpc(config, talkSessionHandlers, {
@@ -193,18 +221,23 @@ describe("configured file transcription through Talk RPCs", () => {
   ])(
     "uses context-provider readiness without requiring a hook: %j",
     async ({ configured, withHook }) => {
-      const readiness = vi.fn(async (_context: AudioTranscriptionConfigContext) => configured);
-      const config = withModels(
-        [
-          {
-            ...audioModel(),
-            baseUrl: "https://speech.example/v1",
-            headers: { "x-source": "entry" },
-            profile: "local-stt:audio",
+      const contexts: AudioTranscriptionConfigContext[] = [];
+      const config: OpenClawConfig = {
+        ...cfg,
+        tools: {
+          media: {
+            audio: { enabled: true, headers: { "x-source": "audio", "x-audio": "yes" } },
+            models: [
+              {
+                ...audioModel(),
+                baseUrl: "https://speech.example/v1",
+                headers: { "x-source": "entry" },
+                profile: "local-stt:audio",
+              },
+            ],
           },
-        ],
-        { enabled: true, headers: { "x-source": "audio", "x-audio": "yes" } },
-      );
+        },
+      };
       await withFileProvider(
         async () => {
           const { call } = fileRpc(config, talkHandlers);
@@ -223,7 +256,7 @@ describe("configured file transcription through Talk RPCs", () => {
             });
           }
           if (withHook) {
-            expect(readiness.mock.calls[0]?.[0]).toMatchObject({
+            expect(contexts[0]).toMatchObject({
               cfg: config,
               model: "whisper",
               profile: "local-stt:audio",
@@ -238,7 +271,14 @@ describe("configured file transcription through Talk RPCs", () => {
           id: "local-stt",
           capabilities: ["audio"],
           transcribeAudioWithContext: async () => ({ ok: true, value: { text: "unused" } }),
-          ...(withHook ? { isAudioConfigured: readiness } : {}),
+          ...(withHook
+            ? {
+                isAudioConfigured: async (audioContext: AudioTranscriptionConfigContext) => {
+                  contexts.push(audioContext);
+                  return configured;
+                },
+              }
+            : {}),
         },
       );
     },
@@ -250,7 +290,25 @@ describe("configured file transcription through Talk RPCs", () => {
     onTestFinished(() => release.resolve());
     await withFileProvider(
       async (requests) => {
-        const { open, append, start, events, context } = fileRpc();
+        const { call, open, append, start, events, context } = fileRpc(cfg, talkHandlers);
+        const catalog = await call("talk.catalog");
+        expectRespondOk(catalog, {
+          transcription: {
+            ready: true,
+            activeProvider: "local-stt",
+            providers: [
+              {
+                id: "local-stt",
+                label: "local-stt",
+                models: ["whisper"],
+                configured: true,
+                modes: ["transcription"],
+                transports: ["gateway-relay"],
+                brains: ["none"],
+              },
+            ],
+          },
+        });
         const sessionId = await open(
           { transport: "gateway-relay", brain: "none" },
           { provider: "local-stt", mode: "transcription" },
@@ -356,8 +414,10 @@ describe("configured file transcription through Talk RPCs", () => {
     await withFileProvider(async (requests) => {
       const { open, append, context } = fileRpc(withModels(models));
       const sessionId = await open();
-      expectRespondOk(await append(sessionId, Buffer.alloc((maxBytes - 44) / 2, 0xff)));
-      expectRespondError(await append(sessionId, Buffer.alloc(1, 0xff)), {
+      const accepted = await append(sessionId, Buffer.alloc((maxBytes - 44) / 2, 0xff));
+      expectRespondOk(accepted);
+      const rejected = await append(sessionId, Buffer.alloc(1, 0xff));
+      expectRespondError(rejected, {
         message: expect.stringContaining(`${maxBytes} byte limit`),
       });
       expect(requests).toHaveLength(0);
@@ -379,12 +439,12 @@ describe("configured file transcription through Talk RPCs", () => {
           agents: { defaults: { voiceModel: { primary: "streaming-stt/saved-model" } } },
         };
         const { call } = fileRpc(config, talkHandlers);
-        expect(expectRespondOk(await call("talk.catalog"))).toMatchObject({
+        const catalog = await call("talk.catalog");
+        expect(expectRespondOk(catalog)).toMatchObject({
           transcription: { ready: true, activeProvider: "streaming-stt" },
         });
-        expectRespondOk(await call("talk.session.create", { mode: "transcription" }), {
-          provider: "streaming-stt",
-        });
+        const respond = await call("talk.session.create", { mode: "transcription" });
+        expectRespondOk(respond, { provider: "streaming-stt" });
         expect(createSession).toHaveBeenCalledWith(
           expect.objectContaining({ providerConfig: { model: "saved-model" } }),
         );
@@ -418,7 +478,9 @@ describe("configured file transcription through Talk RPCs", () => {
                 },
         ]);
         if (reason === "missing credentials") {
-          config.models = { providers: { "local-stt": localProvider } };
+          config.models = {
+            providers: { "local-stt": { baseUrl: "https://unused.invalid", models: [] } },
+          };
         }
         const { call } = fileRpc(config, talkHandlers);
         const result = expectRespondOk(await call("talk.catalog"));
@@ -444,27 +506,21 @@ describe("configured file transcription through Talk RPCs", () => {
         audioModel(),
       ]);
       const { open, append, call } = fileRpc(config, talkHandlers);
-      expect(expectRespondOk(await call("talk.catalog"))).toMatchObject({
+      const catalog = await call("talk.catalog");
+      expect(expectRespondOk(catalog)).toMatchObject({
         transcription: {
           ready: true,
           activeProvider: "local-stt",
           providers: [
             expect.objectContaining({ id: "missing-stt", configured: false }),
-            {
-              id: "local-stt",
-              label: "local-stt",
-              models: ["whisper"],
-              configured: true,
-              modes: ["transcription"],
-              transports: ["gateway-relay"],
-              brains: ["none"],
-            },
+            expect.objectContaining({ id: "local-stt", configured: true }),
           ],
         },
       });
       const sessionId = await open({}, { sessionId: expect.any(String) });
       await append(sessionId);
-      expectRespondOk(await call("talk.session.close", { sessionId }));
+      const closed = await call("talk.session.close", { sessionId });
+      expectRespondOk(closed);
       expect(requests).toHaveLength(1);
       expect(requests[0]?.model).toBe("whisper");
     });
@@ -511,7 +567,9 @@ describe("configured file transcription through Talk RPCs", () => {
       const { open, append, call, context } = fileRpc();
       const sessionId = await open();
       await append(sessionId);
-      const closing = call("talk.session.close", { sessionId });
+      const closing = call("talk.session.close", {
+        sessionId,
+      });
       cleanupTalkConnection("conn-1", context.logGateway);
       await closing;
       expect(requests).toHaveLength(0);
@@ -524,7 +582,8 @@ describe("configured file transcription through Talk RPCs", () => {
         const { open, append, call, events } = fileRpc();
         const sessionId = await open();
         await append(sessionId);
-        expectRespondError(await call("talk.session.close", { sessionId }), {
+        const closed = await call("talk.session.close", { sessionId });
+        expectRespondError(closed, {
           message: expect.stringContaining("Local speech endpoint rejected audio"),
         });
         expect(events.at(-2)).toMatchObject({

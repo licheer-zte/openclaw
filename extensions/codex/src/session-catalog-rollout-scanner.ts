@@ -128,7 +128,7 @@ export class CodexCatalogRolloutScanner {
 
   constructor(private readonly sessionsRoot: string) {}
 
-  async scan(trackedPaths: { has(path: string): boolean }): Promise<CodexCatalogRolloutScan> {
+  async scan(trackedPaths: ReadonlySet<string>): Promise<CodexCatalogRolloutScan> {
     // The catalog index serializes scans. Deliver pending watcher notifications first.
     await nextTurn();
     try {
@@ -187,9 +187,7 @@ export class CodexCatalogRolloutScanner {
     }
   }
 
-  private async walk(trackedPaths: {
-    has(path: string): boolean;
-  }): Promise<CodexCatalogRolloutScan> {
+  private async walk(trackedPaths: ReadonlySet<string>): Promise<CodexCatalogRolloutScan> {
     if (this.closed) {
       throw new Error("Codex catalog rollout scanner is closed");
     }

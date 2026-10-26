@@ -39,6 +39,18 @@ function normalizeRoomId(raw?: string | null): string {
   return raw?.trim().replace(/^room:/i, "") ?? "";
 }
 
+function isCurrentRoom(params: {
+  accountId: string;
+  context?: MatrixReadContext;
+  roomId: string;
+}): boolean {
+  return (
+    params.context?.currentChannelProvider?.trim().toLowerCase() === "matrix" &&
+    params.context.requesterAccountId?.trim() === params.accountId &&
+    normalizeRoomId(params.context.currentChannelId) === normalizeRoomId(params.roomId)
+  );
+}
+
 function includesEntry(entries: Array<string | number> | undefined, value: string): boolean {
   const normalized = value.trim().toLowerCase();
   return (entries ?? []).some((entry) => {
@@ -185,11 +197,11 @@ export async function withAuthorizedMatrixReadTarget<T>(params: {
       aliases,
     });
     const room = finalPolicy.room;
-    const currentRoomContext = params.context;
-    const current =
-      currentRoomContext?.currentChannelProvider?.trim().toLowerCase() === "matrix" &&
-      currentRoomContext.requesterAccountId?.trim() === account.accountId &&
-      normalizeRoomId(currentRoomContext.currentChannelId) === normalizeRoomId(roomId);
+    const current = isCurrentRoom({
+      accountId: account.accountId,
+      context: params.context,
+      roomId,
+    });
     const currentChatType = params.context?.currentChatType?.trim().toLowerCase();
     const trustedCurrentClassification =
       currentChatType === "direct"

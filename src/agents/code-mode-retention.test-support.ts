@@ -6,7 +6,13 @@ import { Type } from "typebox";
 import { createDeferredCore } from "../shared/deferred.js";
 import { collectForRetentionCheck } from "../test-utils/retention.js";
 import type { CodeModeConfig } from "./code-mode-runtime.js";
-import * as codeState from "./code-mode-state.js";
+import {
+  activeRuns,
+  createCodeModeRunOwner,
+  disposeAllCodeModeRuns,
+  waitForPendingBridgeSettlement,
+  type PendingBridgeState,
+} from "./code-mode-state.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
@@ -52,10 +58,10 @@ const callerContext = new AsyncLocalStorage<object>();
 async function closeUnrelatedOwner(runConfig: CodeModeConfig) {
   const caller = { prompt: Buffer.alloc(1024 * 1024, 1) };
   const references = [new WeakRef(caller), new WeakRef(caller.prompt)];
-  await callerContext.run(caller, () => codeState.createCodeModeRunOwner(ctx, runConfig).close());
+  await callerContext.run(caller, () => createCodeModeRunOwner(ctx, runConfig).close());
   return references;
 }
-let pending: codeState.PendingBridgeState[] = [];
+let pending: PendingBridgeState[] = [];
 try {
   const response = await exec.execute("park-inputs", {
     code: `const done = retain_input({ kind: "done" });
@@ -72,7 +78,7 @@ try {
   assert.equal(response.details.status, "waiting");
   const runId = response.details.runId;
   assert.ok(typeof runId === "string");
-  const state = codeState.activeRuns.get(runId);
+  const state = activeRuns.get(runId);
   assert.ok(state);
   pending = state.pending;
   await Promise.all([started.done.promise, started.pending.promise]);
@@ -81,7 +87,7 @@ try {
   );
   assert.ok(completed);
   release.done.resolve();
-  await codeState.waitForPendingBridgeSettlement([completed], { kind: "awaiting" });
+  await waitForPendingBridgeSettlement([completed], { kind: "awaiting" });
   // Closing a different cell rearms expiry, but must not lend its caller to this parked cell.
   const expiryCaller = await closeUnrelatedOwner(state.config);
   await collectForRetentionCheck("code-mode-expiry-timer");
@@ -123,7 +129,7 @@ try {
   assert.deepEqual(resumed.details.value, [{ kind: "done" }, { kind: "pending" }]);
   assert.deepEqual(calls.slice(0, 2), ["done", "pending"]);
   assert.equal(calls.length, 2_002);
-  assert.equal(codeState.activeRuns.size, 0);
+  assert.equal(activeRuns.size, 0);
   process.stdout.write(
     JSON.stringify({
       completedInputReleased: true,
@@ -134,8 +140,8 @@ try {
 } finally {
   release.done.resolve();
   release.pending.resolve();
-  await codeState.disposeAllCodeModeRuns();
-  await codeState.waitForPendingBridgeSettlement(pending, {
+  await disposeAllCodeModeRuns();
+  await waitForPendingBridgeSettlement(pending, {
     kind: "draining",
     requiredRequestIds: pending.map((entry) => entry.id),
   });

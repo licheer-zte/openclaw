@@ -3,7 +3,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -12,6 +11,8 @@ import {
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { getChatHistoryLoadState } from "./chat-history-state.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { refreshPageChat } from "./chat-state-refresh.ts";
@@ -79,21 +80,36 @@ it.each([
   const { pane, state } = createTestChatPane({ client, sessions });
   state.sessionKey = "agent:work:main";
   state.assistantAgentId = "work";
-  state.agentsList = makeBootRoster({ scope: "global", agents: [{ id: "main" }, { id: "work" }] });
+  state.agentsList = {
+    defaultId: "main",
+    mainKey: "main",
+    scope: "global",
+    agents: [{ id: "main" }, { id: "work" }],
+  };
   pane.presented = false;
   const release = sessions.subscribe(pane.applySessionsState.bind(pane));
   try {
     await refreshCurrentChatSessionList(state);
-    const refresh = refreshPageChat(state, {
-      awaitHistory: true,
-      deferBranches: true,
-      scheduleScroll: false,
-    });
+    expect(selectedChatSessionRow(state)).toMatchObject(initialWork);
+    const previousSessionsResult = state.sessionsResult;
+    const issuedRevision = sessions.canonicalListRevision;
+    const refreshOptions = { awaitHistory: true, deferBranches: true, scheduleScroll: false };
+    const refresh = refreshPageChat(state, refreshOptions);
+    const historyLoad = loadChatHistory(state, { deferBranches: true });
+    expect(getChatHistoryLoadState(state).phase).toBe("in-flight");
     if (workRefresh !== "none") {
       await refreshCurrentChatSessionList(state);
+      expect(state.sessionsResult).not.toBe(previousSessionsResult);
+      expect(selectedChatSessionRow(state)).toEqual(
+        workRefresh === "missing" ? undefined : expect.objectContaining(newerWork),
+      );
     }
+    const publishedWorkProjection = state.sessionsResult;
     if (moveRoster) {
       await sessions.refresh({ agentId: "main", force: true });
+      expect(sessions.state.agentId).toBe("main");
+      expect(state.sessionsResult).toBe(publishedWorkProjection);
+      expect(state.sessionsResultAgentId).toBe("work");
     }
     const primaryDefaults = sessions.state.result?.defaults;
     const historyRow = {
@@ -110,9 +126,11 @@ it.each([
       messages: [{ role: "assistant", content: "History really applied" }],
       sessionInfo: historyRow,
     });
-    await refresh;
+    await Promise.all([historyLoad, refresh]);
+    expect(getChatHistoryLoadState(state).phase).toBe("committed");
     expect(state.chatMessages).toEqual([{ role: "assistant", content: "History really applied" }]);
-    expect(state.sessionsResultAgentId).toBe("work");
+    expect(request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(1);
+    expect(sessions.canonicalListRevision).toBeGreaterThan(issuedRevision);
     if (moveRoster) {
       expect(sessions.state.result?.sessions[0]).toEqual(mainRow);
       expect(sessions.state.result?.defaults).toEqual(primaryDefaults);
@@ -123,6 +141,7 @@ it.each([
     );
   } finally {
     release();
+    pane.disconnectedCallback();
     sessions.dispose();
   }
 });

@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import path from "node:path";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { TranscriptNotContinuableError } from "../../packages/agent-core/src/errors.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -195,12 +196,15 @@ afterEach(() => {
   resetDiagnosticEventsForTest();
   cliBackendsTesting.resetDepsForTest();
   vi.unstubAllEnvs();
-  setLoggerOverride(null);
-  resetLogger();
 });
 
 beforeEach(() => {
   setLoggerOverride({ level: "silent", consoleLevel: "silent" });
+});
+
+afterEach(() => {
+  setLoggerOverride(null);
+  resetLogger();
 });
 
 function makeProviderFallbackCfg(provider: string): OpenClawConfig {
@@ -217,7 +221,7 @@ function configuredFallback(primary: string, fallbacks: string[]) {
 }
 
 function recoverAfter(error: unknown, result = "ok") {
-  return failInOrder(error).mockResolvedValueOnce(result);
+  return vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(result);
 }
 
 function failInOrder(...errors: unknown[]) {
@@ -275,7 +279,10 @@ function makeProviderOrderFallbackCfg(
       providers: Object.fromEntries(
         entries.map(([provider, model]) => [
           provider,
-          { baseUrl: `https://${provider}.example.test`, models: [{ id: model }] },
+          {
+            baseUrl: `https://${provider}.example.test`,
+            models: [{ id: model }],
+          },
         ]),
       ),
     },
@@ -283,7 +290,7 @@ function makeProviderOrderFallbackCfg(
 }
 
 function installAuthStore(store: AuthProfileStore): string {
-  const dir = `/tmp/openclaw-auth-suite-mock/case-${++authTempCounter}`;
+  const dir = path.join("/tmp/openclaw-auth-suite-mock", `case-${++authTempCounter}`);
   setAuthRuntimeStore(dir, store);
   return dir;
 }
@@ -295,11 +302,12 @@ async function runWithStoredAuth(params: {
   run: (provider: string, model: string) => Promise<string>;
   userLockedAuthProfileId?: string;
 }) {
+  const tempDir = installAuthStore(params.store);
   return await runWithModelFallback({
     cfg: params.cfg ?? makeProviderFallbackCfg(params.provider),
     provider: params.provider,
     model: "m1",
-    agentDir: installAuthStore(params.store),
+    agentDir: tempDir,
     run: params.run,
     userLockedAuthProfileId: params.userLockedAuthProfileId,
   });
@@ -336,7 +344,10 @@ const INSUFFICIENT_QUOTA_PAYLOAD =
 
 type ModelFailoverDiagnostic = Extract<DiagnosticEventPayload, { type: "model.failover" }>;
 
-function captureModelFailoverDiagnostics() {
+function captureModelFailoverDiagnostics(): {
+  events: ModelFailoverDiagnostic[];
+  stop: () => void;
+} {
   const events: ModelFailoverDiagnostic[] = [];
   const stop = onTrustedInternalDiagnosticEvent((event) => {
     if (event.type === "model.failover") {

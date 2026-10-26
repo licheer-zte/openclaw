@@ -13,7 +13,6 @@ import type { SessionDiffBaseline } from "../config/sessions/types.js";
 import { normalizeGitPathForFilesystem } from "../infra/git-exec.js";
 import type { GitCheckoutDiffInput, GitReadOperations } from "../infra/git-read-operations.js";
 import { hasGitWorkerContext, requestGitWorkerEffect } from "../infra/git-worker-context.js";
-import type { GitWorkerOperations } from "../infra/git-worker-contract.js";
 import { isSqliteFilePath } from "../infra/sqlite-file-path.js";
 import { parseDiffInventoryZ, parseNameStatusZ, splitPatchByFile } from "./session-diff-parser.js";
 import {
@@ -371,7 +370,7 @@ async function collectTrackedFiles(
 type CheckoutDiffResult = GitReadOperations["checkout.diff"]["output"];
 
 export async function collectCheckoutDiff(
-  params: GitWorkerOperations["checkout.diff"]["input"],
+  params: GitCheckoutDiffInput,
 ): Promise<CheckoutDiffResult> {
   const empty = (
     unavailableReason?: NonNullable<SessionsDiffResult["unavailableReason"]>,
@@ -412,15 +411,6 @@ export async function collectCheckoutDiff(
     unavailableReason: "unknown_commit",
   });
   const scope = params.scope ?? "all";
-  // Fresh status already inventoried both tracked and untracked changes. Reuse
-  // that read snapshot only for the same checkout/HEAD and uncommitted scope.
-  if (
-    scope === "uncommitted" &&
-    params.cleanWorktree?.root === realRoot &&
-    params.cleanWorktree.head === head
-  ) {
-    return { ...repositoryFields, files: [], additions: 0, deletions: 0 };
-  }
   let revisions: readonly [string] | readonly [string, string] | undefined;
   if (scope === "commit") {
     if (!head || !branchBase || branchBase.base === "HEAD" || branchBase.base === head) {

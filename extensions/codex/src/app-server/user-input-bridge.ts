@@ -7,13 +7,10 @@ import {
   type AgentHarnessUserInputQuestion,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
 import type { JsonObject, JsonValue } from "./protocol.js";
 import { CodexServerRequestResolvedError } from "./server-requests.js";
-
-const loadElicitationInput = createLazyRuntimeModule(() => import("./elicitation-input.js"));
 
 const DEFAULT_USER_INPUT_TIMEOUT_MS = 15 * 60_000;
 // Codex omits a deadline for nonblocking requests, so bound gateway and secret paths alike.
@@ -170,7 +167,7 @@ export function createCodexUserInputBridge(params: {
       if (requestSnapshot && readOwnDataString(requestSnapshot, "threadId") !== params.threadId) {
         return undefined;
       }
-      const { compileCodexOrdinaryElicitation } = await loadElicitationInput();
+      const { compileCodexOrdinaryElicitation } = await import("./elicitation-input.js");
       const compiled = requestSnapshot
         ? compileCodexOrdinaryElicitation({ snapshot: requestSnapshot, turnId: params.turnId })
         : {

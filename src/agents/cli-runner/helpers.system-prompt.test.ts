@@ -74,7 +74,7 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(systemPrompt).toContain("<name>weather</name>");
     expect(systemPrompt).toContain("- Current: fixture/current");
     preparedModelRuntime.isCurrent.mockReturnValue(false);
-    expect(buildCliAgentSystemPrompt(params)).toBe(systemPrompt);
+    expect(buildCliAgentSystemPrompt(params)).not.toContain("## Model Aliases");
   });
 
   it.each([true, false])(

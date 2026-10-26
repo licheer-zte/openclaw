@@ -88,12 +88,8 @@ Shell-only environment variables may not be available to the Gateway service.
 
 Skipping, a failed check, or declining to save leaves the memory section unsaved.
 The flow does not download local models, create an index, or re-index memories.
-A provider change drops the old shared memory endpoint, headers, and key. Agents
-with their own remote settings, or a pinned provider inheriting shared remote
-settings, keep their previous effective provider, model, endpoint, and credentials
-in explicit per-agent overrides. SecretRefs remain references. Other agents adopt
-the new shared defaults. Skipping, failed checks, and declining save leave all
-agent overrides unchanged.
+Existing per-agent overrides remain unchanged. A provider change drops the old
+memory endpoint, headers, and key so they cannot be sent to the new destination.
 An embedding identity change can require an explicit index rebuild afterward;
 see [Memory configuration](/reference/memory-config).
 

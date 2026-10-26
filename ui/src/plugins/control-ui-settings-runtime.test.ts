@@ -68,7 +68,7 @@ function fixture(views: SettingsView[] = [memoryView()]) {
       : runtime.loadSettingsView(target.placement, new AbortController().signal);
   return { runtime, view, activate, stop, style, module, load };
 }
-it.each(["memories", "channel"] as const)(
+it.each(["overview", "memories", "channel"] as const)(
   "loads and disposes packaged %s without activation",
   async (kind) => {
     const selected = kind === "channel" ? channelView() : memoryView(kind);
@@ -92,37 +92,46 @@ it.each(["memories", "channel"] as const)(
     expect(f.stop).toHaveBeenCalledOnce();
   },
 );
-it.each(["disposed", "ambiguous"])("rejects a %s owner before loading code", async (cause) => {
+it("does not start a Settings view after disposal during its lazy import", async () => {
   const f = fixture();
-  const pending = f.load();
-  if (cause === "disposed") {
-    f.runtime.dispose();
-  } else {
-    packaged.push({ ...packaged[0]!, pluginId: "duplicate" });
-  }
-  await expect(pending).rejects.toThrow(
-    cause === "disposed" ? "runtime has ended" : "one packaged owner",
-  );
+  const pending = f.runtime.loadSettingsView(placement, new AbortController().signal);
+  f.runtime.dispose();
+  await expect(pending).rejects.toThrow("The plugin UI runtime has ended.");
   expect(loadControlUiPluginAssets).not.toHaveBeenCalled();
 });
-it.each(["owner", "placement", "duplicate", "channel"])(
+it("rejects ambiguous packaged placement owners before loading code", async () => {
+  const f = fixture();
+  packaged.push({ ...packaged[0]!, pluginId: "duplicate" });
+  await expect(f.load()).rejects.toThrow("one packaged owner");
+  expect(loadControlUiPluginAssets).not.toHaveBeenCalled();
+});
+it.each(["owner", "placement", "duplicate"])(
   "rejects a built module with a mismatched %s and disposes its styles",
   async (kind) => {
-    const f = fixture(kind === "channel" ? [channelView()] : undefined);
+    const f = fixture();
     if (kind === "owner") {
       f.module.pluginId = "another-plugin";
     }
     if (kind === "placement") {
-      f.module.settingsViews = [channelView()];
+      f.module.settingsViews = [
+        {
+          ...f.view,
+          placement: { section: "other", panel: "overview" },
+        } as unknown as ControlUiSettingsView,
+      ];
     }
     if (kind === "duplicate") {
       f.module.settingsViews = [f.view, f.view];
     }
-    if (kind === "channel") {
-      f.module.settingsViews = [channelView("foreign")];
-    }
-    await expect(f.load()).rejects.toThrow(kind === "channel" ? "Invalid or duplicate" : undefined);
+    await expect(f.load()).rejects.toThrow();
     expect(f.style.media).toBe("not all");
     expect(f.stop).toHaveBeenCalledOnce();
   },
 );
+
+it("rejects module channel identity drift even when section and panel match", async () => {
+  const view = channelView();
+  const f = fixture([view]);
+  f.module.settingsViews = [{ ...view, placement: { ...view.placement, channelId: "foreign" } }];
+  await expect(f.load()).rejects.toThrow("Invalid or duplicate");
+});

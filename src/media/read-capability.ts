@@ -1,9 +1,6 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import {
-  resolveEffectiveToolPolicy,
-  resolveGroupToolPolicy,
-} from "../agents/agent-tools.policy.js";
+import { resolveGroupToolPolicy } from "../agents/agent-tools.policy.js";
 import { resolvePathFromInput } from "../agents/path-policy.js";
 import { resolveManagedMediaRoot } from "../agents/sandbox-paths.js";
 import { resolveSenderToolPolicy } from "../agents/sender-tool-policy.js";
@@ -138,19 +135,7 @@ function resolveAgentScopedMediaAccess(
     senderUsername: params.requesterSenderUsername,
     senderE164: params.requesterSenderE164,
   });
-  const { globalPolicy, agentPolicy } = resolveEffectiveToolPolicy({
-    config: params.cfg,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
-  // Denied readers must lose workspace roots as well as callbacks: loaders can
-  // otherwise fall back to native reads from those roots.
-  const mediaReadAllowed = isToolAllowedByPolicies("read", [
-    globalPolicy,
-    agentPolicy,
-    groupPolicy,
-    senderPolicy,
-  ]);
+  const mediaReadAllowed = isToolAllowedByPolicies("read", [groupPolicy, senderPolicy]);
   const registeredMedia = resolvedWorkspaceDir
     ? captureAgentWorkspaceOutboundMedia(resolvedWorkspaceDir)
     : undefined;

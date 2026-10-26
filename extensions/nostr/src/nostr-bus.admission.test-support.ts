@@ -21,11 +21,12 @@ export function useNostrAdmissionFixture() {
   const dirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterEach(async () => {
       try {
-        const pending = stops
-          .splice(0)
-          .toReversed()
-          .map((stop) => stop());
-        const results = await Promise.allSettled(pending);
+        const results = await Promise.allSettled(
+          stops
+            .splice(0)
+            .toReversed()
+            .map((stop) => stop()),
+        );
         const failures = results.flatMap((r) => (r.status === "rejected" ? [r.reason] : []));
         if (failures.length) {
           throw new AggregateError(failures, "Nostr fixture cleanup failed");
@@ -79,10 +80,17 @@ export function useNostrAdmissionFixture() {
       channel: { inbound: { buildContext: buildChannelInboundEventContext } },
     });
     setNostrRuntime(runtime);
-    const onStop = (work: typeof join) => {
-      join = work;
+    return {
+      relay,
+      runtime,
+      ids,
+      errors,
+      enqueued,
+      stop,
+      onStop: (work: typeof join) => {
+        join = work;
+      },
     };
-    return { relay, runtime, ids, errors, enqueued, stop, onStop };
   }
   return { create, directory };
 }
@@ -115,7 +123,10 @@ export function registerNostrAdmissionTests() {
         relays: [h.relay.url],
         admissionPubkeys: keys.map(getPublicKey),
         onMessage,
-        trackIngressTask: (task) => void task.then(completed.resolve),
+        trackIngressTask: (task) => {
+          const completion = completed;
+          void task.then(() => completion.resolve());
+        },
       });
       h.onStop(() => bus.close());
       await h.relay.subscribed;

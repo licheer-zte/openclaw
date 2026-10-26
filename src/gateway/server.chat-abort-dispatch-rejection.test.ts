@@ -873,7 +873,7 @@ describe("gateway WebSocket chat abort ownership", () => {
           import("./server-methods/chat-send-handler.js"),
         ]);
         const parse = attachments.parseMessageWithAttachments;
-        const prepareSandbox = sandboxContext.prepareSandboxWorkspaceForSession;
+        const ensureSandbox = sandboxContext.ensureSandboxWorkspaceForSession;
         const discard = attachments.discardPreparedInboundMedia;
         const handleSend = chatSend.handleChatSend;
         const parseSpy = vi
@@ -885,9 +885,9 @@ describe("gateway WebSocket chat abort ownership", () => {
           });
         restoreSpies.push(() => parseSpy.mockRestore());
         const sandboxSpy = vi
-          .spyOn(sandboxContext, "prepareSandboxWorkspaceForSession")
+          .spyOn(sandboxContext, "ensureSandboxWorkspaceForSession")
           .mockImplementation(async (...args) => {
-            const result = await prepareSandbox(...args);
+            const result = await ensureSandbox(...args);
             if (inboundPath) {
               expect(result).toBeNull();
               prepared.resolve();

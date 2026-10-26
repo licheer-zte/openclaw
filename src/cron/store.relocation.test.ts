@@ -13,6 +13,7 @@ import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveCronJobConfigRevision } from "./config-revision.js";
 import { readCronScratchSnapshot } from "./scratch-read.js";
+import { writeCronJobScratch } from "./scratch-store.js";
 import {
   loadCronStore,
   loadCronJobsStore,
@@ -22,7 +23,6 @@ import {
   saveCronQuarantinedJobs,
 } from "./store.js";
 import { createReloadCronJob } from "./store.test-support.js";
-import { writeCronJobScratch } from "./store.worker.test-support.js";
 import {
   claimCronRunReceiptInDatabase,
   finishCronRunReceiptInDatabase,

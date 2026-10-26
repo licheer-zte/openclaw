@@ -57,50 +57,49 @@ type Props = {
 export type ChatDetailsSession = SolidBridgeElement<Props>;
 
 function DetailsAutomations(props: Props) {
-  const identity = createMemo(
-    () =>
-      [
-        props.props?.sessionKey,
-        props.props?.currentAgentId,
-        props.props?.selectedSession?.sessionId,
-      ] as const,
-    { equals: (before, after) => before.every((value, index) => value === after[index]) },
-  );
-  // Reset disclosure state with the incarnation; the inventory owns its logical scope.
-  const [expanded, setExpanded] = createSignal<boolean>(() => {
-    identity();
-    return true;
-  });
-  const desktop = createMemo(
-    () =>
-      props.desktop
-        ? {
-            expanded: props.props?.desktopDisclosures?.expanded.automations ?? expanded(),
-            onExpandedChange: (next: boolean) => {
-              if (props.presented) {
-                setExpanded(next);
-                props.props?.desktopDisclosures?.onExpandedChange("automations", next);
-              }
-            },
-          }
-        : undefined,
-    { equals: (before, after) => before?.expanded === after?.expanded },
+  const identity = createMemo(() =>
+    JSON.stringify([
+      props.props?.sessionKey,
+      props.props?.currentAgentId,
+      props.props?.selectedSession?.sessionId,
+    ]),
   );
   return (
-    <ChatSummaryAutomations
-      presentationIdentity={identity()}
-      desktop={desktop()}
-      gateway={props.props?.pullRequestsGateway}
-      sessionKey={
-        props.props
-          ? scopedSessionArtifactKey(
-              props.props.sessionKey,
-              props.props.currentAgentId ?? undefined,
-            )
-          : ""
-      }
-      presented={props.presented}
-    />
+    <Show when={identity()} keyed>
+      {(_identity) => {
+        const [expanded, setExpanded] = createSignal(true);
+        const desktop = createMemo(
+          () =>
+            props.desktop
+              ? {
+                  expanded: props.props?.desktopDisclosures?.expanded.automations ?? expanded(),
+                  onExpandedChange: (next: boolean) => {
+                    if (props.presented) {
+                      setExpanded(next);
+                      props.props?.desktopDisclosures?.onExpandedChange("automations", next);
+                    }
+                  },
+                }
+              : undefined,
+          { equals: (before, after) => before?.expanded === after?.expanded },
+        );
+        return (
+          <ChatSummaryAutomations
+            desktop={desktop()}
+            gateway={props.props?.pullRequestsGateway}
+            sessionKey={
+              props.props
+                ? scopedSessionArtifactKey(
+                    props.props.sessionKey,
+                    props.props.currentAgentId ?? undefined,
+                  )
+                : ""
+            }
+            presented={props.presented}
+          />
+        );
+      }}
+    </Show>
   );
 }
 
@@ -467,7 +466,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                           fallback={
                             <ChatDetailsDesktopSection
                               section="pull-requests"
-                              title={t("chat.sessionDetails.pullRequests")}
+                              title={t("sessionHovercard.pullRequests")}
                               expanded={requestsExpanded()}
                               presented={active()}
                               onExpandedChange={(expanded) => {
@@ -492,7 +491,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                             }}
                           >
                             <summary class="chat-details__caption">
-                              {t("chat.sessionDetails.pullRequests")}
+                              {t("sessionHovercard.pullRequests")}
                               <span>{props.props?.pullRequests?.length || null}</span>
                               <Icon name="chevronDown" />
                             </summary>

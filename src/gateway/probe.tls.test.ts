@@ -1,9 +1,8 @@
 import { X509Certificate } from "node:crypto";
 import { createServer } from "node:https";
-import type { Socket } from "node:net";
+import type { AddressInfo, Socket } from "node:net";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { WebSocketServer } from "../../packages/gateway-client/src/websocket.test-support.js";
-import * as httpFixtures from "../../test/helpers/gateway-integration-fixtures.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { waitForGatewayReachable } from "../commands/onboard-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -72,9 +71,12 @@ async function startTlsProbeGateway() {
       sendMinimalGatewayResponse(ws, frame.id, hello);
     });
   });
-  const url = await httpFixtures.listenLoopback(server, "wss");
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
   return {
-    url,
+    url: `wss://127.0.0.1:${(server.address() as AddressInfo).port}`,
     observed,
     observeTransport: () => {
       const { receivedBytes, connectFrames } = observed;

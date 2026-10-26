@@ -195,15 +195,7 @@ export async function resolveEmbeddedModelSelection(params: {
         selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
       }).updated;
     let entryUpdated = hasLegacyAutoFallbackWithoutOrigin(entry) && resetToDefaultModel();
-    const repaired = repairProviderWrappedModelOverride({
-      entry,
-      defaultProvider,
-      defaultModel,
-      // A selectable cataloged or configured route is a deliberate pick, not a lost wrapper.
-      isKnownRoute: (ref) =>
-        visibilityPolicy.allows(ref) &&
-        Boolean(findModelInCatalog(visibilityPolicy.catalog, ref.provider, ref.model)),
-    });
+    const repaired = repairProviderWrappedModelOverride({ entry, defaultProvider, defaultModel });
     entryUpdated ||= repaired.updated;
     const directOverride = resolveDirectStoredModelOverride({
       sessionEntry: entry,

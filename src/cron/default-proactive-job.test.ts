@@ -6,7 +6,7 @@ import {
   writeConfigMachineStateInDatabase,
 } from "../state/config-machine-state-write.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { expectNoMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createDefaultProactiveJob,
@@ -29,10 +29,6 @@ const config: OpenClawConfig = {
   },
 };
 
-const provision = (agent = "main", cfg = config, cadenceMs = 60_000) =>
-  provisionDefaultProactiveJob(cfg, agent, { cadenceMs });
-const readJobs = async (storePath: string) => (await loadCronJobsStore(storePath)).jobs;
-
 it("invalidates retained summaries when provisioning commits but its reply is lost", async () => {
   await withOpenClawTestState({ label: "proactive-provision-lost-reply" }, async (state) => {
     const storePath = state.statePath("selected", "jobs.json");
@@ -41,7 +37,9 @@ it("invalidates retained summaries when provisioning commits but its reply is lo
     const before = getCronJobsStoreRevision(storePath);
     const dropped = loseFirstCronMutationReply("cron.provisionDefaultProactive");
     try {
-      await expect(provision()).rejects.toThrow();
+      await expect(
+        provisionDefaultProactiveJob(config, "main", { cadenceMs: 60_000 }),
+      ).rejects.toThrow();
       expect(dropped.wasDropped()).toBe(true);
       const after = getCronJobsStoreRevision(storePath);
       expect(await readDefaultProactiveJobsAsync(storePath, ["main"])).toHaveLength(1);
@@ -56,15 +54,20 @@ it("provisions only the ambient owner once in the selected partition without hos
   await withOpenClawTestState({ label: "proactive-provision" }, async (state) => {
     const storePath = state.statePath("selected", "jobs.json");
     writeConfigMachineState("cron.store", storePath);
-    await expectNoMainThreadSql(async () => {
+    const sql = observeMainThreadSql();
+    try {
       const before = getCronJobsStoreRevision(storePath);
       expect(
-        await provision("main", {
-          agents: { ownership: "explicit", entries: { main: {}, helper: {} } },
-        }),
+        await provisionDefaultProactiveJob(
+          { agents: { ownership: "explicit", entries: { main: {}, helper: {} } } },
+          "main",
+          { cadenceMs: 60_000 },
+        ),
       ).toBeUndefined();
-      expect(await provision("helper")).toBeUndefined();
-      const job = await provision();
+      expect(
+        await provisionDefaultProactiveJob(config, "helper", { cadenceMs: 60_000 }),
+      ).toBeUndefined();
+      const job = await provisionDefaultProactiveJob(config, "main", { cadenceMs: 60_000 });
       expect(job).toMatchObject({
         agentId: "main",
         enabled: true,
@@ -74,20 +77,27 @@ it("provisions only the ambient owner once in the selected partition without hos
         delivery: { mode: "announce", target: "owner" },
       });
       expect(getCronJobsStoreRevision(storePath)).toBeGreaterThan(before);
-      expect(await provision("main", config, 120_000)).toEqual(job);
-      expect(await readJobs(storePath)).toEqual([job]);
+      expect(await provisionDefaultProactiveJob(config, "main", { cadenceMs: 120_000 })).toEqual(
+        job,
+      );
+      expect((await loadCronJobsStore(storePath)).jobs).toEqual([job]);
       expect(await readDefaultProactiveJobReceiptsAsync(undefined, ["main", "helper"])).toEqual({
         main: { jobId: job?.id, provisionedAtMs: job?.createdAtMs, phase: "complete" },
       });
       expect(await readDefaultProactiveJobsAsync(undefined, ["main"])).toEqual([job]);
 
       await saveCronJobsStore(storePath, { version: 1, jobs: [] });
-      expect(await provision()).toBeUndefined();
-      expect(await readJobs(storePath)).toEqual([]);
+      expect(
+        await provisionDefaultProactiveJob(config, "main", { cadenceMs: 60_000 }),
+      ).toBeUndefined();
+      expect((await loadCronJobsStore(storePath)).jobs).toEqual([]);
       expect((await readDefaultProactiveJobReceiptsAsync(undefined, ["main"])).main?.jobId).toBe(
         job?.id,
       );
-    });
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
   });
 });
 
@@ -107,8 +117,10 @@ it.each([
           phase,
         });
       });
-      await expect(provision()).rejects.toThrow(expected);
-      expect(await readJobs(storePath)).toEqual([]);
+      await expect(
+        provisionDefaultProactiveJob(config, "main", { cadenceMs: 60_000 }),
+      ).rejects.toThrow(expected);
+      expect((await loadCronJobsStore(storePath)).jobs).toEqual([]);
     });
   },
 );
@@ -126,9 +138,15 @@ it("reports complete receipt jobs primary-first while excluding incomplete cutov
       recordConvertedProactiveJobInDatabase(db, storeKey, "main", converted.id);
       recordDefaultProactiveJobInDatabase(db, storeKey, "helper", pending.id, 3, "pending");
     });
-    await expectNoMainThreadSql(async () => {
-      const jobs = await readDefaultProactiveJobsAsync(undefined, ["main", "helper"]);
-      expect(jobs).toEqual([primary, converted]);
-    });
+    const sql = observeMainThreadSql();
+    try {
+      expect(await readDefaultProactiveJobsAsync(undefined, ["main", "helper"])).toEqual([
+        primary,
+        converted,
+      ]);
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
   });
 });

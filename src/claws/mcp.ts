@@ -1,6 +1,6 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { setConfiguredMcpServer, unsetConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
-import { withMcpLifecycleLease } from "../agents/mcp-lifecycle-lease.js";
+import { withClawMcpLifecycleLease } from "../agents/mcp-lifecycle-lease.js";
 import { canonicalizeConfiguredMcpServer } from "../config/mcp-config-normalize.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import { digestClawValue } from "./digest.js";
@@ -39,9 +39,9 @@ export async function installClawMcpServersStateless(
 ): Promise<PersistedClawMcpServerRef[]> {
   const refs: PersistedClawMcpServerRef[] = [];
   for (const action of plan.actions.filter((candidate) => candidate.kind === "mcpServer")) {
-    await withMcpLifecycleLease(action.id, options, async (lease) => {
+    await withClawMcpLifecycleLease(action.id, options, async (assertOwned) => {
       const assertCurrent = () => {
-        lease.assertCurrent();
+        assertOwned();
         options.assertCurrent?.();
         options.assertForwardCurrent?.();
       };
@@ -86,11 +86,6 @@ export async function installClawMcpServersStateless(
             createOnly: true,
             skipLifecycleLease: true,
             assertCurrent,
-            assertCurrentAsync: async () => {
-              await options.prepareEffect?.();
-              await lease.assertOwned();
-              assertCurrent();
-            },
           });
           if (!result.ok) {
             throw new ClawMcpInstallError(result.error, refs);
@@ -123,9 +118,9 @@ export async function rollbackStatelessClawMcpServers(
       continue;
     }
     try {
-      await withMcpLifecycleLease(ref.name, options, async (lease) => {
+      await withClawMcpLifecycleLease(ref.name, options, async (assertOwned) => {
         const assertCurrent = () => {
-          lease.assertCurrent();
+          assertOwned();
           options.assertCurrent?.();
         };
         const listed = await listConfiguredMcpServers();
@@ -146,11 +141,6 @@ export async function rollbackStatelessClawMcpServers(
           expectedServer: configured,
           skipLifecycleLease: true,
           assertCurrent,
-          assertCurrentAsync: async () => {
-            await options.prepareEffect?.();
-            await lease.assertOwned();
-            assertCurrent();
-          },
         });
         assertCurrent();
         if (!removed.ok) {

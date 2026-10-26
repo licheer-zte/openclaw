@@ -27,6 +27,7 @@ describe.skipIf(!database.connection)("PostgreSQL standing intent product flow",
         creatorSender: "creator",
         nowMs: 1_000,
         expiresAt: 1_000_000,
+        maxFires: 3,
         cooldownSeconds: 1,
         ...options,
       }),
@@ -45,7 +46,10 @@ describe.skipIf(!database.connection)("PostgreSQL standing intent product flow",
     );
 
   beforeAll(async () => {
-    state = await createOpenClawTestState({ prefix: "intents-pg-", layout: "state-only" });
+    state = await createOpenClawTestState({
+      prefix: "standing-intents-postgres-",
+      layout: "state-only",
+    });
     await database.connect();
   });
 
@@ -80,7 +84,9 @@ describe.skipIf(!database.connection)("PostgreSQL standing intent product flow",
     expect(cancelled).toMatchObject({ status: "cancelled" });
     expect(await match({ nowMs: 4_000 })).toEqual([]);
     const listed = await selected(() => list({ agentId: "main", nowMs: 4_000 }));
-    expect(listed.find((intent) => intent.description === "expired")?.status).toBe("expired");
+    expect(listed.find((intent) => intent.description === "expired")).toMatchObject({
+      status: "expired",
+    });
   });
 
   it("keeps exact keyword groups and injection bounds through the real matching API", async () => {

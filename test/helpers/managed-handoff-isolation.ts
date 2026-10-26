@@ -228,17 +228,11 @@ export function resolveManagedHandoffTestTempRoot(
   witness: { id: string; phase: string; consumer: string },
 ) {
   // Explicit application caches keep their selected path. Rebind both the shared
-  // scratch default and the private per-user lease default, including the macOS
-  // lease root under the service TMPDIR, to this fixture.
-  const perUserLeaseRoot = path.join(
-    (options.tmpdir ?? tmpdir)(),
-    process.getuid ? `openclaw-${process.getuid()}` : "openclaw",
-  );
+  // scratch default and the private per-user lease default to this fixture.
   if (
     options.preferredDir === undefined
       ? options.fallbackPrefix !== "openclaw"
-      : !forbiddenBindingRoots.has(comparisonPath(options.preferredDir)) &&
-        comparisonPath(options.preferredDir) !== comparisonPath(perUserLeaseRoot)
+      : !forbiddenBindingRoots.has(comparisonPath(options.preferredDir))
   ) {
     return original(options);
   }

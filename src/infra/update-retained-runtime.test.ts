@@ -16,7 +16,6 @@ import { UPDATE_NATIVE_GATE_SOURCE } from "../cli/update-cli/update-command-nati
 import { flushLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import * as commands from "../process/exec.js";
-import { writeFixtureTree as writeFiles } from "./fixture-tree.test-support.js";
 import * as processCensus from "./openclaw-process-census.js";
 import {
   resolvePackageActivationAnchor,
@@ -83,7 +82,9 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 it.for([false, true])(
   "defers runtime deletion until eligible maintenance without losing settled work (failed=%s)",
   async (failed, { signal }) => {
-    const { base, root, moduleUrl } = await runtimeFixture("retained-cleanup-");
+    const base = await fs.realpath(tempDirs.make("openclaw-retained-runtime-cleanup-"));
+    const root = await fixture(base, "npm");
+    const moduleUrl = moduleUrlFor(root).href;
     const unrelatedRoot = await fixture(path.join(base, "unrelated"), "npm");
     const unrelated = await openStore(
       workerSource(moduleUrlFor(unrelatedRoot).href),
@@ -94,6 +95,7 @@ it.for([false, true])(
     const release = createDeferred();
     const nativeEntered = createDeferred();
     const nativeRelease = createDeferred();
+    const removed = vi.spyOn(fs, "rm");
     const reportRetained = vi.spyOn(temporaryArtifacts, "reportRetainedUpdateRuntime");
     vi.spyOn(os, "tmpdir").mockReturnValue(base);
     vi.spyOn(processCensus, "inspectOtherOpenClawProcesses").mockReturnValue({ pids: [] });
@@ -168,6 +170,7 @@ it.for([false, true])(
     expect(await acceptedWrite).toEqual(["retained:accepted before exit"]);
     assert.ok(directory && store);
     await expect(store.execute({ type: "append", input: "escaped" })).rejects.toThrow();
+    expect(removed.mock.calls.some(([target]) => String(target) === directory)).toBe(false);
     expect(await unrelated.execute({ type: "append", input: "still open" })).toEqual([
       "retained:still open",
     ]);
@@ -178,7 +181,7 @@ it.for([false, true])(
     );
     expect(await maintain()).toContain(`Removed abandoned updater runtime: ${directory}`);
     expect(assertResourcesSettled).toHaveBeenCalledOnce();
-    await expectMissing(stat(directory));
+    await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await contents(root, "dist/state/store.js")).toBe(backend);
   },
 );
@@ -236,6 +239,14 @@ export function createSqliteWorkerBackend(_input, { databasePath }) {
   };
 }
 `;
+
+async function writeFiles(root: string, files: Record<string, string>) {
+  for (const [name, content] of Object.entries(files)) {
+    const destination = path.join(root, name);
+    await mkdir(path.dirname(destination), { recursive: true });
+    await writeFile(destination, content);
+  }
+}
 
 const contents = (root: string, file: string) => readFile(path.join(root, file), "utf8");
 const expectMissing = (operation: Promise<unknown>) =>
@@ -788,7 +799,7 @@ it.each(["npm", "npm-linked", "npm-unresolved", "pnpm11"] as const)(
       if (layout === "npm-unresolved") {
         await expect(retainedSibling).resolves.toBeDefined();
       } else {
-        await expectMissing(retainedSibling);
+        await expect(retainedSibling).rejects.toMatchObject({ code: "ENOENT" });
       }
       await rename(globalRoot, `${globalRoot}.previous`);
       await mkdir(globalRoot);
@@ -800,7 +811,11 @@ it.each(["npm", "npm-linked", "npm-unresolved", "pnpm11"] as const)(
         return;
       }
       await expectMissing(stat(path.join(retainedAmbient, "ambient-peer")));
-      await expectMissing(readFile(path.join(retainedAmbient, "unrelated/sentinel.txt")));
+      await expect(
+        readFile(path.join(retainedAmbient, "unrelated/sentinel.txt")),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
     });
   },
 );
@@ -945,7 +960,7 @@ it("retains and reclaims the runtime when the install is spelled unlike its nati
     return path.join(base, "Profile", name);
   });
   expect(await maintain()).toContain(`Removed abandoned updater runtime: ${directory}`);
-  await expectMissing(stat(directory));
+  await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 it("falls back when the runtime sibling is read-only", async () => {

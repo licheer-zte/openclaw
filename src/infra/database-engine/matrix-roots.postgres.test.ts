@@ -33,7 +33,6 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { preparePostgresBackupDiscovery } from "../backup-database-discovery.js";
-import { pluginBackupPlanInput } from "../backup-resource-plan.test-support.js";
 import { createBackupSqliteSnapshotPlan } from "../backup-sqlite-snapshot.js";
 import { resolveClientCredentialStorePath } from "../client-credential-paths.js";
 import { readClientCredentialReceipt } from "../client-credential-readiness.js";
@@ -384,9 +383,16 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
         env: state.env,
         stateDir: state.stateDir,
       });
-      const resources = await createBackupResourcePlan(
-        pluginBackupPlanInput(state.stateDir, inventory),
-      );
+      const resources = await createBackupResourcePlan({
+        stateDir: state.stateDir,
+        configPaths: [],
+        oauthDirs: [],
+        workspaceDirs: [],
+        excludedWorkspaceDirs: [],
+        agentRoots: [],
+        pluginResources: inventory.resources,
+        pluginRoots: inventory.pluginRoots,
+      });
       const tempDir = state.path("backup");
       await fs.mkdir(tempDir);
       const backup = await createBackupSqliteSnapshotPlan({

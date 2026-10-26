@@ -188,7 +188,6 @@ describe("agent exec command composition", () => {
             model: "explicit/model",
             thinking: "high",
             codeModeOverride: false,
-            operatorDirectRoot: true,
           });
           expect(getRuntimeConfigSnapshot()).toMatchObject({
             agents: {

@@ -38,8 +38,9 @@ function storedSession(
 }
 
 function expectPullRequest(row: Element | null | undefined, content: string) {
-  const badge = row?.querySelector<HTMLElement>(".session-row-badge--pull-request");
-  expect(badge?.title).toBe(content);
+  const badge = row?.querySelector(".session-row-badge--pull-request");
+  expect(badge?.hasAttribute("title")).toBe(false);
+  expect(badge?.closest("openclaw-tooltip")).toMatchObject({ content });
 }
 
 function catalogHost(

@@ -62,8 +62,6 @@ export function buildGatewaySessionSnapshot(params: {
   const omitUnscopedSwarm =
     (sessionRow.key === "global" || sessionRow.key === "unknown") && !params.agentId;
   const eventFields: Record<string, unknown> = {
-    // Reserve wire order; attach the row after copying defined event fields into it.
-    session: undefined,
     updatedAt: sessionRow.updatedAt ?? undefined,
     sessionId: sessionRow.sessionId,
     createdActor: sessionRow.createdActor ?? null,
@@ -223,8 +221,10 @@ export function buildGatewaySessionSnapshot(params: {
   if ((sessionRow.key === "global" || sessionRow.key === "unknown") && !params.agentId) {
     delete session.swarm;
   }
-  eventFields.session = session;
-  eventFields.subagentRunState = sessionRow.subagentRunState;
-  eventFields.hasActiveSubagentRun = sessionRow.hasActiveSubagentRun;
-  return eventFields;
+  return {
+    session,
+    ...eventFields,
+    subagentRunState: sessionRow.subagentRunState,
+    hasActiveSubagentRun: sessionRow.hasActiveSubagentRun,
+  };
 }

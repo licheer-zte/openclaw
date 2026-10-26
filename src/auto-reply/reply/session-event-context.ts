@@ -128,14 +128,14 @@ export function buildSessionEventContext(params: {
   }
   const operatorAuthority = automation?.controlUiAdmin
     ? automation.operatorAuthority
-    : options.source === "plugin" || options.source === "tool_handoff"
+    : options.source === "plugin"
       ? readSessionEventTargetOperatorAuthority(target)
       : undefined;
   if (
     operatorAuthority &&
     (automation?.controlUiAdmin || operatorAuthority.profileId === GATEWAY_OWNER_PROFILE_ID)
   ) {
-    // Plugin and tool handoffs continue their captured owner capability while retaining
+    // Plugin handoffs continue their captured owner capability while retaining
     // internal provenance and the event text's existing command authorization.
     bindCommandOwnerAuthority(ctx, {
       operatorAuthority,

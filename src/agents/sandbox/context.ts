@@ -223,6 +223,7 @@ async function prepareSandboxWorkspaceSelection(
 ) {
   const { rawSessionKey, runtime } = resolved;
   params.assertCurrent?.();
+  operatorAuthority?.assertCurrent();
   const localWorkspace = params.config
     ? await (
         await import("./local-workspace.js")
@@ -236,13 +237,12 @@ async function prepareSandboxWorkspaceSelection(
         // Cleanup retains the workspace owner after execution authorization closes.
         assertCurrent: persistentExecution ? undefined : params.assertCurrent,
         assertHost: () => {
+          guard?.assertHost?.();
           if (persistentExecution) {
-            guard?.assertHost?.();
             return;
           }
           if (params.admittedRunContext) {
             operatorAuthority?.assertCurrent();
-            guard?.assertHost?.();
           } else {
             params.assertCurrent?.();
           }
@@ -316,6 +316,7 @@ async function resolveSandboxContextWithAuthority(
   const assertStateOwner = await captureSandboxStateOwner();
   const assertCallerCurrent = params.assertCurrent;
   const assertCurrent = () => {
+    assertStateOwner();
     assertCallerCurrent?.();
     operatorAuthority?.assertCurrent();
     assertStateOwner();

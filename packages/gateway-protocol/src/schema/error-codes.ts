@@ -141,7 +141,6 @@ export const GatewayErrorDetailsSchema = Type.Union([
   ClawReviewRequiredErrorDetailsSchema,
   PendingInputNotRetiredErrorDetailsSchema,
   closedObject({ code: Type.Literal(GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY) }),
-  closedObject({ code: Type.Literal(GatewayErrorDetailCodes.OPENCLAW_CONFIG_READONLY) }),
 ]);
 
 /** Builds the canonical gateway error payload while preserving optional retry metadata. */

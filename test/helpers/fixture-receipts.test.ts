@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { text } from "node:stream/consumers";
 import { afterEach, expect, it, type TestContext } from "vitest";
 import {
   fixtureReceiptClientSource,
@@ -42,21 +41,27 @@ async function setup(context: TestContext) {
   };
 }
 
-it("observes killed child exit and retains it", async (context) => {
-  const { wait, ...receipts } = await setup(context);
+it.for(["normal", "SIGKILL"])("observes %s exit and retains it", async (mode, context) => {
+  const receipts = await setup(context);
+  const { wait } = receipts;
   const fixture = receipts.start(
-    'sendReceipt("child", "ready"); await awaitRelease("child", "hold");',
+    mode === "normal"
+      ? 'announce("child");'
+      : 'sendReceipt("child", "ready"); await awaitRelease("child", "hold");',
   );
   const exited = receipts.waitForExit("child");
-  await wait(receipts.waitFor("child", "ready"));
-  expect(fixture.child.kill("SIGKILL")).toBe(true);
+  if (mode === "SIGKILL") {
+    await wait(receipts.waitFor("child", "ready"));
+    expect(fixture.child.kill("SIGKILL")).toBe(true);
+  }
   await wait(exited);
-  expect(await wait(fixture.closed)).toEqual([null, "SIGKILL"]);
+  expect(await wait(fixture.closed)).toEqual(mode === "normal" ? [0, null] : [null, "SIGKILL"]);
   await wait(receipts.waitForExit("child"));
 });
 
 it.for(["before", "after"])("delivers release %s a child waits", async (ordering, context) => {
-  const { wait, ...receipts } = await setup(context);
+  const receipts = await setup(context);
+  const { wait } = receipts;
   if (ordering === "before") {
     receipts.release("child", "first");
     receipts.release("child", "second");
@@ -81,6 +86,7 @@ it.for(["before", "after"])("delivers release %s a child waits", async (ordering
   );
   await wait(receipts.waitFor("child", "ready"));
   if (ordering === "after") {
+    expect(fixture.child).toMatchObject({ exitCode: null, signalCode: null });
     receipts.release("child", "first");
     await wait(receipts.waitFor("child", "first released"));
     expect(fixture.child.exitCode).toBeNull();
@@ -89,11 +95,11 @@ it.for(["before", "after"])("delivers release %s a child waits", async (ordering
   await wait(receipts.waitFor("child", "released"));
   await wait(receipts.waitForExit("child"));
   expect(await wait(fixture.closed)).toEqual([0, null]);
-  await wait(receipts.waitForExit("child"));
 });
 
 it("waits for every associated connection and releases later associations", async (context) => {
-  const { wait, ...receipts } = await setup(context);
+  const receipts = await setup(context);
+  const { wait } = receipts;
   const first = receipts.start('await awaitRelease("shared", "first");');
   const second = receipts.start(
     'sendReceipt("shared", "ready"); await awaitRelease("shared", "checkpoint"); sendReceipt("shared", "held"); await awaitRelease("shared", "second");',
@@ -115,7 +121,8 @@ it("waits for every associated connection and releases later associations", asyn
 });
 
 it.for(["closed", "malformed"])("rejects pending waiters when %s", async (failure, context) => {
-  const { wait, ...receipts } = await setup(context);
+  const receipts = await setup(context);
+  const { wait } = receipts;
   const malformed = failure === "malformed";
   const receiptRejected = malformed
     ? expect(receipts.waitFor("child", "ready")).rejects.toThrow("Malformed fixture receipt")
@@ -148,9 +155,12 @@ it.skipIf(process.platform === "win32")(
       stdio: ["ignore", "pipe", "ignore"],
     });
     const closed = once(child, "close");
-    const output = text(child.stdout);
+    let stdout = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+      stdout += chunk;
+    });
     try {
-      const [[code], stdout] = await withinTest(Promise.all([closed, output]), signal);
+      const [code] = await withinTest(closed, signal);
       expect({ code, stdout }).toEqual({ code: 0, stdout: "released\n" });
     } finally {
       child.kill("SIGKILL");

@@ -12,7 +12,11 @@ import { createHookRunner } from "../../../plugins/hooks.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import * as mediaTaskStatus from "../../media-generation-task-status.js";
 import { forgetPromptBuildDrainCacheForRun } from "../../plugin-turn-context.js";
-import { testModel } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import {
+  createTestSession,
+  registerAgentSessionLoopTestLifecycle,
+  testModel,
+} from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   prepareEmbeddedAttemptPromptAssembly,
@@ -22,6 +26,8 @@ import {
 vi.mock("../../../plugins/host-hook-state.js", () => ({
   drainPluginNextTurnInjectionContext: vi.fn(async () => ({ queuedInjections: [] })),
 }));
+
+registerAgentSessionLoopTestLifecycle();
 
 const HOOK = "Static plugin guidance";
 const BASE = `Stable workspace prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic channel guidance`;
@@ -35,6 +41,7 @@ it("#85203 keeps static hooks and model identity stable with a marker-free hook 
   vi.spyOn(mediaTaskStatus, "buildMediaTaskRuntimeContext").mockResolvedValue(undefined);
   const config = {};
   setRuntimeConfigSnapshot(config);
+  const { session, sessionManager } = await createTestSession();
   const runId = "media-cache-override";
   const admission = prepareSystemAgentRunAdmission(config, runId, "main", "media-cache-test");
   onTestFinished(() => {
@@ -73,10 +80,14 @@ it("#85203 keeps static hooks and model identity stable with a marker-free hook 
         : "## Media Generation Tasks\n- tool=image_generate; none",
     );
     let systemPromptText = BASE;
+    const setActiveSessionSystemPrompt = (next: string) => {
+      systemPromptText = next;
+      session.agent.state.systemPrompt = next;
+    };
     const prompt = await prepareEmbeddedAttemptPromptAssembly({
       ...common,
-      activeSession: { messages: [] },
-      sessionManager: { getLeafId: () => null },
+      activeSession: session,
+      sessionManager,
       hookRunner,
       hookAgentId: "main",
       diagnosticTrace: { traceId: "11111111111111111111111111111111" },
@@ -84,16 +95,16 @@ it("#85203 keeps static hooks and model identity stable with a marker-free hook 
       systemPromptText,
       hasBaselineTools: () => true,
       applyPromptBuildToolsAllow: () => ["image_generate"],
-      setActiveSessionSystemPrompt: (next) => {
-        systemPromptText = next;
-      },
+      setActiveSessionSystemPrompt,
     });
     return prepareEmbeddedAttemptPromptContext({
       ...common,
       capabilityToolNames: new Set(["image_generate"]),
-      messages: [],
+      messages: session.messages,
       prompt,
-      replaceSessionMessages: () => {},
+      replaceSessionMessages: (messages) => {
+        session.agent.state.messages = messages;
+      },
       includeBoundaryTimestamp: false,
       systemPromptText,
       toolResultPromptProjectionState: createToolResultPromptProjectionState(),

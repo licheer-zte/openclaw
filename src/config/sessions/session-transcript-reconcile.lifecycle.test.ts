@@ -32,6 +32,7 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime
 import { getSessionTranscriptReconcileWorkerPoolSnapshot as poolSnapshot } from "./session-transcript-reconcile-pool.js";
 import * as reconcilePool from "./session-transcript-reconcile-pool.js";
 import {
+  holdReconcileAck,
   markRebuild as markDirty,
   observeCanonicalWriterLeases,
   readAgentDatabaseLeaseIds,
@@ -46,10 +47,7 @@ import {
   waitForSessionTranscriptIndexReconcilesInStateDir as drainStateDirectory,
   waitForSessionTranscriptProjection as waitForProjection,
 } from "./session-transcript-reconcile.js";
-import {
-  holdReconcileAck,
-  useReconcileWorkerObserver,
-} from "./session-transcript-reconcile.test-support.js";
+import { useReconcileWorkerObserver } from "./session-transcript-reconcile.test-support.js";
 import type { SessionTranscriptReconcileWorkerMessage } from "./session-transcript-reconcile.worker.js";
 
 vi.mock("node:worker_threads", async () =>

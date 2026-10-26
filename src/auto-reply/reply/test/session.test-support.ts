@@ -54,10 +54,18 @@ export async function writeTerminalTranscriptSessionStore(
     status?: SessionEntry["status"];
     updatedAt: number;
     endedAt: number;
-    transcriptMutationOrder: "after-registry";
+    transcriptMutationOrder: "after-registry" | "before-registry";
   },
 ): Promise<void> {
-  const { storePath, sessionKey, transcriptMutationOrder: _order, ...entry } = params;
+  const { storePath, sessionKey, transcriptMutationOrder, ...entry } = params;
+  const appendTranscript = () =>
+    appendTranscriptEvent(
+      { agentId: "main", sessionId: entry.sessionId, sessionKey, storePath },
+      { type: "custom", timestamp: "1970-01-01T00:00:00.001Z" },
+    );
+  if (transcriptMutationOrder === "before-registry") {
+    await appendTranscript();
+  }
   await writeSessionStore(storePath, {
     [sessionKey]: {
       ...entry,
@@ -67,10 +75,9 @@ export async function writeTerminalTranscriptSessionStore(
       status: entry.status ?? "done",
     },
   });
-  await appendTranscriptEvent(
-    { agentId: "main", sessionId: entry.sessionId, sessionKey, storePath },
-    { type: "custom", timestamp: "1970-01-01T00:00:00.001Z" },
-  );
+  if (transcriptMutationOrder === "after-registry") {
+    await appendTranscript();
+  }
 }
 
 export function readSessionStore(storePath: string): Record<string, ProjectedSessionEntry> {
@@ -82,7 +89,9 @@ export function readSessionStore(storePath: string): Record<string, ProjectedSes
     get(target, prop, receiver) {
       if (typeof prop === "string" && !(prop in target)) {
         const entry = loadSessionEntry({ storePath, sessionKey: prop, readConsistency: "latest" });
-        return entry ? (target[prop] = projectSessionEntry(entry)) : undefined;
+        if (entry) {
+          target[prop] = projectSessionEntry(entry);
+        }
       }
       return Reflect.get(target, prop, receiver);
     },
@@ -95,14 +104,23 @@ export async function runExplicitResetCases(
   const { storePath, sessionKey, sessionId, entry } = params;
   const results = [];
   for (const name of ["new", "reset"] as const) {
+    const body = `/${name}`;
     await writeSessionStore(storePath, {
       [sessionKey]: { sessionId, updatedAt: Date.now(), ...entry },
     });
     const result = await initSessionState({
-      ctx: { Body: `/${name}`, SessionKey: sessionKey, Provider: "telegram" },
+      ctx: {
+        Body: body,
+        From: "reset-user",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
       cfg: { session: { store: storePath } },
     });
-    results.push({ name, result, stored: readSessionStore(storePath) });
+    results.push({ name, body, result, stored: readSessionStore(storePath) });
   }
   return results;
 }

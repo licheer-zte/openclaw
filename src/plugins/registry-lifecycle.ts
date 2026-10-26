@@ -190,25 +190,6 @@ export function bindPluginRegistryLifetime(
   registryLifetimes.set(getPluginRegistryResourceOwner(registry), lifetime);
 }
 
-// Published records move to their runtime owner; unpublished cached registries retire with the cache.
-function isRetiredWithPluginCache(registry: PluginRegistry, record: PluginRecord): boolean {
-  return (
-    !isPluginRecordActive(registry, record) && registryEpochs.get(registry)?.epoch === undefined
-  );
-}
-
-/** Lists the lazily loaded registries that retiring this cache will dispose. */
-export function listPluginCacheRetiringRegistries(cache: PluginCache): PluginRegistry[] {
-  const registries = new Set<PluginRegistry>();
-  for (const instance of cache.instances) {
-    const owner = getPluginInstanceOwner(instance);
-    if (owner?.registry && isRetiredWithPluginCache(owner.registry, owner.record)) {
-      registries.add(owner.registry);
-    }
-  }
-  return [...registries];
-}
-
 export function getPluginLoaderCacheState(cache = getPluginCache()) {
   const cached = registryLoads.get(cache);
   if (cached) {
@@ -239,7 +220,7 @@ export function getPluginLoaderCacheState(cache = getPluginCache()) {
       // Publication transfers exact instances to their runtime owner, including adopted records.
       if (isPluginRecordActive(owner.registry, owner.record)) {
         releasePluginCacheInstance(instance, cache);
-      } else if (isRetiredWithPluginCache(owner.registry, owner.record)) {
+      } else if (registryEpochs.get(owner.registry)?.epoch === undefined) {
         instance.quiesce();
         registries.add(owner.registry);
       }

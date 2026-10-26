@@ -15,10 +15,6 @@ export type NewSessionRouteData = {
   terminalHosts?: Array<{ hostId: string; label: string }>;
 };
 
-export function isNewSessionCatalogTarget(data?: NewSessionRouteData): boolean {
-  return Boolean(data?.catalogId);
-}
-
 export type NewSessionTarget =
   | { catalogId: string; group?: never }
   | { group: string; catalogId?: never };

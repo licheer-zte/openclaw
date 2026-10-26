@@ -8,6 +8,12 @@ import {
   resolveConfiguredModelCatalogOwnership,
 } from "./legacy-config-migrations.runtime.models.catalog.js";
 
+export type ModelMetadataCorruptionRepair = {
+  config: OpenClawConfig;
+  changes: string[];
+  warnings: string[];
+};
+
 const GENERATED_MODEL_FALLBACK = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   input: ["text"],
@@ -17,6 +23,7 @@ const GENERATED_MODEL_FALLBACK = {
 // The old writer persisted this complete generic-default tuple into untouched rows.
 // Requiring every field avoids reclassifying ordinary explicit capability overrides.
 const GENERATED_MODEL_FIELDS = ["cost", "input", "maxTokens", "reasoning"] as const;
+export const MODEL_METADATA_CORRUPTION_AUDIT_LIMIT = 2048;
 
 type ConfigWriteRecord = Extract<ConfigAuditRecord, { event: "config.write" }>;
 
@@ -42,10 +49,15 @@ function isHistoricalMaterializingWriter(record: ConfigWriteRecord): boolean {
 function hasAuditProvenance(params: {
   auditRecords: readonly ConfigAuditRecord[];
   configPath: string;
-  currentHash: string;
-  modelPath: string;
+  currentHash: string | null;
+  providerId: string;
+  modelIndex: number;
 }): boolean {
+  if (!params.currentHash) {
+    return false;
+  }
   const configPath = path.resolve(params.configPath);
+  const prefix = `models.providers.${params.providerId}.models[${params.modelIndex}].`;
   return params.auditRecords.some(
     (record) =>
       record.event === "config.write" &&
@@ -56,8 +68,7 @@ function hasAuditProvenance(params: {
       GENERATED_MODEL_FIELDS.every((field) =>
         record.changedPaths?.some(
           (changedPath) =>
-            changedPath === `${params.modelPath}.${field}` ||
-            changedPath.startsWith(`${params.modelPath}.${field}.`),
+            changedPath === `${prefix}${field}` || changedPath.startsWith(`${prefix}${field}.`),
         ),
       ),
   );
@@ -69,15 +80,16 @@ export function repairGeneratedModelMetadataCorruption(params: {
   authoredRoot: unknown;
   configPath: string;
   currentHash: string | null;
-  loadAuditRecords: () => readonly ConfigAuditRecord[];
-}): { config: OpenClawConfig; changes: string[]; warnings: string[] } {
-  let next: OpenClawConfig | undefined;
-  let auditRecords: readonly ConfigAuditRecord[] | undefined;
+  auditRecords: readonly ConfigAuditRecord[];
+}): ModelMetadataCorruptionRepair {
+  const next: OpenClawConfig = structuredClone(params.config);
+  const providers = getRecord(getRecord(next.models)?.providers);
+  if (!providers) {
+    return { config: params.config, changes: [], warnings: [] };
+  }
   const changes: string[] = [];
   const warnings: string[] = [];
-  for (const { providerId, provider, modelIndex, model } of providerModelEntries(
-    params.config.models?.providers,
-  )) {
+  for (const { providerId, provider, modelIndex, model } of providerModelEntries(providers)) {
     const modelId = typeof model.id === "string" ? model.id : "";
     if (!modelId || !hasGeneratedFallbackFingerprint(model)) {
       continue;
@@ -106,30 +118,25 @@ export function repairGeneratedModelMetadataCorruption(params: {
       );
       continue;
     }
-    const auditProven =
-      authoredModel &&
-      hasGeneratedFallbackFingerprint(authoredModel) &&
-      params.currentHash &&
-      hasAuditProvenance({
-        auditRecords: (auditRecords ??= params.loadAuditRecords()),
-        configPath: params.configPath,
-        currentHash: params.currentHash,
-        modelPath,
-      });
-    if (!auditProven) {
+    const auditProven = hasAuditProvenance({
+      auditRecords: params.auditRecords,
+      configPath: params.configPath,
+      currentHash: params.currentHash,
+      providerId,
+      modelIndex,
+    });
+    if (!authoredModel || !hasGeneratedFallbackFingerprint(authoredModel) || !auditProven) {
       warnings.push(
         `${modelPath} matches the historical generated model-metadata fingerprint, but Doctor could not prove the responsible config write. It was left unchanged. If the provider catalog should own these capabilities, remove cost, input, maxTokens, and reasoning from this model entry.`,
       );
       continue;
     }
-    const repairedModel = (next ??= structuredClone(params.config)).models!.providers![providerId]!
-      .models[modelIndex]!;
     for (const field of GENERATED_MODEL_FIELDS) {
-      Reflect.deleteProperty(repairedModel, field);
+      delete model[field];
     }
     changes.push(
       `Removed audit-proven generated model metadata from ${modelPath}: cost, input, maxTokens, reasoning.`,
     );
   }
-  return { config: next ?? params.config, changes, warnings };
+  return { config: changes.length > 0 ? next : params.config, changes, warnings };
 }

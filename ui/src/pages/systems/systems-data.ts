@@ -9,7 +9,13 @@ import type { ApplicationGateway } from "../../app/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { readSystemInfo } from "../../lib/system-info.ts";
 
-export type SystemsInventory = NonNullable<Awaited<ReturnType<typeof loadSystemsInventory>>>;
+export type SystemsInventory = {
+  environments: EnvironmentSummary[];
+  nodes: NodeListNode[];
+  gatewaySystemInfo: SystemInfoResult | null;
+  gatewaySampledAtMs: number | null;
+  errors: { nodes?: string; systemInfo?: string };
+};
 
 type SystemsSessionRelation = {
   // These are recorded bindings, not proof that a model turn ran on the host.
@@ -28,7 +34,7 @@ export type SystemsInventoryRow = {
 export async function loadSystemsInventory(
   gateway: ApplicationGateway,
   options: { signal?: AbortSignal; fresh?: boolean },
-) {
+): Promise<SystemsInventory | undefined> {
   const client = gateway.snapshot.client;
   if (!client) {
     return undefined;

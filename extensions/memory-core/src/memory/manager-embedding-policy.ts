@@ -4,10 +4,8 @@ import {
   estimateStructuredEmbeddingInputBytes,
   estimateUtf8Bytes,
   formatEmbeddingModelInput,
-  resolveEmbeddingInputFormatVersion,
   type EmbeddingInput,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import type { ResolvedMemorySearchConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import {
   asOptionalRecord,
@@ -18,36 +16,17 @@ import type { EmbeddingProvider } from "./embeddings.js";
 export function embedMemoryQuery(
   provider: EmbeddingProvider,
   text: string,
-  settings: Pick<ResolvedMemorySearchConfig, "queryInstruction" | "inputFormat">,
+  instruction: string | undefined,
   options: EmbeddingProviderCallOptions,
 ): Promise<number[]> {
-  const instruction = settings.queryInstruction || settings.inputFormat?.query;
   return provider.embed(
-    instruction !== undefined
+    instruction
       ? `${instruction}${text}`
       : formatEmbeddingModelInput(text, provider.model, "query"),
     {
       ...options,
       inputType: "query",
-      ...(instruction !== undefined ? { queryInstructionApplied: true } : {}),
-    },
-  );
-}
-
-export function embedMemoryDocuments(
-  provider: EmbeddingProvider,
-  inputs: Array<string | EmbeddingInput>,
-  inputFormat: ResolvedMemorySearchConfig["inputFormat"],
-  options: EmbeddingProviderCallOptions,
-): Promise<number[][]> {
-  return provider.embedBatch(
-    inputs.map((input) =>
-      formatEmbeddingModelInput(input, provider.model, "document", inputFormat),
-    ),
-    {
-      ...options,
-      inputType: "document",
-      ...(inputFormat ? { documentFormatApplied: true } : {}),
+      ...(instruction ? { queryInstructionApplied: true } : {}),
     },
   );
 }
@@ -80,30 +59,6 @@ type MemoryEmbeddingChunk = {
   text: string;
   embeddingInput?: EmbeddingInput;
 };
-
-export function formatMemoryEmbeddingChunks<T extends MemoryEmbeddingChunk>(
-  chunks: T[],
-  model: string,
-  inputFormat: ResolvedMemorySearchConfig["inputFormat"],
-): T[] {
-  if (!inputFormat && !resolveEmbeddingInputFormatVersion(model)) {
-    return chunks;
-  }
-  return chunks.map((chunk) => ({
-    ...chunk,
-    ...formatEmbeddingModelInput(chunk, model, "document", inputFormat),
-    ...(chunk.embeddingInput
-      ? {
-          embeddingInput: formatEmbeddingModelInput(
-            chunk.embeddingInput,
-            model,
-            "document",
-            inputFormat,
-          ),
-        }
-      : {}),
-  }));
-}
 
 export function buildMemoryEmbeddingBatches<T extends MemoryEmbeddingChunk>(
   chunks: T[],

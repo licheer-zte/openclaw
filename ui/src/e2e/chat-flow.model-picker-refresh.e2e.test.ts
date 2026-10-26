@@ -1,6 +1,5 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { sanitizeChatHistoryMessages } from "../../../src/gateway/chat-display-projection.sanitize.ts";
 import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   newChatPage,
@@ -12,7 +11,6 @@ import {
   chatSessionListResponse,
   expectRequestCountStable,
 } from "./chat-flow.test-support.ts";
-import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const attr = (root: Page | Locator, name: string, value = "true") =>
@@ -53,10 +51,12 @@ function roster<Row extends object, Defaults extends object>(
 }
 
 suite.define(() => {
-  it("confirms remote model changes and records the submitted selection on reload", async () => {
+  it("confirms remote model changes and preserves the recorded notice on reload", async () => {
     const page = await newChatPage(suite, {
-      ...createControlUiE2eContextOptions(),
       hasTouch: true,
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
     });
     const session = sessionInfo("model-target-proof", "demo-a");
     const history = [
@@ -68,7 +68,7 @@ suite.define(() => {
       historyMessages: history,
       models: [
         modelInfo("demo-a", "Demo model A"),
-        { ...modelInfo("demo-b", "Demo model B"), alias: "Demo-model B" },
+        modelInfo("demo-b", "Demo model B"),
         { ...modelInfo("demo-local", "Demo local model"), local: true },
       ],
       methodResponses: {
@@ -79,10 +79,10 @@ suite.define(() => {
     const picker = pickerFor(page);
     await expect.poll(() => attr(picker, "model-select").textContent()).toContain("Demo model A");
     await attr(picker, "model-select").tap();
-    await picker.locator('[data-chat-model-option="openai/demo-b"]').waitFor();
+    await picker.getByRole("option", { name: "Demo model B", exact: true }).waitFor();
     await expect.poll(() => picker.locator("[data-chat-model-selection-target]").count()).toBe(0);
 
-    await picker.locator('[data-chat-model-option="openai/demo-b"]').tap();
+    await picker.getByRole("option", { name: "Demo model B", exact: true }).tap();
     const dialog = page.getByRole("dialog", { name: "Switch to Demo model B?", exact: true });
     await dialog.waitFor();
     await dialog
@@ -93,7 +93,7 @@ suite.define(() => {
     expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
     expect(await selectedModel(picker)).toBe("openai/demo-a");
     await attr(picker, "model-select").tap();
-    await picker.locator('[data-chat-model-option="openai/demo-b"]').tap();
+    await picker.getByRole("option", { name: "Demo model B", exact: true }).tap();
     await dialog.getByRole("button", { name: "Switch model", exact: true }).click();
     await expectPatch(gateway, { key: session.key, model: "openai/demo-b" });
     await expect.poll(() => selectedModel(picker)).toBe("openai/demo-b");
@@ -111,62 +111,26 @@ suite.define(() => {
       ),
     );
 
-    expect(
-      await page.locator(".chat-divider__title").filter({ hasText: "Model changed" }).count(),
-    ).toBe(0);
-    const composer = page.locator(".agent-chat__composer-combobox textarea");
-    await composer.fill("Suggest a watering schedule.");
-    const noticeLoading = await page.evaluateHandle(() => {
-      const seen = { loading: false };
-      const observer = new MutationObserver(() => {
-        seen.loading ||= Array.from(document.querySelectorAll('.chat-group[role="status"]')).some(
-          (status) => status.textContent?.includes("Loading"),
-        );
-      });
-      observer.observe(document.body, { childList: true, subtree: true });
-      return { seen, observer };
-    });
-    await composer.press("Enter");
-    const send = await gateway.waitForRequest("chat.send");
-    const sent = {
-      role: "user",
-      content: "Suggest a watering schedule.",
+    const notice = {
+      role: "custom",
+      customType: "session-model-change",
+      content: "Model changed from Demo model A to Demo model B.",
+      display: true,
+      details: { from: "Demo model A", to: "Demo model B" },
       timestamp: 3,
-      __openclaw: {
-        id: "model-input",
-        seq: 3,
-        modelSelection: {
-          provider: "openai",
-          model: "demo-b",
-          previous: { provider: "openai", model: "demo-a" },
-        },
-      },
+      __openclaw: { id: "model-change", seq: 3 },
     };
     await gateway.setMethodResponse("chat.history", {
-      messages: sanitizeChatHistoryMessages([...history, sent]),
+      messages: [...history, notice],
       sessionId: session.sessionId,
-    });
-    await gateway.emitGatewayEvent("chat", {
-      sessionKey: session.key,
-      runId: requireRecord(send.params).idempotencyKey,
-      state: "final",
     });
     await gateway.emitGatewayEvent("sessions.changed", {
       sessionKey: session.key,
       phase: "message",
       ts: 3,
     });
-    const noticeLine = page.locator(".chat-divider__title").filter({
-      hasText: "Model changed from openai/demo-a to openai/demo-b.",
-    });
+    const noticeLine = page.locator(".chat-divider__title").filter({ hasText: notice.content });
     await noticeLine.waitFor();
-    expect(
-      await noticeLoading.evaluate(({ seen, observer }) => {
-        observer.disconnect();
-        return seen.loading;
-      }),
-    ).toBe(false);
-    await noticeLoading.dispose();
     await page.reload();
     await noticeLine.waitFor();
     await expect.poll(() => selectedModel(picker)).toBe("openai/demo-b");
@@ -186,7 +150,7 @@ suite.define(() => {
     await page.reload();
     await expect.poll(() => selectedModel(picker)).toBe("openai/demo-a");
     await attr(picker, "model-select").tap();
-    await picker.locator('[data-chat-model-option="openai/demo-b"]').tap();
+    await picker.getByRole("option", { name: "Demo model B", exact: true }).tap();
     await expectPatch(gateway, { key: session.key, model: "openai/demo-b" });
     expect(await dialog.count()).toBe(0);
     await page.setViewportSize({ height: 900, width: 400 });

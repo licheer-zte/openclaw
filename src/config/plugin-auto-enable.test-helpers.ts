@@ -1,4 +1,5 @@
 import path from "node:path";
+import { makePluginMetadataIndex } from "../plugins/current-plugin-metadata.test-support.js";
 import type { PluginCandidate } from "../plugins/discovery.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -73,10 +74,10 @@ export function makeRegistry(plugins: RegistryPlugin[]): PluginManifestRegistry 
       contracts: plugin.contracts,
       configSchema: plugin.configSchema,
       channelConfigs: plugin.channelConfigs,
-      skills: [],
-      hooks: [],
       providers: plugin.providers ?? [],
       cliBackends: plugin.cliBackends ?? [],
+      skills: [],
+      hooks: [],
       origin: plugin.origin ?? "config",
       rootDir: `/fake/${plugin.id}`,
       source: `/fake/${plugin.id}/index.js`,
@@ -97,19 +98,32 @@ export function createPluginMetadataSnapshot({
 }): PluginMetadataSnapshot {
   const policyHash = resolveInstalledPluginIndexPolicyHash(config);
   const { plugins, diagnostics } = manifestRegistry;
-  const empty = createEmptyPluginMetadataSnapshot(workspaceDir || undefined);
-  empty.index.policyHash = policyHash;
-  empty.owners.providerAuthContributions =
-    buildPluginMetadataProviderFacts(plugins).providerAuthContributions;
-  empty.metrics.manifestPluginCount = plugins.length;
+  const empty = createEmptyPluginMetadataSnapshot();
+  const index: PluginMetadataSnapshot["index"] = {
+    ...makePluginMetadataIndex(),
+    policyHash,
+    plugins: [],
+  };
   return {
     ...empty,
     policyHash,
+    ...(workspaceDir ? { workspaceDir } : {}),
+    index,
+    registryIndex: index,
     manifestRegistry,
     plugins,
     diagnostics,
     byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
     declaredProviderOwners: buildDeclaredProviderOwnerIndex(plugins),
+    owners: {
+      ...empty.owners,
+      providerAuthContributions:
+        buildPluginMetadataProviderFacts(plugins).providerAuthContributions,
+    },
+    metrics: {
+      ...empty.metrics,
+      manifestPluginCount: plugins.length,
+    },
   };
 }
 

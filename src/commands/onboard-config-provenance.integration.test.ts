@@ -116,7 +116,6 @@ vi.mock("./configure.gateway.js", () => ({
   }),
 }));
 
-import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import { runConfigureWizard } from "./configure.wizard.js";
 import { runNonInteractiveSetup } from "./onboard-non-interactive.js";
 
@@ -149,13 +148,18 @@ describe("setup config provenance", () => {
       await fs.mkdir(stateDir, { recursive: true });
       const firstAgent = flow === "noninteractive-first-local";
       const legacyRoster = flow === "noninteractive-legacy-local";
-      await writeFixtureJson(configPath, {
-        agents: {
-          defaults: { workspace },
-          ...(firstAgent ? {} : { entries: legacyRoster ? { main: {} } : { ops: { workspace } } }),
-        },
-        gateway: { mode: "local", auth: { mode: "token", token: "${SETUP_PROVENANCE_TOKEN}" } },
-      });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          agents: {
+            defaults: { workspace },
+            ...(firstAgent
+              ? {}
+              : { entries: legacyRoster ? { main: {} } : { ops: { workspace } } }),
+          },
+          gateway: { mode: "local", auth: { mode: "token", token: "${SETUP_PROVENANCE_TOKEN}" } },
+        }),
+      );
       resetConfigRuntimeState();
       controls.drift = () => vi.stubEnv("SETUP_PROVENANCE_TOKEN", "synthetic-after");
       if (firstAgent || legacyRoster) {

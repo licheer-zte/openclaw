@@ -75,7 +75,7 @@ describe("runMessageAction plugin dispatch", () => {
   });
   describe("alias-based plugin action dispatch", () => {
     useActionHubPluginFixture();
-    it("routes an inherited reply through its canonical root", async () => {
+    it("mirrors an inherited reply through its canonical root", async () => {
       const sessionKey = "agent:main:forum:channel:123:thread:root-42";
       vi.mocked(resolveOutboundSessionRoute).mockResolvedValueOnce({
         sessionKey,
@@ -133,7 +133,7 @@ describe("runMessageAction plugin dispatch", () => {
               __sessionKey: sessionKey,
               __agentId: "main",
             }),
-            transcriptRoute: expect.objectContaining({ sessionKey }),
+            mirror: expect.objectContaining({ sessionKey }),
           }),
         }),
       );
@@ -436,6 +436,7 @@ describe("runMessageAction plugin dispatch", () => {
         {
           agentId: "main",
           sessionKey: sourceSessionKey,
+          suppressTranscriptMirror: true,
         },
       );
 
@@ -446,6 +447,7 @@ describe("runMessageAction plugin dispatch", () => {
       expectRecordFields(executeCall, { message: "Deployment trend" }, "execute send call");
       const executeContext = readRecordField(executeCall, "ctx", "execute send context");
       expectRecordFields(executeContext, { conversationType: "channel" }, "execute send context");
+      expect(executeContext.mirror).toBeUndefined();
       expectRecordFields(
         readRecordField(executeCall, "payload", "execute send payload"),
         { text: "Deployment trend", presentation },
@@ -469,6 +471,7 @@ describe("runMessageAction plugin dispatch", () => {
         {
           ...(actionOrigin ? { actionOrigin } : {}),
           agentId: "main",
+          suppressTranscriptMirror: true,
         },
       );
 

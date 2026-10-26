@@ -28,8 +28,8 @@ const DEFAULT_PLUGIN_LIFECYCLE_WAIT_MS = 10 * 60_000;
 export type PluginMetadataLeaseContext = {
   databasePath: string;
   stateLease: OpenClawStateWorkerLeaseContext;
-  assertCurrent(this: void): void;
-  assertOwned(this: void): void | Promise<void>;
+  assertCurrent(): void;
+  assertOwned(): void | Promise<void>;
 };
 
 export type PluginLifecycleLeaseContext = OpenClawStateLeaseContext & {
@@ -359,7 +359,7 @@ export async function withPluginLifecycleLease<T>(
 
 /** Runtime metadata work awaits durable ownership instead of issuing SQL on the host thread. */
 export async function withPluginLifecycleLeaseAsync<T>(
-  options: Omit<PluginLifecycleLeaseOptions, "schemaPolicy">,
+  options: Omit<PluginLifecycleLeaseOptions, "database" | "schemaPolicy">,
   run: (lease: PluginMetadataLeaseContext) => Promise<T>,
 ): Promise<T> {
   const active = activePluginLifecycleLease.getStore();
@@ -373,9 +373,7 @@ export async function withPluginLifecycleLeaseAsync<T>(
   };
   assertCurrent();
   const env = resolveLifecycleLeaseEnv(options.env);
-  const databasePath = path.resolve(
-    options.database?.path ?? options.path ?? resolveOpenClawStateSqlitePath(env),
-  );
+  const databasePath = path.resolve(options.path ?? resolveOpenClawStateSqlitePath(env));
   const runWithLease = async (lease: PluginMetadataLeaseContext) => {
     const owned: PluginMetadataLeaseContext = {
       databasePath: lease.databasePath,
@@ -399,7 +397,7 @@ export async function withPluginLifecycleLeaseAsync<T>(
   };
   if (active) {
     if (
-      (options.env !== undefined || options.path !== undefined || options.database !== undefined) &&
+      (options.env !== undefined || options.path !== undefined) &&
       active.databasePath !== databasePath
     ) {
       throw new OpenClawStateLeaseError(
@@ -430,7 +428,7 @@ export async function withPluginLifecycleLeaseAsync<T>(
         const pluginLease: PluginMetadataLeaseContext = {
           databasePath,
           stateLease: lease,
-          assertCurrent: () => authority.assert(() => lease.assertCurrent()),
+          assertCurrent: () => authority.assert(() => lease.signal.throwIfAborted()),
           assertOwned: () => lease.assertOwned(),
         };
         return withPluginLifecycleCache(() => runWithLease(pluginLease));

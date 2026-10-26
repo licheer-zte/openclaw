@@ -186,21 +186,13 @@ export async function buildAssistantReplyContentFromInputs(
     const mediaFailures = getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? [];
     const isPrepared = params.inputs[entry.sourceIndex]?.kind === "prepared";
     const statusNotice = isReplyPayloadStatusNotice(payload);
-    const statusNoticeFields = statusNotice
-      ? {
-          openclawStatusNotice: true,
-          ...(getReplyPayloadMetadata(payload)?.modelFallbackNotice
-            ? { openclawFallback: true }
-            : {}),
-        }
-      : {};
     const displayText = isPrepared ? prepareAssistantDisplayText : sanitizeAssistantDisplayText;
     const text = displayText(stripReplyMediaFailureFallback(payload.text, mediaFailures), {
       preserveBoundaries: preserveTextBoundaries,
     });
     if (text) {
       if (statusNotice) {
-        content.push({ type: "text", text, ...statusNoticeFields });
+        content.push({ type: "text", text, openclawStatusNotice: true });
       } else {
         const previousBlock = content.at(-1);
         if (Array.isArray(previousBlock)) {
@@ -219,7 +211,7 @@ export async function buildAssistantReplyContentFromInputs(
       persistedContent.push({
         type: "text",
         text: transcriptText,
-        ...statusNoticeFields,
+        ...(statusNotice ? { openclawStatusNotice: true } : {}),
       });
     }
     if (params.includeSensitiveDisplay === true) {

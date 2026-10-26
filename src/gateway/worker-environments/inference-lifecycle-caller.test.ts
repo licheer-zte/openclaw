@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import { addAbortListener } from "node:events";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
@@ -15,7 +14,7 @@ import { registerWorkerInferenceSessionControl } from "./inference-control-inter
 import { createWorkerInferenceServiceStub } from "./inference-control.test-helpers.js";
 import { REQUEST } from "./inference.test-support.js";
 
-it.for(["start-drain-release", "after-start"] as const)(
+it.for(["start", "start-drain-release", "refusal", "after-start"] as const)(
   "retains actual lifecycle caller custody for %s failure",
   (failureMode, { signal }) =>
     withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -24,19 +23,34 @@ it.for(["start-drain-release", "after-start"] as const)(
       const startFailure = new Error("selected lifecycle boundary failed");
       const drainFailure = new Error("worker drain persistence failed");
       const releaseFailure = new Error("worker drain release failed");
-      const release = vi.fn(() => assert(failureMode === "after-start", releaseFailure));
+      const refusal = new Error("worker drain acceptance refused");
+      const release = vi.fn(() => {
+        if (failureMode === "start-drain-release") {
+          throw releaseFailure;
+        }
+      });
       const start = vi.fn(() => {
         entered.resolve();
-        assert(failureMode === "after-start", startFailure);
+        if (failureMode !== "after-start") {
+          throw startFailure;
+        }
       });
       const workerService = createWorkerInferenceServiceStub();
-      const accepted = { drained: drained.promise, hasWork: () => true, start, release };
       registerWorkerInferenceSessionControl(workerService, {
         hasSession: () => true,
-        reserveSessionDrain: () => accepted,
-        captureSessionCancellation: () => {
-          throw new Error("Cancellation must not follow failed admission");
+        reserveSessionDrain: () => {
+          if (failureMode === "refusal") {
+            entered.resolve();
+            throw refusal;
+          }
+          return { drained: drained.promise, hasWork: () => true, start, release };
         },
+        captureSessionCancellation: () => ({
+          runIds: [],
+          settled: Promise.resolve(),
+          executing: false,
+          cancel: async () => [],
+        }),
         resolveSessionTargetForRunId: () => undefined,
       });
       const sessionKey = `agent:main:lifecycle-custody-${failureMode}`;
@@ -65,7 +79,10 @@ it.for(["start-drain-release", "after-start"] as const)(
       const settled = vi.fn();
       void preparing.then(settled, settled);
       const outcome = preparing.then(
-        (value) => value.release(),
+        (value) => {
+          value.release();
+          return value;
+        },
         (error: unknown) => error,
       );
       let successor: Promise<void> | undefined;
@@ -75,31 +92,50 @@ it.for(["start-drain-release", "after-start"] as const)(
           outcome,
           "Lifecycle caller returned before the selected worker boundary",
         );
-        const successorEntered = vi.fn(async () => {});
-        successor = withSessionTurn(target, successorEntered);
-        // Accepted custody blocks turns but not mutations until the drain settles.
-        await runSessionMutation({
-          target: captureSessionTarget({
-            storeScope: target.storePath,
-            ...target,
-            aliases: identities,
-            incarnation: REQUEST.sessionId,
-          }),
-          policy: "allow-live",
-          run: async () => {},
-        });
-        expect(settled).not.toHaveBeenCalled();
-        expect(release).not.toHaveBeenCalled();
-        expect(successorEntered).not.toHaveBeenCalled();
-        drained.reject(drainFailure);
-        await successor;
-        expect(successorEntered).toHaveBeenCalledOnce();
-        expect(release).toHaveBeenCalledOnce();
-        const errors = [startFailure, drainFailure];
-        if (failureMode === "start-drain-release") {
-          errors.push(releaseFailure);
+        if (failureMode !== "refusal") {
+          const successorEntered = vi.fn(async () => {});
+          successor = withSessionTurn(target, successorEntered);
+          // The mutation mutex is free, but accepted worker custody still
+          // blocks a successor and keeps the lifecycle caller pending.
+          await runSessionMutation({
+            target: captureSessionTarget({
+              storeScope: target.storePath,
+              sessionKey,
+              aliases: identities,
+              incarnation: REQUEST.sessionId,
+              agentId: "main",
+            }),
+            policy: "allow-live",
+            run: async () => {},
+          });
+          expect(settled).not.toHaveBeenCalled();
+          expect(release).not.toHaveBeenCalled();
+          expect(successorEntered).not.toHaveBeenCalled();
+          if (failureMode === "start") {
+            drained.resolve();
+          } else {
+            drained.reject(drainFailure);
+          }
+          await successor;
+          expect(successorEntered).toHaveBeenCalledOnce();
         }
-        expect(await outcome).toMatchObject({ errors });
+        const error = await outcome;
+        const callCount = failureMode === "refusal" ? 0 : 1;
+        expect(start).toHaveBeenCalledTimes(callCount);
+        expect(release).toHaveBeenCalledTimes(callCount);
+        if (failureMode === "refusal") {
+          expect(error).toBe(refusal);
+        } else if (failureMode === "start") {
+          expect(error).toBe(startFailure);
+        } else {
+          expect(error).toMatchObject({
+            errors: [
+              startFailure,
+              drainFailure,
+              ...(failureMode === "start-drain-release" ? [releaseFailure] : []),
+            ],
+          });
+        }
       } finally {
         drained.resolve();
         await outcome;

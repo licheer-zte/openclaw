@@ -20,7 +20,6 @@ import {
   registerGatewayModelCatalogPrivateAccess,
 } from "../server-model-catalog-auth.js";
 import * as sessionReads from "../session-utils-store.js";
-import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import {
   createChatMetadataHarness,
   createChatMetadataOwner,
@@ -31,6 +30,7 @@ import {
   catalogEntry,
   providerCatalogEntry,
   requestModelsList,
+  WITHOUT_OPENAI_ENV_AUTH,
 } from "./models-list-result.openai-routes.test-support.js";
 import type { GatewayClient, GatewayRequestHandlerOptions } from "./types.js";
 

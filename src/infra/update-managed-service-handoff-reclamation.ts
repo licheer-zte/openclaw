@@ -464,7 +464,6 @@ async function prepareCancelledCustodyRepair(
       artifactPaths: [
         ...new Set([...discovered.artifactPaths, ...family.map((lease) => lease.key)]),
       ],
-      installationRoots: family.map((lease) => lease.key),
       drivers: [
         ...(discovered.drivers ?? []),
         ...family.flatMap((lease) => [lease.helper, lease.executor]),

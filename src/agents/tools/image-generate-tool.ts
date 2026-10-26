@@ -546,8 +546,6 @@ export function createImageGenerateTool(
                   imageGenerationTaskLifecycle.recordTaskProgress({
                     handle: taskHandle,
                     progressSummary: "Saving generated image",
-                    provider: result.provider,
-                    model: result.model,
                   });
                   const geometryDetails = buildMediaGenerationGeometryDetails("image", result, {
                     size,

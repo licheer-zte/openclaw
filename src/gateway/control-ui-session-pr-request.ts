@@ -111,14 +111,19 @@ export function prepareSessionPullRequestGitHubRead(
         sourceSignals.length > 1 ? AbortSignal.any(sourceSignals) : sourceSignals[0];
       const readJson = async (token: string | undefined) => {
         recordSessionPrDiagnostic("github-fetch-started");
-        const { value } = await gitHubPublicApi.fetchGitHubJsonPage(url, fetchRequest, token, {
+        const response = await gitHubPublicApi.fetchGitHubApi(
+          url,
+          fetchRequest,
+          token,
           beforeRedirect,
           identity,
-          signal: requestSignal,
-          apiBaseUrl: selected.apiBaseUrl,
-          maxBytes,
-        });
+          undefined,
+          requestSignal,
+          undefined,
+          selected.apiBaseUrl,
+        );
         recordSessionPrDiagnostic("github-fetch-returned");
+        const value = await gitHubPublicApi.readGitHubJsonResponse(response, maxBytes);
         recordSessionPrDiagnostic("github-json-returned");
         return value;
       };

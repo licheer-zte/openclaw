@@ -1,10 +1,24 @@
 import path from "node:path";
 import { vi } from "vitest";
-import { createApplyPatchTool } from "./apply-patch.js";
+import type { ApplyPatchFileOptions } from "./apply-patch-file-ops.js";
+import type { ApplyPatchSummary } from "./apply-patch.js";
+import "./apply-patch.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
-export function applyPatch(input: string, options: Parameters<typeof createApplyPatchTool>[0]) {
-  return createApplyPatchTool(options).execute("patch-test", { input });
+type PatchOptions = Pick<ApplyPatchFileOptions, "cwd" | "sandbox" | "workspaceOnly" | "signal">;
+
+type PatchResult = { summary: ApplyPatchSummary; text: string; noOp?: boolean };
+
+type PatchApi = { applyPatch(input: string, options: PatchOptions): Promise<PatchResult> };
+
+export async function applyPatch(input: string, options: PatchOptions) {
+  const api = (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.applyPatchTestApi")
+  ];
+  if (!api) {
+    throw new Error("apply patch test API is unavailable");
+  }
+  return await (api as PatchApi).applyPatch(input, options);
 }
 
 export function createMemoryPatchSandbox(

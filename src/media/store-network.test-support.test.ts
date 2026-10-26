@@ -13,21 +13,18 @@ type RemoteMediaOptions = Parameters<SaveRemoteMedia>[0];
 afterAll(disposeStoreRemoteFixtures);
 
 function captureSave(overrides: Partial<RemoteMediaOptions> = {}) {
-  const save = vi.fn<SaveRemoteMedia>(async () => ({
-    id: "fixture.bin",
-    path: "/fixture/fixture.bin",
-    size: 7,
-  }));
+  const result = { id: "fixture.bin", path: "/fixture/fixture.bin", size: 7 };
+  const save = vi.fn<SaveRemoteMedia>(async () => result);
   const options: RemoteMediaOptions = { url: "http://127.0.0.1:43123/fixture.bin", ...overrides };
-  return { save, wrapped: wrapStoreSaveRemoteMedia(save), options };
+  return { save, wrapped: wrapStoreSaveRemoteMedia(save), result, options };
 }
 
 it("routes only the exact active URL and preserves outside and unmatched option identities", async () => {
-  const { save, wrapped, options } = captureSave({
+  const { save, wrapped, result, options } = captureSave({
     url: "http://127.0.0.1:43123/fixture.bin?case=one",
     requestInit: { headers: { Accept: "application/octet-stream" } },
   });
-  await wrapped(options);
+  expect(await wrapped(options)).toBe(result);
   expect(save.mock.calls[0]?.[0]).toBe(options);
   const matched = vi.fn();
   await withStoreRemoteFixture({ url: options.url, onMatch: matched }, async () => {
@@ -41,14 +38,17 @@ it("routes only the exact active URL and preserves outside and unmatched option 
       await wrapped(other);
       expect(save.mock.lastCall?.[0]).toBe(other);
     }
-    await wrapped(options);
+    expect(await wrapped(options)).toBe(result);
     const received = save.mock.lastCall?.[0];
     expect(received).toEqual({
       ...options,
       ssrfPolicy: { allowedOrigins: ["http://127.0.0.1:43123"] },
     });
+    expect(received?.requestInit).toBe(options.requestInit);
   });
   expect(matched).toHaveBeenCalledExactlyOnceWith(options.url);
+  await wrapped(options);
+  expect(save.mock.lastCall?.[0]).toBe(options);
 });
 
 it("retires routing for a delayed descendant after the owning operation settles", async () => {
@@ -59,16 +59,21 @@ it("retires routing for a delayed descendant after the owning operation settles"
   }));
   gate.resolve();
   await late;
+  expect(save).toHaveBeenCalledOnce();
   expect(save.mock.lastCall?.[0]).toBe(options);
 });
 
-it.each([{ lookupFn: async () => [] }, { ssrfPolicy: { allowedOrigins: [] } }])(
-  "rejects existing routing %j before delegation",
-  async (routing) => {
-    const { save, wrapped, options } = captureSave(routing);
+it.each(["lookup", "policy"] as const)(
+  "rejects existing %s routing before delegation",
+  async (kind) => {
+    const { save, wrapped, options } = captureSave(
+      kind === "lookup" ? { lookupFn: async () => [] } : { ssrfPolicy: { allowedOrigins: [] } },
+    );
     const matched = vi.fn();
     await withStoreRemoteFixture({ url: options.url, onMatch: matched }, async () => {
-      expect(() => wrapped(options)).toThrow("existing routing policy");
+      expect(() => wrapped(options)).toThrow(
+        "Store fixture unexpectedly received an existing routing policy",
+      );
     });
     expect(matched).not.toHaveBeenCalled();
     expect(save).not.toHaveBeenCalled();

@@ -32,7 +32,7 @@ export function createPreparedCliContext(
     normalizedModel: params.model,
     systemPrompt: "system",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
-    claudeSkillsPlugin: { args: [] },
+    claudeSkillsPluginArgs: [],
     authEpochVersion: 2,
     ...overrides,
   };

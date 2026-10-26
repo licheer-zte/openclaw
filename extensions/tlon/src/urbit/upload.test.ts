@@ -7,10 +7,11 @@ vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
   MAX_IMAGE_BYTES: 6 * 1024 * 1024,
   readRemoteMediaBuffer: vi.fn(),
 }));
-vi.mock("../tlon-api.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../tlon-api.js")>()),
+
+vi.mock("../tlon-api.js", () => ({
   uploadFile: vi.fn(),
 }));
+
 const mockReadRemoteMediaBuffer = vi.mocked(readRemoteMediaBuffer);
 const mockUploadFile = vi.mocked(uploadFile);
 const clientConfig = {
@@ -18,6 +19,7 @@ const clientConfig = {
   shipName: "zod",
   getCode: async () => "fixture-code",
 };
+
 const uploadedUrl = "https://memex.tlon.network/uploaded.png";
 const imageUrl = "https://example.com/image.png";
 const buffer = Buffer.from("fake-image");
@@ -26,34 +28,43 @@ function setupSuccessfulUpload(contentType = "image/png", fileName?: string) {
   mockReadRemoteMediaBuffer.mockResolvedValue({ buffer, contentType, fileName });
   mockUploadFile.mockResolvedValue({ url: uploadedUrl });
 }
+
+function requireUploadParams() {
+  const call = mockUploadFile.mock.calls[0];
+  if (!call) {
+    throw new Error("expected Tlon uploadFile call");
+  }
+  return call[0];
+}
+
 beforeEach(() => vi.clearAllMocks());
+
 it.each([1024, MAX_IMAGE_BYTES * 2])("caps downloads at %s bytes", async (cap) => {
   setupSuccessfulUpload("image/jpeg");
   const url = "https://example.com/path/to/my-image.jpg";
+
   await expect(upload(url, cap)).resolves.toBe(uploadedUrl);
-  expect(mockReadRemoteMediaBuffer.mock.lastCall?.[0]).toMatchObject({
+  expect(mockReadRemoteMediaBuffer).toHaveBeenCalledWith({
     url,
     maxBytes: Math.min(cap ?? MAX_IMAGE_BYTES, MAX_IMAGE_BYTES),
     responseHeaderTimeoutMs: 120_000,
     readIdleTimeoutMs: 30_000,
+    ssrfPolicy: undefined,
+    beforeRequest: undefined,
+    requestInit: { method: "GET" },
   });
   expect(mockUploadFile).toHaveBeenCalledTimes(1);
-  const params = mockUploadFile.mock.lastCall?.[0];
-  expect(params).toMatchObject({
-    blob: expect.any(Blob),
-    contentType: "image/jpeg",
-    fileName: "my-image.jpg",
-  });
-  await expect(params?.blob.arrayBuffer()).resolves.toEqual(Uint8Array.from(buffer).buffer);
+  const uploadParams = requireUploadParams();
+  expect(uploadParams).toMatchObject({ contentType: "image/jpeg", fileName: "my-image.jpg" });
+  const blob = uploadParams.blob;
+  expect(blob).toBeInstanceOf(Blob);
+  expect(Buffer.from(await blob.arrayBuffer())).toEqual(buffer);
 });
 
-it.each([
-  ["https://example.com/download?id=123", "photo#1.png", /^photo#1\.png$/],
-  ["https://example.com/", undefined, /^upload-\d+\.png$/],
-] as const)("selects the upload filename for %s", async (url, fileName, expected) => {
-  setupSuccessfulUpload("image/png", fileName);
-  await upload(url);
-  expect(mockUploadFile.mock.lastCall?.[0].fileName).toMatch(expected);
+it("prefers the downloaded filename over a query-style URL basename", async () => {
+  setupSuccessfulUpload("image/png", "photo#1.png");
+  await upload("https://example.com/download?id=123");
+  expect(requireUploadParams().fileName).toBe("photo#1.png");
 });
 
 it("preserves a wrapped authority rejection instead of falling back to the original URL", async () => {
@@ -69,9 +80,11 @@ it("preserves a wrapped authority rejection instead of falling back to the origi
     }
     throw new Error("expected authority rejection");
   });
+
   const config = { ...clientConfig, assertDirectAdapterHandoff };
   await expect(uploadImageFromUrl(imageUrl, config)).rejects.toBe(revoked);
   expect(mockUploadFile).not.toHaveBeenCalled();
+  expect(assertDirectAdapterHandoff).toHaveBeenCalledTimes(1);
 });
 
 it("does not embed an unchecked URL when a configured cap rejects its bytes", async () => {
@@ -83,5 +96,14 @@ it("does not embed an unchecked URL when a configured cap rejects its bytes", as
 
 it("rejects non-http(s) URLs", async () => {
   await expect(upload("file:///etc/passwd")).resolves.toBe("file:///etc/passwd");
+  await expect(upload("ftp://example.com/image.png")).resolves.toBe("ftp://example.com/image.png");
   expect(mockReadRemoteMediaBuffer).not.toHaveBeenCalled();
+});
+
+it("uses default filename when URL has no path", async () => {
+  setupSuccessfulUpload();
+
+  await upload("https://example.com/");
+
+  expect(requireUploadParams().fileName).toMatch(/^upload-\d+\.png$/);
 });

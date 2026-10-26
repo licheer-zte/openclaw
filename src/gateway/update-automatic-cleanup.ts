@@ -1,5 +1,5 @@
 import type { RecoveryCleanupReport } from "../commands/doctor-session-sqlite-recovery-inventory.js";
-import { captureStateDatabaseAccess } from "../infra/gateway-state-owner.js";
+import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import {
@@ -21,59 +21,44 @@ function runGatewayRecoveryCleanup<T>(
   settle?: (work: Promise<T>, assertCurrent: () => void) => Promise<T>,
 ): Promise<T> {
   const databasePath = resolveOpenClawStateSqlitePath(env);
+  const owner = captureGatewayStateOwner(databasePath);
+  if (!owner || owner.role !== "gateway") {
+    return Promise.reject(new Error("Gateway does not own the selected state"));
+  }
+  const assertCurrent = () => {
+    assertCallerCurrent();
+    owner.assertCurrent();
+  };
   const previous = pending.get(databasePath);
-  const operation = captureStateDatabaseAccess(databasePath).then((access) => {
-    const owner = access.processOwner;
-    if (!owner || owner.role !== "gateway") {
-      throw new Error("Gateway does not own the selected state");
-    }
-    const assertCurrent = () => {
-      assertCallerCurrent();
-      owner.assertCurrent();
-    };
-    const work = (async () => {
-      await previous?.catch(() => undefined);
+  const work = (async () => {
+    await previous?.catch(() => undefined);
+    assertCurrent();
+    const admission = createSqliteWorkerOperationAdmission((_request, grant) => {
       assertCurrent();
-      let assertAccess = await access.prepareAccess();
-      assertCurrent();
-      assertAccess();
-      const admission = createSqliteWorkerOperationAdmission(
-        (_request, grant) => {
-          assertCurrent();
-          assertAccess();
-          if (!grant()) {
-            throw new Error("Recovery cleanup authority expired");
-          }
-        },
-        undefined,
-        async () => {
-          assertCurrent();
-          assertAccess = await access.prepareAccess();
-          assertCurrent();
-          assertAccess();
-        },
-      );
-      const pool = new WorkerTaskPool<AutomaticCleanupInput, T>({
-        workerUrl: resolveRuntimeProcessEntrypointUrl("updateAutomaticCleanup"),
-        maxWorkers: 1,
-        maxPendingTasks: 1,
-        restartOnError: false,
-      });
-      try {
-        return await pool.run(
-          { ...selection, env: { ...env }, authority: admission.port },
-          { transferList: (input) => [input.authority], signal: owner.signal },
-        );
-      } finally {
-        try {
-          await pool.close();
-        } finally {
-          admission.finish();
-        }
+      if (!grant()) {
+        throw new Error("Recovery cleanup authority expired");
       }
-    })();
-    return settle ? settle(work, assertCurrent) : work;
-  });
+    });
+    const pool = new WorkerTaskPool<AutomaticCleanupInput, T>({
+      workerUrl: resolveRuntimeProcessEntrypointUrl("updateAutomaticCleanup"),
+      maxWorkers: 1,
+      maxPendingTasks: 1,
+      restartOnError: false,
+    });
+    try {
+      return await pool.run(
+        { ...selection, env: { ...env }, authority: admission.port },
+        { transferList: (input) => [input.authority], signal: owner.signal },
+      );
+    } finally {
+      try {
+        await pool.close();
+      } finally {
+        admission.finish();
+      }
+    }
+  })();
+  const operation = settle ? settle(work, assertCurrent) : work;
   pending.set(databasePath, operation);
   const release = () => {
     if (pending.get(databasePath) === operation) {

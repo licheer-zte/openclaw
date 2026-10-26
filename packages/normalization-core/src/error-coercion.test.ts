@@ -13,7 +13,8 @@ import {
   toStringifiedError,
 } from "./error-coercion.js";
 
-const format = formatErrorMessage;
+const keepText = (text: string): string => text;
+const format = (value: unknown): string => formatErrorMessage(value, { redact: keepText });
 const throwRead = (): never => {
   throw new Error("unexpected field read");
 };
@@ -27,15 +28,28 @@ it("maps only the root and eight ordered causes, including repeated cyclic frame
   for (let index = 8; index >= 0; index -= 1) {
     error = new Error(String(index), { cause: error });
   }
-  expect(mapErrorCauseChain(error, (entry) => entry.message)).toEqual(
-    Array.from({ length: 9 }, (_, index) => String(index)),
-  );
+  expect(mapErrorCauseChain(error, (entry) => entry.message)).toEqual([
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+  ]);
   const cycle = new Error("loop");
   cycle.cause = cycle;
   expect(mapErrorCauseChain(cycle, (entry) => entry.message)).toEqual(Array(9).fill("loop"));
 });
 
 describe("formatErrorMessage", () => {
+  it("preserves error content when no diagnostic redaction policy is supplied", () => {
+    const error = withCause("API_TOKEN = computeToken()", new Error("sk-abc123456789012345678"));
+    expect(formatErrorMessage(error)).toBe("API_TOKEN = computeToken() | sk-abc123456789012345678");
+  });
+
   it("keeps provider persistence diagnostics in initiating order without reordering other errors", () => {
     const persistence = withCause("write secret", new Error("write root"));
     const cleanup = new AggregateError([new Error("cleanup root")], "cleanup secret");
@@ -45,6 +59,7 @@ describe("formatErrorMessage", () => {
     expect(formatErrorMessage(withCause("outer", failure), { redact: redactSecrets })).toBe(
       "outer | persistence failed | write [REDACTED] | cleanup [REDACTED] | write root | cleanup root",
     );
+    expect(String(failure)).toBe("AggregateError: persistence failed");
     const plain = new AggregateError([persistence, cleanup], "persistence failed", {
       cause: cleanup,
     });
@@ -68,8 +83,11 @@ describe("formatErrorMessage", () => {
     };
     const failure: unknown = await run().catch((error: unknown) => error);
     expect(collectNestedErrorCandidates(failure)).toEqual([failure, cleanup, body]);
-    const formatted = formatErrorMessage(failure, { redact: redactSecrets });
-    expect(formatted).toContain("cleanup [REDACTED] | body [REDACTED]");
+    const redact = vi.fn(redactSecrets);
+    expect(formatErrorMessage(failure, { redact })).toContain(
+      "cleanup [REDACTED] | body [REDACTED]",
+    );
+    expect(redact).toHaveBeenCalledOnce();
   });
 
   it.each([0, null])("retains a downlevel suppressed value %s", (suppressed) => {
@@ -84,7 +102,9 @@ describe("formatErrorMessage", () => {
   it("isolates inaccessible messages on VM errors", () => {
     const error: unknown = runInNewContext("new Error('')");
     Object.defineProperty(error, "message", { get: throwRead });
-    expect(format(error)).toBe("Error");
+    const redact = vi.fn(keepText);
+    expect(formatErrorMessage(error, { redact })).toBe("Error");
+    expect(redact).toHaveBeenCalledExactlyOnceWith("Error");
     expect(format(withCause("outer failure", error))).toBe("outer failure");
   });
 
@@ -109,22 +129,21 @@ describe("formatErrorMessage", () => {
     Object.assign(outer, { code: "REQUEST_FAILED" });
     native.cause = outer;
     expect(format(outer)).toBe("turn | primary | cleanup | native | EIO | second");
-    expect(formatErrorMessage(outer, { includeCode: true })).toBe(
+    expect(formatErrorMessage(outer, { includeCode: true, redact: keepText })).toBe(
       "turn | REQUEST_FAILED | primary | cleanup | native | EIO | second",
     );
   });
 
-  const missingFile = Object.assign(new Error("ENOENT: missing file"), { code: "ENOENT" });
+  it("omits cause text the wrapper message already spells out", () => {
+    const wrapped = withCause("Parse failed: invalid", new SyntaxError("invalid"));
+    expect(format(wrapped)).toBe("Parse failed: invalid");
+    const errno = Object.assign(new Error("ENOENT: missing file"), { code: "ENOENT" });
+    expect(format(withCause("File not found", errno))).toBe(
+      "File not found | ENOENT: missing file | ENOENT",
+    );
+  });
+
   it.each([
-    [
-      withCause("API_TOKEN = computeToken()", new Error("sk-abc123456789012345678")),
-      "API_TOKEN = computeToken() | sk-abc123456789012345678",
-    ],
-    [withCause("Parse failed: invalid", new SyntaxError("invalid")), "Parse failed: invalid"],
-    [withCause("File not found", missingFile), "File not found | ENOENT: missing file | ENOENT"],
-    [null, "null"],
-    [undefined, "undefined"],
-    [123n, "123"],
     [{ status: 500, code: "EPIPE" }, "status=500 code=EPIPE"],
     [{ status: 404 }, "status=404 code=unknown"],
     [{ code: "ENOENT" }, "status=unknown code=ENOENT"],
@@ -135,30 +154,33 @@ describe("formatErrorMessage", () => {
       withCause("request", { status: 503, code: "E", id: "a" }),
       'request | {"status":503,"code":"E","id":"a"}',
     ],
-  ])("formats error details without implicit redaction: case %#", (value, expected) => {
+  ])("formats status/code records and structured causes: %j", (value, expected) => {
     expect(format(value)).toBe(expected);
   });
 
-  it("falls back to the object tag for circular records", () => {
+  it("stringifies primitives and circular records without throwing", () => {
     const circular: { self?: unknown } = {};
     circular.self = circular;
+    expect(format(null)).toBe("null");
+    expect(format(undefined)).toBe("undefined");
+    expect(format(123n)).toBe("123");
     expect(format(circular)).toBe("[object Object]");
   });
 });
 
-it.each([
-  [new Error("boom"), "boom"],
-  ["boom", "boom"],
-  [{ code: "EPIPE", status: 500 }, "request failed"],
-])("toErrorObject preserves messages and structured details: %j", (value, message) => {
-  const error = toErrorObject(value, "request failed");
-  expect(error.message).toBe(message);
-  if (value instanceof Error) {
-    expect(error).toBe(value);
-  } else if (typeof value === "object") {
-    expect(error).toMatchObject({ code: "EPIPE", status: 500 });
+describe("toErrorObject", () => {
+  it("preserves Error and string inputs", () => {
+    const error = new Error("boom");
+    expect(toErrorObject(error, "fallback")).toBe(error);
+    expect(toErrorObject("boom", "fallback")).toMatchObject({ message: "boom" });
+  });
+
+  it("preserves structured details from non-Error objects", () => {
+    const value = { code: "EPIPE", status: 500 };
+    const error = toErrorObject(value, "request failed");
+    expect(error).toMatchObject({ message: "request failed", code: "EPIPE", status: 500 });
     expect(error.cause).toBe(value);
-  }
+  });
 });
 
 describe("toStructuredErrorObject", () => {
@@ -201,11 +223,18 @@ describe("toStructuredErrorObject", () => {
       expect(Reflect.get(error, detailKey)).toBe("symbol detail");
     }
     const error = toStructuredErrorObject(cause);
+    expect(Object.getOwnPropertyDescriptor(error, "code")).toEqual({
+      value: "EIO",
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
     expect(Object.hasOwn(error, throwingDetailKey)).toBe(false);
     expect(error).not.toHaveProperty("hidden");
   });
 
-  it("preserves the base Error for enumeration failures", () => {
+  it("skips throwing fields and preserves the base Error for enumeration failures", () => {
+    const throwingGetter = withGetter({ code: "EIO" }, "details");
     const ownKeysFailure = new Proxy({ code: "EIO" }, { ownKeys: throwRead });
     const descriptorFailure = new Proxy(
       { code: "EIO", status: 503 },
@@ -215,6 +244,7 @@ describe("toStructuredErrorObject", () => {
         },
       },
     );
+    expect(toStructuredErrorObject(throwingGetter)).toMatchObject({ code: "EIO" });
     for (const cause of [ownKeysFailure, descriptorFailure]) {
       const error = toStructuredErrorObject(cause);
       expect(error).toMatchObject({ name: "Error", message: "[object Object]" });
@@ -230,7 +260,10 @@ describe("toStructuredErrorObject", () => {
     for (const key of ["name", "message", "cause", "stack"]) {
       withGetter(cause, key, readProtected);
     }
-    Object.defineProperty(cause, "__proto__", { value: { polluted: true }, enumerable: true });
+    Object.defineProperty(cause, "__proto__", {
+      value: { polluted: true },
+      enumerable: true,
+    });
     const error = toStructuredErrorObject(cause);
     expect(readProtected).not.toHaveBeenCalled();
     expect(error).toMatchObject({ name: "Error", message: "[object Object]", code: "EIO" });
@@ -272,18 +305,40 @@ it.each([
   expect(stringifyNonErrorCause(value)).toBe(expected);
 });
 
-it.each([
-  ["Error", "version resolution failed", "Error", "Error: version resolution failed"],
-  ["Error", "boom", "Error: boom", "Error: boom"],
-  ["PermissionError", "denied", "PermissionError", "PermissionError: denied"],
-  ["Error", "multi", "", "Error: multi"],
-])("formats stack headers for %s: %s", (name, message, header, expected) => {
-  const frame = "    at f (source.js:1:1)";
-  const stack = header ? `${header}\n${frame}` : frame;
-  const error = Object.assign(new Error(message), { name, stack });
-  expect(formatErrorStackWithMessage(error)).toBe(`${expected}\n${frame}`);
-});
+describe("formatErrorStackWithMessage", () => {
+  it("restores the message on a bare-header stack like Bun materializes", () => {
+    const error = new Error("version resolution failed");
+    error.stack = "Error\n    at resolveCommitHash (git-commit.js:1:1)";
+    expect(formatErrorStackWithMessage(error)).toBe(
+      "Error: version resolution failed\n    at resolveCommitHash (git-commit.js:1:1)",
+    );
+  });
 
-it("formatErrorStackWithMessage falls back to the message without a stack", () => {
-  expect(formatErrorStackWithMessage(Object.assign(new Error("solo"), { stack: "" }))).toBe("solo");
+  it("keeps a V8-style stack that already embeds the message unchanged", () => {
+    const error = new Error("boom");
+    error.stack = "Error: boom\n    at <anonymous> (source.js:1:1)";
+    expect(formatErrorStackWithMessage(error)).toBe(
+      "Error: boom\n    at <anonymous> (source.js:1:1)",
+    );
+  });
+
+  it("restores a bare header that carries a custom error name", () => {
+    const error = new Error("denied");
+    error.name = "PermissionError";
+    error.stack = "PermissionError\n    at f (source.js:2)";
+    expect(formatErrorStackWithMessage(error)).toBe(
+      "PermissionError: denied\n    at f (source.js:2)",
+    );
+  });
+
+  it("prepends the header when the stack has no leading name line", () => {
+    const error = new Error("multi");
+    error.stack = "    at q (source.js:3)";
+    expect(formatErrorStackWithMessage(error)).toBe("Error: multi\n    at q (source.js:3)");
+  });
+
+  it("falls back to the message when there is no stack", () => {
+    const error = Object.assign(new Error("solo"), { stack: "" });
+    expect(formatErrorStackWithMessage(error)).toBe("solo");
+  });
 });

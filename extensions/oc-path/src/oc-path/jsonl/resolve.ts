@@ -15,17 +15,32 @@
  * @module @openclaw/oc-path/jsonl/resolve
  */
 
+import type { JsoncEntry, JsoncValue } from "../jsonc/ast.js";
 import { resolveJsoncValueOcPath } from "../jsonc/resolve-value.js";
 import type { OcPath } from "../oc-path.js";
 import { splitOcPathSlots } from "../oc-path.js";
-import type { JsonlAst } from "./ast.js";
+import type { JsonlAst, JsonlLine } from "./ast.js";
 import { pickJsonlLine } from "./line.js";
 
-export function resolveJsonlOcPath(ast: JsonlAst, path: OcPath) {
+type JsonlOcPathMatch =
+  | { readonly kind: "root"; readonly node: JsonlAst }
+  | { readonly kind: "line"; readonly node: JsonlLine }
+  | {
+      readonly kind: "value";
+      readonly node: JsoncValue;
+      readonly line: number;
+    }
+  | {
+      readonly kind: "object-entry";
+      readonly node: JsoncEntry;
+      readonly line: number;
+    };
+
+export function resolveJsonlOcPath(ast: JsonlAst, path: OcPath): JsonlOcPathMatch | null {
   // The first non-file segment is the line address (Lnnn or $last).
   const head = path.section;
   if (head === undefined) {
-    return { kind: "root", node: ast } as const;
+    return { kind: "root", node: ast };
   }
 
   const lineEntry = pickJsonlLine(ast, head);
@@ -34,7 +49,7 @@ export function resolveJsonlOcPath(ast: JsonlAst, path: OcPath) {
   }
 
   if (path.item === undefined && path.field === undefined) {
-    return { kind: "line", node: lineEntry } as const;
+    return { kind: "line", node: lineEntry };
   }
 
   if (lineEntry.kind !== "value") {
@@ -45,5 +60,5 @@ export function resolveJsonlOcPath(ast: JsonlAst, path: OcPath) {
   if (match === null) {
     return null;
   }
-  return { ...match, line: lineEntry.line } as const;
+  return { ...match, line: lineEntry.line };
 }

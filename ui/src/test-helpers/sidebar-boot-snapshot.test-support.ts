@@ -12,6 +12,7 @@ export function sidebarBootSnapshot(roster: BootRoster | null): SidebarSnapshotM
     pageScopeId: null,
     pinnedSessions: [],
     entries: [],
+    sessions: [],
     sections: [],
     cards: [],
     collapsedAgentIds: [],

@@ -12,8 +12,6 @@ const SKILL_WORKSHOP_ACTIONS = [
   "remove_file",
   "archive",
   "restore",
-  "draft",
-  "discard",
 ] as const;
 
 export const SkillWorkshopToolSchema = Type.Object(
@@ -38,9 +36,6 @@ export const SkillWorkshopToolSchema = Type.Object(
       Type.String({
         description: "One short line saying what changed and why; shown to the user.",
       }),
-    ),
-    draft: Type.Optional(
-      Type.String({ description: "view/discard: draft id from list (instead of name)." }),
     ),
     version: Type.Optional(
       Type.String({ description: "view/restore: version id; restore defaults to the newest." }),

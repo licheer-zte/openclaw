@@ -43,7 +43,7 @@ suite.define(() => {
           const choose = async () => {
             await page.getByRole("button", { name: "Add attachment", exact: true }).click();
             const mediaAction = page.getByRole("menuitem", {
-              name: "Media",
+              name: "Photos & videos",
               exact: true,
             });
             await mediaAction.waitFor({ state: "visible" });

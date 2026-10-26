@@ -342,7 +342,6 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
             provider: candidate,
             cacheKeyData: result.runtime?.cacheKeyData,
             aliases: result.runtime?.indexIdentityAliases,
-            documentPrefix: this.settings.inputFormat?.document,
           }).some(
             (identity) =>
               identity.provider === meta.provider &&

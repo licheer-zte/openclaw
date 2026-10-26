@@ -22,7 +22,6 @@ export function parseTeamShapeOptions(argv: string[]) {
       runs: { type: "string" },
       "settled-runs": { type: "boolean" },
       "team-stress": { type: "boolean" },
-      "auth-availability-storm": { type: "boolean" },
       approvals: { type: "string" },
       cron: { type: "string" },
       "cron-announce-last": { type: "boolean" },
@@ -130,7 +129,6 @@ export function parseTeamShapeOptions(argv: string[]) {
     retainedRuns,
     settledRuns: values["settled-runs"] ?? false,
     teamStress: values["team-stress"] ?? false,
-    authAvailabilityStorm: values["auth-availability-storm"] ?? false,
     localPlacements,
     approvals: integer("approvals", 200),
     cronJobs,
@@ -204,13 +202,7 @@ export async function generateTeamShapeFixture(options: ReturnType<typeof parseT
         : {}),
       agents: {
         ...(options.teamStress
-          ? {
-              ownership: "explicit" as const,
-              defaults: {
-                systemAgent: { agentId: "main" },
-                subagents: { archiveAfterMinutes: 24 * 60 },
-              },
-            }
+          ? { ownership: "explicit" as const, defaults: { systemAgent: { agentId: "main" } } }
           : {}),
         entries: Object.fromEntries(
           (options.teamStress ? ["main", "reviewer", "researcher", "planner"] : ["main"]).map(
@@ -246,14 +238,6 @@ export async function generateTeamShapeFixture(options: ReturnType<typeof parseT
     const state = stateDb.openOpenClawStateDatabase();
     let summary;
     try {
-      if (options.authAvailabilityStorm) {
-        const { upsertAuthProfileAsync } =
-          await import("../../src/agents/auth-profiles/profiles.js");
-        await upsertAuthProfileAsync({
-          profileId: "openai:auth-availability-storm",
-          credential: { type: "api_key", provider: "openai", key: "synthetic-availability-key" },
-        });
-      }
       const seeded = await seedTeamShapeSessions(options);
       const extras = await seedTeamShapeExtras({ ...options, sessions: seeded.sessions });
       agent.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");

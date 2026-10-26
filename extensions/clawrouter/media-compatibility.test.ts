@@ -1,25 +1,23 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import fs from "node:fs/promises";
 import { buffer as consumeBuffer } from "node:stream/consumers";
-import { describeImageFile } from "openclaw/plugin-sdk/media-understanding-runtime";
+import {
+  describeImageFile,
+  transcribeAudioFile,
+} from "openclaw/plugin-sdk/media-understanding-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { withServer, withTempHome } from "openclaw/plugin-sdk/test-env";
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import { withClawRouterAudioFixture } from "./audio-transcription.test-support.js";
 
-function imageModel(id: string, input: Array<"text" | "image">) {
-  return {
-    id,
-    name: id,
-    input,
-    reasoning: false,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    maxTokens: 1024,
-  };
-}
-
-it.each(["explicit image", "automatic image", "capability-less image"] as const)(
-  "preserves %s through the registered image runner",
-  async (selection) => {
+describe("ClawRouter configured media compatibility", () => {
+  it.each([
+    "explicit image",
+    "automatic image",
+    "capability-less image",
+    "native image",
+    "no image capability",
+  ] as const)("preserves %s through the registered image runner", async (selection) => {
     await withTempHome(
       async (home) => {
         const image = Buffer.from(
@@ -47,7 +45,21 @@ it.each(["explicit image", "automatic image", "capability-less image"] as const)
               }
               res.setHeader("content-type", "text/event-stream");
               res.end(
-                'data: {"id":"fixture","object":"chat.completion.chunk","created":0,"model":"gpt-4.1","choices":[{"index":0,"delta":{"role":"assistant","content":"synthetic image description"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+                "data: " +
+                  JSON.stringify({
+                    id: "fixture",
+                    object: "chat.completion.chunk",
+                    created: 0,
+                    model: "gpt-4.1",
+                    choices: [
+                      {
+                        index: 0,
+                        delta: { role: "assistant", content: "synthetic image description" },
+                        finish_reason: "stop",
+                      },
+                    ],
+                  }) +
+                  "\n\ndata: [DONE]\n\n",
               );
             })().catch((error: unknown) =>
               res.destroy(error instanceof Error ? error : new Error(String(error))),
@@ -64,8 +76,23 @@ it.each(["explicit image", "automatic image", "capability-less image"] as const)
                     apiKey: "fixture-router",
                     request: { allowPrivateNetwork: true },
                     models: [
-                      imageModel("gpt-4.1", ["text", "image"]),
-                      imageModel("fixture-text", ["text"]),
+                      {
+                        id: "gpt-4.1",
+                        name: "Fixture vision",
+                        reasoning: false,
+                        input: selection === "no image capability" ? ["text"] : ["text", "image"],
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                        contextWindow: 8192,
+                        maxTokens: 1024,
+                      },
+                      {
+                        id: "fixture-text",
+                        name: "Fixture text-only primary",
+                        input: ["text"],
+                        reasoning: false,
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                        maxTokens: 1024,
+                      },
                     ],
                   },
                 },
@@ -73,16 +100,21 @@ it.each(["explicit image", "automatic image", "capability-less image"] as const)
               tools: {
                 media: {
                   image: { enabled: true },
-                  models:
-                    selection === "explicit image" || selection === "capability-less image"
-                      ? [
+                  ...(selection === "automatic image" ||
+                  selection === "native image" ||
+                  selection === "no image capability"
+                    ? {}
+                    : {
+                        models: [
                           {
                             provider: "clawrouter",
                             model: "gpt-4.1",
-                            ...(selection === "explicit image" ? { capabilities: ["image"] } : {}),
+                            ...(selection === "explicit image"
+                              ? { capabilities: ["image" as const] }
+                              : {}),
                           },
-                        ]
-                      : undefined,
+                        ],
+                      }),
                 },
               },
             };
@@ -91,23 +123,63 @@ it.each(["explicit image", "automatic image", "capability-less image"] as const)
               agentDir,
               filePath,
               mime: "image/png",
-              activeModel: { provider: "clawrouter", model: "fixture-text" },
+              activeModel: {
+                provider: "clawrouter",
+                model: selection === "native image" ? "gpt-4.1" : "fixture-text",
+              },
             });
+            if (selection === "no image capability") {
+              expect(result.text).toBeUndefined();
+              expect(result.decision).toMatchObject({ outcome: "skipped" });
+              expect(requests.filter(({ url }) => url !== "/v1/catalog")).toHaveLength(0);
+              return;
+            }
+            if (selection === "native image") {
+              expect(result.text).toBeUndefined();
+              expect(result.decision).toMatchObject({
+                outcome: "skipped",
+                nativeVisionActive: true,
+                attachmentDispositions: { 0: { kind: "handed-to-native-vision" } },
+              });
+              expect(requests.filter(({ url }) => url !== "/v1/catalog")).toHaveLength(0);
+              return;
+            }
             expect(result).toMatchObject({
               text: "synthetic image description",
               provider: "clawrouter",
               model: "gpt-4.1",
             });
-            expect(requests.filter(({ url }) => url !== "/v1/catalog")).toEqual([
-              expect.objectContaining({
-                authorization: "Bearer fixture-router",
-                body: expect.objectContaining({ model: "gpt-4.1" }),
-              }),
-            ]);
+            const inference = requests.filter(({ url }) => url !== "/v1/catalog");
+            expect(inference).toHaveLength(1);
+            expect(inference[0]).toMatchObject({
+              authorization: "Bearer fixture-router",
+              body: { model: "gpt-4.1" },
+            });
           },
         );
       },
       { env: { CLAWROUTER_API_KEY: undefined, OPENAI_API_KEY: "fixture-decoy-never-router" } },
     );
-  },
-);
+  });
+
+  it("keeps a capability-less non-image shared entry out of audio selection", async () => {
+    await withClawRouterAudioFixture(async ({ cfg, filePath, requests }) => {
+      cfg.tools!.media!.models = [{ provider: "clawrouter", model: "legacy-chat-model" }];
+      cfg.plugins!.allow!.push("openai");
+      cfg.models!.providers!.openai = {
+        baseUrl: cfg.models!.providers!.clawrouter!.baseUrl + "/fallback",
+        apiKey: "fixture-fallback",
+        request: { allowPrivateNetwork: true },
+        models: [],
+      };
+      delete cfg.models!.providers!.clawrouter!.apiKey;
+      const result = await transcribeAudioFile({ cfg, filePath });
+      expect(result).toMatchObject({ text: "synthetic transcript", provider: "openai" });
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({
+        url: "/fallback/audio/transcriptions",
+        authorization: "Bearer fixture-fallback",
+      });
+    });
+  });
+});

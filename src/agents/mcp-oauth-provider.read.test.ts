@@ -139,7 +139,6 @@ it("rejects a retired captured store instead of reopening it for a read", async 
         // Read admission must reject before any lease verification can create state.
         lease: {
           signal: new AbortController().signal,
-          assertCurrent() {},
           async assertOwned() {},
           async renew() {},
         },

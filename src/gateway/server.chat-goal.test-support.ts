@@ -176,18 +176,3 @@ export function registerGoalChatOperationCollisionCases(fixture: {
     },
   );
 }
-
-export function goalAgentResult(sessionId: string, text: string) {
-  return {
-    payloads: [{ text }],
-    meta: {
-      durationMs: 0,
-      agentMeta: {
-        sessionId,
-        provider: "test",
-        model: "test",
-        usage: { input: 1, output: 1 },
-      },
-    },
-  };
-}

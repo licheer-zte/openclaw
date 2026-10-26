@@ -21,12 +21,16 @@ vi.mock("node:http", async (importOriginal) => {
 afterAll(() => vi.mocked(createServer).mockRestore());
 
 afterEach(async () => {
-  // Drain first so a cleanup failure cannot retain stale entries for the next case.
-  for (const [server] of listeners.splice(0)) {
-    server.closeAllConnections();
-    if (server.listening) {
-      await promisify(server.close.bind(server))();
+  try {
+    // Keep a failed cleanup assertion from leaking its real listener into later tests.
+    for (const [server] of listeners) {
+      server.closeAllConnections();
+      if (server.listening) {
+        await promisify(server.close.bind(server))();
+      }
     }
+  } finally {
+    listeners.length = 0;
   }
 });
 
@@ -35,6 +39,7 @@ async function preflight(fetchImpl: typeof fetch = fetch, timeoutMs?: number) {
   try {
     await assertUiE2ePreflight({ fetchImpl: request, timeoutMs });
   } finally {
+    expect(request).toHaveBeenCalledOnce();
     expect(request.mock.calls[0]?.[1]?.signal).toMatchObject({ aborted: true });
     expect(listeners).toHaveLength(1);
     const [server, closed] = listeners[0]!;

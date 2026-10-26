@@ -81,10 +81,6 @@ const buildDailyCsv = (daily: CostDailyEntry[]): string =>
     totalCost: (day) => usageCsvValue(day.totalCost, day.usageReport),
   });
 
-// The query parser splits on whitespace outside double quotes, so multiword values need quotes.
-const formatQueryToken = (key: string, value: string): string =>
-  /\s/u.test(value) ? `${key}:"${value}"` : `${key}:${value}`;
-
 const buildQuerySuggestions = (
   query: string,
   terms: ReturnType<typeof extractQueryTerms>,
@@ -131,10 +127,7 @@ const buildQuerySuggestions = (
   }
   return candidates
     .filter((candidate) => !value || normalizeLowercaseStringOrEmpty(candidate).includes(value))
-    .map((candidate) => ({
-      label: `${key}:${candidate}`,
-      value: formatQueryToken(key, candidate),
-    }));
+    .map((candidate) => ({ label: `${key}:${candidate}`, value: `${key}:${candidate}` }));
 };
 
 const applySuggestionToQuery = (query: string, suggestion: string): string => {
@@ -166,10 +159,7 @@ const setQueryTokensForKey = (query: string, key: string, values: string[]): str
       tokens.push(term.raw);
     }
   }
-  const next = [
-    ...tokens,
-    ...Array.from(remaining.values(), (value) => formatQueryToken(key, value)),
-  ];
+  const next = [...tokens, ...Array.from(remaining.values(), (value) => `${key}:${value}`)];
   return next.length ? `${next.join(" ")} ` : "";
 };
 

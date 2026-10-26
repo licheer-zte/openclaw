@@ -20,7 +20,9 @@ export function registerWindowsTaskAdmissionTests(
         scenario: "another principal",
         facts: { ...ownTask, taskUserSid: "S-1-5-21-111-222-333-1002" },
       },
+      { scenario: "SYSTEM principal", facts: { ...ownTask, taskUserSid: "S-1-5-18" } },
       { scenario: "highest privileges", facts: { ...ownTask, taskRunLevel: 1 } },
+      { scenario: "access denied" },
       { scenario: "timeout" },
       { scenario: "access denied", tag: "openclaw@2026.9.8" },
     ].map((row) => Object.assign({ tag: "2026.9.8" }, row)),
@@ -65,7 +67,7 @@ export function registerWindowsTaskAdmissionTests(
       const update = () => api.invokeUpdateCli({ tag, timeout: "2400", json: true });
       if (proceeds) {
         await update();
-        // Native HRESULTs must come from the adapter, not be invented from token type.
+        // The native adapter may report real HRESULTs, never invent one from token type.
         expect(queriedScript).not.toMatch(/Write-Output\s+['"]-2147024891['"]/);
         expect(queriedScript).toContain(".RunLevel");
         expect(queriedScript).toContain(".UserId");
@@ -95,6 +97,15 @@ export function registerWindowsTaskAdmissionTests(
         );
         expect(assertions.packageInstallCommandCall()).toBeUndefined();
       }
+      const probes = vi
+        .mocked(childProcess.spawnSync)
+        .mock.calls.filter(([, args]) => args?.includes("-EncodedCommand"));
+      expect(probes).toHaveLength(1);
+      expect(childProcess.spawnSync).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.arrayContaining(["-EncodedCommand"]),
+        expect.objectContaining({ timeout: 60_000 }),
+      );
     },
   );
 }

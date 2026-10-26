@@ -9,12 +9,14 @@ const fault = vi.hoisted(() => {
     error: undefined as Error | undefined,
     failProbe: true,
     removeSuffix: undefined as string | undefined,
+    targets: [] as string[],
   };
 });
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   const chmodSync: typeof actual.chmodSync = (target, mode) => {
+    fault.targets.push(String(target));
     if (fault.removeSuffix && String(target).endsWith(fault.removeSuffix)) {
       // Remove the file after existsSync reaches chmod to reproduce the exact race.
       actual.unlinkSync(String(target));
@@ -38,6 +40,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     fault.error = undefined;
     fault.failProbe = true;
     fault.removeSuffix = undefined;
+    fault.targets = [];
     closeOpenClawStateDatabaseForTest();
     cleanup();
   }),
@@ -56,9 +59,11 @@ function fixture(initialize = true) {
 it.skipIf(process.platform === "win32")("leaves already-private metadata unchanged", () => {
   const { pathname, env } = fixture();
   const before = fs.statSync(pathname, { bigint: true });
+  fault.targets = [];
 
   ensureOpenClawStatePermissions(pathname, env);
 
+  expect(fault.targets).toEqual([]);
   expect(fs.statSync(pathname, { bigint: true }).ctimeNs).toBe(before.ctimeNs);
 });
 
@@ -94,4 +99,5 @@ it.each(["-wal", ""])("handles a database file vanishing before chmod (suffix=%s
     // Losing the main file must not silently create an empty replacement.
     expect(() => openOpenClawStateDatabase(options)).toThrow(/ENOENT/);
   }
+  expect(fault.targets).toContain(target);
 });

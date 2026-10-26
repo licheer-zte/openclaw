@@ -427,7 +427,7 @@ function liveAuthority(getRuntimeConfig?: GatewayRequestContext["getRuntimeConfi
   };
 }
 
-describe("gateway send conversation ownership", () => {
+describe("gateway send mirroring", () => {
   let registrySeq = 0;
 
   beforeAll(async () => {
@@ -898,9 +898,9 @@ describe("gateway send conversation ownership", () => {
     expect(deliveryCall()).toMatchObject({
       channel: "whatsapp",
       replyToId: "media-parent",
-      session: { agentId: "work", policyKey: "agent:work:whatsapp:resolved" },
+      mirror: { text: " \tcaption" },
+      session: { agentId: "work", key: "agent:work:whatsapp:resolved" },
     });
-    expect(deliveryCall()?.session?.key).toBeUndefined();
     expect(deliveryCall()?.payloads).toEqual([
       {
         text: " \tcaption  \n\n",
@@ -1038,7 +1038,7 @@ describe("gateway send conversation ownership", () => {
     });
 
     expectFailure(respond, { code: ErrorCodes.UNAVAILABLE });
-    expect(deliveryCall()?.session?.policyKey).toBe("agent:main:main");
+    expect(deliveryCall()?.mirror?.sessionKey).toBe("agent:main:main");
   });
 
   it("carries an authenticated creator's required sandbox into an outbound session", async () =>
@@ -1122,9 +1122,9 @@ describe("gateway send conversation ownership", () => {
 
     expect(mocks.ensureOutboundSessionEntry).not.toHaveBeenCalled();
     expect(deliveryCall()).toMatchObject({
-      session: { agentId: "work", policyKey: "agent:work:slack:channel:c1" },
+      session: { agentId: "work", key: "agent:work:slack:channel:c1" },
+      mirror: { agentId: "work", sessionKey: "agent:work:slack:channel:c1" },
     });
-    expect(deliveryCall()?.session?.key).toBeUndefined();
   });
 
   it("rejects an explicit agentId that conflicts with the session key owner", async () => {

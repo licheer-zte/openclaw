@@ -1,43 +1,74 @@
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { expect, it, vi } from "vitest";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { resolveDebugProxySettings } from "./env.js";
 import { captureHttpExchangeAsync, finalizeDebugProxyCaptureAsync } from "./runtime.js";
-import { createDebugProxyCaptureStoreForContext } from "./store.async.js";
-import * as synchronousStore from "./store.sqlite.js";
 import type { CaptureEventRecord } from "./types.js";
 
-const fixture = vi.hoisted(() => {
-  const accepted = Promise.withResolvers<void>();
-  const failure = new Error("Retired capture lost its terminal write");
-  const state = { retired: false };
-  const record = vi.fn(async (_event: CaptureEventRecord) => {
-    if (state.retired) {
-      throw failure;
-    }
-    accepted.resolve();
-  });
-  return { state, accepted, failure, record, endSession: vi.fn().mockRejectedValue(failure) };
-});
+const fixture = vi.hoisted(() => ({
+  retired: false,
+  acquisitions: 0,
+  endSessions: 0,
+  terminalWrites: 0,
+  events: [] as CaptureEventRecord[],
+  lostTerminal: new Error("Retired capture lost its terminal write"),
+  requestAccepted: undefined as (() => void) | undefined,
+}));
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-});
+vi.mock("../state/openclaw-state-worker-context.js", () => ({
+  captureOpenClawStateWorkerContext: (): OpenClawStateWorkerContext => ({
+    admission: {
+      coordinationKey: "synthetic-capture",
+      databasePath: "/synthetic/capture.sqlite",
+      identity: { key: "synthetic-capture", canonicalPath: "/synthetic/capture.sqlite" },
+      assertCurrent: () => {},
+    },
+    environment: { OPENCLAW_STATE_DIR: "/synthetic" },
+  }),
+}));
+
+vi.mock("../state/openclaw-state-db-async-lifecycle.js", () => ({
+  getOpenClawDatabaseMaintenanceScope: () => undefined,
+}));
+
+vi.mock("./store.sqlite.js", () => ({
+  getDebugProxyCaptureStore: () => {
+    throw new Error("Retired capture must not acquire a synchronous store");
+  },
+  persistEventPayload: () => {
+    throw new Error("Retired capture must not persist synchronously");
+  },
+  safeJsonString: JSON.stringify,
+}));
 
 // mock-isolation: Drive retirement and lost terminal writes without opening a capture database.
 vi.mock("./store.async.js", () => ({
-  createDebugProxyCaptureStoreForContext: vi.fn(() => {
+  createDebugProxyCaptureStoreForContext: () => {
+    fixture.acquisitions += 1;
+    const record = async (event: CaptureEventRecord) => {
+      if (fixture.retired) {
+        fixture.terminalWrites += 1;
+        throw fixture.lostTerminal;
+      }
+      fixture.events.push(event);
+      fixture.requestAccepted?.();
+    };
     const release = async () => {
-      expect(fixture.state.retired, "canonical retirement precedes lease release").toBe(true);
+      expect(fixture.retired, "canonical retirement precedes lease release").toBe(true);
     };
     const store = {
+      dbPath: "/synthetic/capture.sqlite",
       get isClosed() {
-        return fixture.state.retired;
+        return fixture.retired;
       },
-      recordEventWithPayload: fixture.record,
-      endSession: fixture.endSession,
+      recordEvent: record,
+      recordEventWithPayload: record,
+      endSession: async () => {
+        fixture.endSessions += 1;
+        throw fixture.lostTerminal;
+      },
+      close: release,
     };
     return {
       store,
@@ -45,14 +76,14 @@ vi.mock("./store.async.js", () => ({
       runOperation: <T>(operation: (scope: typeof store) => Promise<T>) => operation(store),
       release,
     };
-  }),
+  },
 }));
 
 it("settles accepted capture and reports lost terminal writes after canonical retirement", async () => {
-  const synchronous = vi.spyOn(synchronousStore, "getDebugProxyCaptureStore");
-  vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("capture-retirement-"));
+  const requestAccepted = createDeferredCore();
+  fixture.requestAccepted = requestAccepted.resolve;
   const settings = {
-    ...resolveDebugProxySettings(),
+    ...resolveDebugProxySettings({ OPENCLAW_STATE_DIR: "/synthetic" }),
     enabled: true,
     sessionId: "retired-capture",
   };
@@ -65,22 +96,25 @@ it("settles accepted capture and reports lost terminal writes after canonical re
   void capturing.then(settled, settled);
 
   try {
-    await fixture.accepted.promise;
-    expect(fixture.record.mock.calls.map(([event]) => event.kind)).toEqual(["request"]);
+    await requestAccepted.promise;
+    expect(fixture.events).toMatchObject([{ kind: "request" }]);
     expect(settled).not.toHaveBeenCalled();
-    fixture.state.retired = true;
+    fixture.retired = true;
 
-    const error = await finalizeDebugProxyCaptureAsync(settings).catch((cause: unknown) => cause);
-    expect(error).toBeInstanceOf(AggregateError);
-    expect(collectNestedErrorCandidates(error)).toContain(fixture.failure);
+    const finalizationError = await finalizeDebugProxyCaptureAsync(settings).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(finalizationError).toBeInstanceOf(AggregateError);
+    expect(collectNestedErrorCandidates(finalizationError)).toContain(fixture.lostTerminal);
+    expect(fixture.terminalWrites).toBe(1);
     expect(settled).toHaveBeenCalledOnce();
-    await expect(capturing).rejects.toBe(fixture.failure);
-    expect(fixture.record.mock.calls.map(([event]) => event.kind)).toEqual(["request", "response"]);
-    expect(fixture.endSession).not.toHaveBeenCalled();
-    expect(createDebugProxyCaptureStoreForContext).toHaveBeenCalledOnce();
-    expect(synchronous).not.toHaveBeenCalled();
+    await expect(capturing).rejects.toBe(fixture.lostTerminal);
+    expect(fixture.endSessions).toBe(0);
+    expect(fixture.acquisitions).toBe(1);
+    expect(fixture.events).toHaveLength(1);
   } finally {
-    fixture.state.retired = true;
+    fixture.retired = true;
     await Promise.allSettled([capturing, finalizeDebugProxyCaptureAsync(settings)]);
     await response.body?.cancel();
   }

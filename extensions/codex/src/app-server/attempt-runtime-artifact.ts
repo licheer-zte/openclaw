@@ -1,10 +1,7 @@
 import type { AgentHarnessRuntimeArtifactBinding } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { retireSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
-
-const loadRuntimeArtifact = createLazyRuntimeModule(() => import("./runtime-artifact.js"));
 
 export async function verifyStartupArtifact(params: {
   client: CodexAppServerClient;
@@ -16,7 +13,7 @@ export async function verifyStartupArtifact(params: {
     return undefined;
   }
   const { readCodexAppServerClientRuntimeArtifact, validateCodexAppServerRuntimeArtifact } =
-    await loadRuntimeArtifact();
+    await import("./runtime-artifact.js");
   const runtimeArtifact = readCodexAppServerClientRuntimeArtifact(params.client);
   const expected = params.request.expected;
   const matchesExpected =

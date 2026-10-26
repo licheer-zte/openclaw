@@ -25,7 +25,6 @@ export function authorizeSessionDescribe(params: {
       return agent.error;
     }
     const row = projection.describe({ key: target.sessionKey, agentId: agent.agentId });
-    const identity = gatewayClientSessionCreator(params.client);
     const sharing = prepareProjectedSessionSharing({
       cfg: policyConfig,
       client: params.client,
@@ -33,9 +32,9 @@ export function authorizeSessionDescribe(params: {
     });
     if (
       row &&
-      identity &&
-      (sharing.sessionCap === "none" || sharing.sessionCap === "invited") &&
-      sharing.entryFilter?.(row.key, row.entry, row.membership.has(identity.id)) === false
+      gatewayClientSessionCreator(params.client) &&
+      sharing.sessionCap === "none" &&
+      !sharing.isCreator(row.entry.createdActor)
     ) {
       return hiddenSessionNotFound(target.sessionKey);
     }

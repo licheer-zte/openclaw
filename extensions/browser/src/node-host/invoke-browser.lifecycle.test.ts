@@ -62,7 +62,9 @@ beforeEach(() => {
   fixture.dispatch.mockClear();
 });
 
-afterEach(stop);
+afterEach(async () => {
+  await stop();
+});
 
 describe("browser proxy shared service lifecycle", () => {
   it("shares canonical startup and starts a new runtime after ordinary shutdown", async () => {
@@ -107,14 +109,10 @@ describe("browser proxy shared service lifecycle", () => {
   it.each([
     { browser: { enabled: false } },
     { plugins: { entries: { browser: { enabled: false } } } },
-  ])("refuses cold disabled configuration, then retries after enabling: %j", async (config) => {
-    const enabled = fixture.config;
+  ])("refuses cold disabled configuration before runtime creation: %j", async (config) => {
     fixture.config = { ...fixture.config, ...config };
     await expect(runBrowserProxyCommand(request)).rejects.toThrow("browser control disabled");
     expect(fixture.createRuntime).not.toHaveBeenCalled();
     expect(fixture.dispatch).not.toHaveBeenCalled();
-    fixture.config = enabled;
-    await expect(runBrowserProxyCommand(request)).resolves.toBe(response);
-    expect(fixture.createRuntime).toHaveBeenCalledOnce();
   });
 });

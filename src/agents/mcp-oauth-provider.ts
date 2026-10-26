@@ -30,13 +30,6 @@ export type McpOAuthLoginLifecycle = {
   onTokensSaved: () => void;
 };
 
-export class McpOAuthCredentialsRetainedError extends Error {
-  constructor() {
-    super("Existing authentication was retained. Use the CLI sign-in flow.");
-    this.name = "McpOAuthCredentialsRetainedError";
-  }
-}
-
 function resolveTokenExpiresAt(tokens: OAuthTokens): number | undefined {
   const expiresIn = tokens.expires_in;
   return typeof expiresIn === "number" && Number.isFinite(expiresIn)
@@ -310,7 +303,7 @@ export async function createMcpOAuthClientProvider(params: {
       params.login?.assertCurrent();
       params.refreshBoundary?.assertCanInvalidate();
       if (params.login) {
-        throw new McpOAuthCredentialsRetainedError();
+        throw new Error("Existing authentication was retained. Use the CLI sign-in flow.");
       }
       await updateStore({
         kind: "invalidate",

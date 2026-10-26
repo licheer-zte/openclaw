@@ -111,11 +111,12 @@ export async function arrangeLegacyStateMigrationFixture(deps: {
   deps.mockDoctorConfigSnapshot();
 
   const { doctorCommand } = await import("./doctor.js");
-  detectLegacyStateMigrations
-    .mockClear()
-    .mockResolvedValue(
-      createDetection({ hasLegacySessions: true, preview: ["- Legacy sessions detected"] }),
-    );
+  const runtime = createDoctorRuntime();
+
+  detectLegacyStateMigrations.mockClear();
+  detectLegacyStateMigrations.mockResolvedValue(
+    createDetection({ hasLegacySessions: true, preview: ["- Legacy sessions detected"] }),
+  );
   runLegacyStateMigrations.mockClear().mockResolvedValueOnce({
     changes: ["migrated"],
     warnings: [],
@@ -125,7 +126,7 @@ export async function arrangeLegacyStateMigrationFixture(deps: {
 
   return {
     doctorCommand,
-    runtime: createDoctorRuntime(),
+    runtime,
     detectLegacyStateMigrations,
     runLegacyStateMigrations,
   };

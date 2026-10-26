@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import { replaceConfigFile } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { setupCommand } from "./setup.js";
@@ -249,7 +248,11 @@ describe("setupCommand", () => {
 
         await fs.mkdir(configDir, { recursive: true });
         if (!fresh) {
-          await writeFixtureJson(configPath, { agents: { defaults: { workspace } } });
+          await fs.writeFile(
+            configPath,
+            JSON.stringify({ agents: { defaults: { workspace } } }),
+            "utf-8",
+          );
         }
         const sessionsDir = path.join(home, ".openclaw", "agents", "main", "sessions");
         const sessionMkdirCalls = () =>

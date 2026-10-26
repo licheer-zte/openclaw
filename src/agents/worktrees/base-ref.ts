@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { ignoreMissingPath } from "../../infra/errno.js";
 import {
   enqueueGitRefMutation,
@@ -17,13 +16,12 @@ import {
 } from "../../process/exec-result.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
-import { startWorktreeWait } from "./allocation.js";
 import { estimateWorktreeGitBytes } from "./capacity.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
 import { commandError, listGitWorktrees, requireGit, runGit } from "./git.js";
 import { timeWorktreePreparationPhase } from "./preparation-timing.js";
-import type { CreateManagedWorktreeParams, WorktreeWaitBudget } from "./types.js";
+import type { CreateManagedWorktreeParams } from "./types.js";
 
 const log = createSubsystemLogger("agents/worktrees");
 
@@ -41,14 +39,12 @@ type RemoteDefaultAttempt = {
   pending: Promise<ResolvedWorktreeBase & { branch?: string }>;
   forwarded?: boolean;
   refreshedAt?: number;
-  retired?: true;
 };
 type RemoteDefaultPreparation = { borrowers: number; attempt?: RemoteDefaultAttempt };
 export type WorktreeBasePreparation = (options: {
   signal?: AbortSignal;
   assertCurrent?: () => void;
   localDefault?: "preserve" | "fast-forward";
-  waitBudget?: WorktreeWaitBudget;
 }) => Promise<ResolvedWorktreeBase>;
 
 const remoteDefaults = resolveGlobalMap<string, RemoteDefaultPreparation>(
@@ -73,7 +69,6 @@ export async function resolveWorktreeCreationBase(
     "baseRef" | "checkoutCommit" | "signal" | "commitGuard" | "onProgress"
   > & {
     prepareBase?: WorktreeBasePreparation;
-    waitBudget?: WorktreeWaitBudget;
   },
 ): Promise<ResolvedWorktreeBase> {
   if (params.checkoutCommit) {
@@ -97,7 +92,6 @@ export async function resolveWorktreeCreationBase(
         signal: params.signal,
         assertCurrent: params.commitGuard,
         localDefault: "fast-forward",
-        waitBudget: params.waitBudget,
       })
     : await resolveWorktreeBase(
         repoRoot,
@@ -197,23 +191,15 @@ export async function withWorktreeBasePreparation<T>(
     signal,
     assertCurrent,
     localDefault = "preserve",
-    waitBudget,
   }) => {
-    let retirement: { error: unknown } | undefined;
-    let waiting: ReturnType<typeof startWorktreeWait> | undefined;
     const options = {
       signal,
       beforeRun: () => {
-        try {
-          if (!active) {
-            throw new Error("Worktree base preparation is closed");
-          }
-          options.signal?.throwIfAborted();
-          assertCurrent?.();
-        } catch (error) {
-          retirement = { error };
-          throw error;
+        if (!active) {
+          throw new Error("Worktree base preparation is closed");
         }
+        signal?.throwIfAborted();
+        assertCurrent?.();
       },
       env: { GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" },
     };
@@ -223,122 +209,63 @@ export async function withWorktreeBasePreparation<T>(
         if (hasWorktreeUnknownOutcome(error)) {
           throw error;
         }
-        const outcome = readCommandProcessFailure(error);
-        if (outcome?.cleanup === "uncertain") {
+        if (readCommandProcessFailure(error)?.cleanup === "uncertain") {
           throw new CommandProcessCleanupError({ cause: error });
-        }
-        // Only this phase owner's actual authority failure can retire its attempt.
-        // Normal signal cleanup includes cancellation before spawn or during Git's
-        // retry delay; stopped children also require the runner's abort receipt.
-        // A concurrent cancellation must not turn an unrelated Git error into a retry.
-        if (
-          (retirement && retirement.error === error) ||
-          (options.signal?.aborted &&
-            (error === options.signal.reason ||
-              (outcome?.termination === "signal" &&
-                !outcome.outputLimitExceeded &&
-                (outcome.cleanup === "normal" ||
-                  (outcome.killIssuedByAbort === true &&
-                    (outcome.cleanup === "cooperative" || outcome.cleanup === "forced"))))))
-        ) {
-          attempt.retired = true;
         }
         throw error;
       });
-    try {
-      for (;;) {
-        options.beforeRun();
-        let attempt = shared.attempt;
-        let ownsAttempt = false;
-        if (!attempt) {
-          ownsAttempt = true;
-          const started: RemoteDefaultAttempt = {
-            pending: timeWorktreePreparationPhase("baseRefresh", () =>
-              prepareDefaultBase(repository.repoRoot, options),
-            ).then(async (base) => {
-              // Immutable commits share hydration across refreshes while the Git worker lives.
-              const preparationKey = base.commit;
-              await timeWorktreePreparationPhase("baseHydration", () =>
-                estimateWorktreeGitBytes(repository.repoRoot, base.commit, {
-                  signal: options.signal,
-                  assertCurrent: options.beforeRun,
-                  preparationKey,
-                }),
-              );
-              base.preparationKey = preparationKey;
-              options.beforeRun();
-              if (base.fetchSucceeded) {
-                started.refreshedAt = Date.now();
-              }
-              return base;
-            }),
-          };
-          started.pending = settled(started, started.pending);
-          attempt = shared.attempt = started;
-        }
-        if (localDefault === "fast-forward" && !attempt.forwarded) {
-          ownsAttempt = true;
-          attempt.forwarded = true;
-          attempt.pending = settled(
-            attempt,
-            attempt.pending.then(async (base) => {
-              const { branch } = base;
-              const warning = branch
-                ? await timeWorktreePreparationPhase("baseFastForward", () =>
-                    fastForwardLocalDefault(repository, branch, base.commit, options),
-                  )
-                : undefined;
-              return warning
-                ? {
-                    ...base,
-                    warning: [base.warning, redactSensitiveText(warning)]
-                      .filter(Boolean)
-                      .join("\n"),
-                  }
-                : base;
+    options.beforeRun();
+    let attempt = shared.attempt;
+    if (!attempt) {
+      const started: RemoteDefaultAttempt = {
+        pending: timeWorktreePreparationPhase("baseRefresh", () =>
+          prepareDefaultBase(repository.repoRoot, options),
+        ).then(async (base) => {
+          // Immutable commits share hydration across refreshes while the Git worker lives.
+          const preparationKey = base.commit;
+          await timeWorktreePreparationPhase("baseHydration", () =>
+            estimateWorktreeGitBytes(repository.repoRoot, base.commit, {
+              signal,
+              assertCurrent: options.beforeRun,
+              preparationKey,
             }),
           );
-        }
-        try {
-          const selected = await timeWorktreePreparationPhase("baseWait", () =>
-            waiting && !ownsAttempt
-              ? racePromiseWithAbortSignal(
-                  attempt.pending,
-                  options.signal,
-                  (aborted) => aborted.reason,
-                )
-              : attempt.pending,
-          );
+          base.preparationKey = preparationKey;
           options.beforeRun();
-          const { branch: _branch, ...base } = selected;
+          if (base.fetchSucceeded) {
+            started.refreshedAt = Date.now();
+          }
           return base;
-        } catch (error) {
-          if (!attempt.retired || hasWorktreeUnknownOutcome(error)) {
-            throw error;
-          }
-          options.beforeRun();
-          if (!waiting) {
-            // Exceptional recovery consumes one remaining creation-wait interval,
-            // including every replacement; native work still owns its settlement.
-            waiting = startWorktreeWait(waitBudget);
-            if (waiting.waitMs === 0) {
-              throw new Error(
-                "Workspace creation timed out waiting for repository preparation. Retry creating the workspace.",
-                { cause: error },
-              );
-            }
-            const deadline = AbortSignal.timeout(waiting.waitMs);
-            options.signal = signal ? AbortSignal.any([signal, deadline]) : deadline;
-          }
-          // A later borrower may already have replaced exactly this settled attempt.
-          if (shared.attempt === attempt) {
-            shared.attempt = undefined;
-          }
-        }
-      }
-    } finally {
-      waiting?.end();
+        }),
+      };
+      started.pending = settled(started, started.pending);
+      attempt = shared.attempt = started;
     }
+    if (localDefault === "fast-forward" && !attempt.forwarded) {
+      attempt.forwarded = true;
+      attempt.pending = settled(
+        attempt,
+        attempt.pending.then(async (base) => {
+          const { branch } = base;
+          const warning = branch
+            ? await timeWorktreePreparationPhase("baseFastForward", () =>
+                fastForwardLocalDefault(repository, branch, base.commit, options),
+              )
+            : undefined;
+          return warning
+            ? {
+                ...base,
+                warning: [base.warning, redactSensitiveText(warning)].filter(Boolean).join("\n"),
+              }
+            : base;
+        }),
+      );
+    }
+    // A canceled creator fails its cohort; the next creation starts fresh after settlement.
+    const selected = await timeWorktreePreparationPhase("baseWait", () => attempt.pending);
+    options.beforeRun();
+    const { branch: _branch, ...base } = selected;
+    return base;
   };
   try {
     return await run((options) => {
@@ -381,20 +308,11 @@ async function fetchRemoteDefault(
     ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
     options,
   );
-  if (cached.cleanup === "uncertain") {
-    throw new CommandProcessCleanupError();
-  }
   const advertised = await runGit(repoRoot, ["ls-remote", "--symref", "origin", "HEAD"], {
     ...options,
     timeoutMs: 30_000,
   });
-  if (advertised.cleanup === "uncertain") {
-    throw new CommandProcessCleanupError();
-  }
-  if (options.signal?.aborted) {
-    requireGitCommandOutput("git ls-remote origin HEAD", advertised);
-    options.signal.throwIfAborted();
-  }
+  options.signal?.throwIfAborted();
   const advertisedOk = advertised.termination === "exit" && advertised.code === 0;
   const advertisedBranch = advertisedOk
     ? /^ref: refs\/heads\/(.+)\tHEAD\r?$/mu.exec(advertised.stdout)?.[1]
@@ -431,10 +349,7 @@ async function fetchRemoteDefault(
   if (fetched.cleanup === "uncertain") {
     throw new CommandProcessCleanupError();
   }
-  if (options.signal?.aborted) {
-    requireGitCommandOutput("git fetch origin default branch", fetched);
-    options.signal.throwIfAborted();
-  }
+  options.signal?.throwIfAborted();
   const fetchSucceeded = fetched.termination === "exit" && fetched.code === 0;
   if (!fetchSucceeded) {
     warnings.push(commandError("git fetch origin default branch", fetched).message);
@@ -446,13 +361,6 @@ async function fetchRemoteDefault(
     ["rev-parse", "--verify", `${remoteRef}^{commit}`],
     options,
   );
-  if (verified.cleanup === "uncertain") {
-    throw new CommandProcessCleanupError();
-  }
-  if (options.signal?.aborted) {
-    requireGitCommandOutput("git rev-parse remote default", verified);
-    options.signal.throwIfAborted();
-  }
   if (verified.termination !== "exit" || verified.code !== 0) {
     throw new Error(
       `Remote default ${remoteRef} is unavailable. Repair origin or choose an explicit worktree base ref. ${redactSensitiveText(warnings.join("\n"))}`,

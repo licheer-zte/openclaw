@@ -26,6 +26,7 @@ import { assertNoSystemLaunchDaemonOwnership } from "./launchd-system.js";
 import { formatLine, normalizeWindowsPathSeparators } from "./output.js";
 import { resolveDaemonHomeDir, resolveGatewayStateDir } from "./paths.js";
 import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
+import { preserveServicePolicyXml } from "./service-policy-xml.js";
 import {
   publishServiceFile,
   matchesServiceFilePublication,
@@ -446,7 +447,6 @@ export async function writeLaunchAgentPlist(
   });
 
   if (definitionTransaction.preservePolicy?.length) {
-    const { preserveServicePolicyXml } = await import("./service-policy-xml.js");
     plist = preserveServicePolicyXml(
       plist,
       await normalizeLaunchdPlistXml(await fs.readFile(plistPath)),

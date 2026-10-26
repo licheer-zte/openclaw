@@ -1,6 +1,6 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -10,52 +10,62 @@ import {
   appendSessionTranscriptMessageByIdentity,
   readSessionTranscriptEvents,
 } from "../plugin-sdk/session-transcript-runtime.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { aggregateSessionTranscriptUsage } from "./session-transcript-derived-readers.js";
 
-const zeroAssistant = {
-  role: "assistant",
-  provider: "ollama",
-  model: "llama3.2",
-  usage: {
-    input: 0,
-    output: 0,
-    totalTokens: 0,
-    contextUsage: { state: "available" as const, promptTokens: 0, totalTokens: 0 },
-  },
+const zeroUsage = {
+  input: 0,
+  output: 0,
+  totalTokens: 0,
+  contextUsage: { state: "available" as const, promptTokens: 0, totalTokens: 0 },
 };
-afterEach(clearRuntimeConfigSnapshot);
 
-it.each([
-  ["sqlite", true],
-  ["artifact", true],
-  ["artifact", false],
-] as const)(
-  "retains only authoritative zero usage from %s transcripts (report=%s)",
-  (source, authoritative) => {
-    const usageReport = authoritative ? { state: "available" } : undefined;
+it.each(["sqlite", "artifact"] as const)(
+  "retains authoritative zero usage from %s transcripts",
+  (source) => {
     const snapshot = aggregateSessionTranscriptUsage(
-      [{ ...zeroAssistant, usage: { ...zeroAssistant.usage, usageReport } }],
+      [
+        {
+          role: "assistant",
+          provider: "ollama",
+          model: "llama3.2",
+          usage: { ...zeroUsage, usageReport: { state: "available" } },
+        },
+      ],
       source,
     );
-    expect(snapshot).toMatchObject({ inputTokens: 0, outputTokens: 0 });
-    expect(snapshot?.totalTokens).toBe(authoritative ? 0 : undefined);
-    expect(snapshot?.totalTokensFresh).toBe(authoritative ? true : undefined);
-    expect(snapshot?.usageReport).toEqual(usageReport);
+    expect(snapshot).toMatchObject({
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      totalTokensFresh: true,
+      usageReport: { state: "available" },
+    });
   },
 );
 
+it("does not promote legacy artifact zero counters to a fresh context measurement", () => {
+  const snapshot = aggregateSessionTranscriptUsage(
+    [{ role: "assistant", provider: "ollama", model: "llama3.2", usage: zeroUsage }],
+    "artifact",
+  );
+  expect(snapshot?.totalTokens).toBeUndefined();
+  expect(snapshot?.totalTokensFresh).toBeUndefined();
+});
+
 it.each([321, 0, undefined])(
   "reads persisted compaction context %s without changing cumulative billing",
-  (tokensAfter) =>
-    withOpenClawTestState({ prefix: "compaction-usage-", applyEnv: false }, async (state) => {
-      const scope = {
-        agentId: "main",
-        sessionId: "compaction-session",
-        sessionKey: "agent:main:compaction",
-        storePath: path.join(state.root, "sessions.json"),
-      };
-      setRuntimeConfigSnapshot({});
+  async (tokensAfter) => {
+    const state = await createOpenClawTestState({ prefix: "compaction-usage-", applyEnv: false });
+    const scope = {
+      agentId: "main",
+      sessionId: "compaction-session",
+      sessionKey: "agent:main:compaction",
+      storePath: path.join(state.root, "sessions.json"),
+    };
+    setRuntimeConfigSnapshot({});
+    try {
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
       const append = (eventId: string, message: Record<string, unknown>) =>
         appendSessionTranscriptMessageByIdentity({ ...scope, eventId, message });
@@ -100,5 +110,10 @@ it.each([321, 0, undefined])(
         totalTokens: 400,
         totalTokensFresh: true,
       });
-    }),
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      await state.cleanup();
+      clearRuntimeConfigSnapshot();
+    }
+  },
 );

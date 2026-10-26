@@ -902,11 +902,6 @@ export function isTalkClientTranscriptParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").TalkClientTranscriptParamsSchema
 >;
-export function isTalkClientSayParams(
-  value: unknown,
-): value is import("typebox").Static<
-  typeof import("../../schema-modules.js").TalkClientSayParamsSchema
->;
 export function isTalkClientSteerParams(
   value: unknown,
 ): value is import("typebox").Static<

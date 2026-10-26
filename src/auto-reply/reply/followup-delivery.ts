@@ -67,6 +67,23 @@ import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import { buildWaitingStatusPayload } from "./waiting-status.js";
 
+type FollowupDeliveryDecision =
+  | {
+      kind: "deliver";
+      payloads: ReplyPayload[];
+      resolved?: { provider: string; model: string };
+    }
+  | {
+      kind: "suppress";
+      reason: "send-policy" | "room-event" | "silent" | "message-tool-only" | "aborted";
+    }
+  | {
+      kind: "retry-source-delivery";
+      run: FollowupRun;
+      finalTextLength: number;
+      resolved: { provider: string; model: string };
+    };
+
 function resolveFollowupPayloadContext(turn: AdmittedFollowupTurn) {
   return {
     cfg: turn.config,
@@ -98,16 +115,16 @@ export async function resolveFollowupDeliveryDecision(params: {
     diagnosticsPayload?: ReplyPayload;
   };
   opts?: InternalGetReplyOptions;
-}) {
+}): Promise<FollowupDeliveryDecision> {
   const { turn, execution, accounting, opts } = params;
   if (turn.sendPolicy === "deny") {
-    return { kind: "suppress" as const, reason: "send-policy" as const };
+    return { kind: "suppress", reason: "send-policy" };
   }
   if (
     turn.queued.currentInboundEventKind === "room_event" &&
     !isInternalMessageChannel(turn.queued.originatingChannel)
   ) {
-    return { kind: "suppress" as const, reason: "room-event" as const };
+    return { kind: "suppress", reason: "room-event" };
   }
   const sourcePolicy = resolveSourceReplyVisibilityPolicy({
     cfg: turn.config,
@@ -158,10 +175,10 @@ export async function resolveFollowupDeliveryDecision(params: {
         }),
       ]);
       if (payloads.length > 0) {
-        return { kind: "deliver" as const, payloads };
+        return { kind: "deliver", payloads };
       }
     }
-    return { kind: "suppress" as const, reason: "aborted" as const };
+    return { kind: "suppress", reason: "aborted" };
   }
   const postCompactionModelFailure = execution.outcome.postCompactionModelFailure;
   const renderFailurePayloads = (payloads: ReplyPayload[]) =>
@@ -172,14 +189,14 @@ export async function resolveFollowupDeliveryDecision(params: {
     );
   if (execution.outcome.kind === "rejected") {
     if (!isInteractive) {
-      return { kind: "suppress" as const, reason: "silent" as const };
+      return { kind: "suppress", reason: "silent" };
     }
     if (
       sourcePolicy.sourceReplyDeliveryMode === "message_tool_only" &&
       getReplyPayloadMetadata(execution.outcome.payload)?.deliverDespiteSourceReplySuppression !==
         true
     ) {
-      return { kind: "suppress" as const, reason: "message-tool-only" as const };
+      return { kind: "suppress", reason: "message-tool-only" };
     }
     const payloads = renderFailurePayloads(
       preparePayloads([execution.outcome.payload], {
@@ -189,14 +206,14 @@ export async function resolveFollowupDeliveryDecision(params: {
     );
     return payloads.length > 0
       ? {
-          kind: "deliver" as const,
+          kind: "deliver",
           payloads,
           resolved: execution.outcome.resolved,
         }
-      : { kind: "suppress" as const, reason: "silent" as const };
+      : { kind: "suppress", reason: "silent" };
   }
   if (!accounting) {
-    return { kind: "suppress" as const, reason: "silent" as const };
+    return { kind: "suppress", reason: "silent" };
   }
   const runtimeResolved = {
     provider: accounting.providerUsed,
@@ -246,7 +263,7 @@ export async function resolveFollowupDeliveryDecision(params: {
     authoredSilence,
   );
   if ((explicitSilence || automationNoChange) && sourcePayloads.length === 0) {
-    return { kind: "suppress" as const, reason: "silent" as const };
+    return { kind: "suppress", reason: "silent" };
   }
   const completedSourceDelivery = hasCompletedSourceReplyDeliveryEvidence(result);
   const hasLegacyMessagingToolEvidence =
@@ -290,7 +307,7 @@ export async function resolveFollowupDeliveryDecision(params: {
         });
   if (recovery.kind === "retry") {
     return {
-      kind: "retry-source-delivery" as const,
+      kind: "retry-source-delivery",
       run: recovery.run,
       finalTextLength: assistantFinalText.trim().length,
       resolved: runtimeResolved,
@@ -299,8 +316,8 @@ export async function resolveFollowupDeliveryDecision(params: {
   if (recovery.kind === "diagnostic") {
     const [payload] = preparePayloads([recovery.payload]);
     return payload
-      ? { kind: "deliver" as const, payloads: [payload], resolved: runtimeResolved }
-      : { kind: "suppress" as const, reason: "silent" as const };
+      ? { kind: "deliver", payloads: [payload], resolved: runtimeResolved }
+      : { kind: "suppress", reason: "silent" };
   }
   const hasTerminalPayload = payloads.some(
     (payload) =>
@@ -393,31 +410,35 @@ export async function resolveFollowupDeliveryDecision(params: {
       (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true,
     );
     if (payloads.length === 0) {
-      return { kind: "suppress" as const, reason: "message-tool-only" as const };
+      return { kind: "suppress", reason: "message-tool-only" };
     }
   }
   if (execution.outcome.automation) {
     payloads = retainAutomationReasoningWithFinal(payloads);
   }
   return payloads.length > 0
-    ? { kind: "deliver" as const, payloads, resolved: runtimeResolved }
-    : { kind: "suppress" as const, reason: "silent" as const };
+    ? { kind: "deliver", payloads, resolved: runtimeResolved }
+    : { kind: "suppress", reason: "silent" };
 }
 
+export type FollowupDeliveryResult =
+  | { kind: "completed" | "pending"; payloads: ReplyPayload[] }
+  | { kind: "source-retry" };
+
 export async function deliverFollowupDecision(params: {
-  decision: Awaited<ReturnType<typeof resolveFollowupDeliveryDecision>>;
+  decision: FollowupDeliveryDecision;
   turn: AdmittedFollowupTurn;
   defaults: FollowupRunnerParams;
   runId: string;
   runFollowup: (run: FollowupRun) => Promise<void>;
   kind?: ReplyDispatchKind;
   onObservedReplyDelivery?: () => Promise<void> | void;
-}) {
+}): Promise<FollowupDeliveryResult> {
   const { decision, turn, defaults } = params;
   if (decision.kind === "suppress") {
     turn.queued.run.internalEventExecution?.onSuppressed?.(decision.reason);
     logVerbose(`followup queue: delivery suppressed (${decision.reason})`);
-    return { kind: "completed" as const, payloads: [] };
+    return { kind: "completed", payloads: [] };
   }
   let payloads: ReplyPayload[];
   if (decision.kind === "retry-source-delivery") {
@@ -464,7 +485,7 @@ export async function deliverFollowupDecision(params: {
         },
       );
     if (enqueued) {
-      return { kind: "source-retry" as const };
+      return { kind: "source-retry" };
     }
     payloads = resolveFollowupDeliveryPayloads({
       ...resolveFollowupPayloadContext(turn),
@@ -490,12 +511,12 @@ export async function deliverFollowupDecision(params: {
   });
   payloads = payloads.filter((payload) => hasOutboundReplyContent(payload));
   if (payloads.length === 0) {
-    return { kind: "completed" as const, payloads: [] };
+    return { kind: "completed", payloads: [] };
   }
   const sourceDisposition = turn.queued.queuedFollowupReplyDisposition;
   if (sourceDisposition?.kind === "drop") {
     logVerbose(`followup queue: source delivery dropped (${sourceDisposition.reason})`);
-    return { kind: "completed" as const, payloads: [] };
+    return { kind: "completed", payloads: [] };
   }
   const deliverQueuedBatch = sourceDisposition?.deliver;
   if (turn.queued.run.internalEventExecution) {
@@ -511,7 +532,7 @@ export async function deliverFollowupDecision(params: {
         completion: { kind: "progress" },
       });
     }
-    return { kind: "completed" as const, payloads };
+    return { kind: "completed", payloads };
   }
   const fallbackDispatcher = sourceDisposition ? undefined : defaults.opts?.onBlockReply;
   const dispatcherAvailable = Boolean(deliverQueuedBatch || fallbackDispatcher);
@@ -519,7 +540,7 @@ export async function deliverFollowupDecision(params: {
     defaultRuntime.error?.(
       "followup queue: completed with payloads but no origin route or visible dispatcher is available",
     );
-    return { kind: "completed" as const, payloads: [] };
+    return { kind: "completed", payloads: [] };
   }
   const typing = createTypingSignaler({
     typing: defaults.typing,
@@ -694,8 +715,5 @@ export async function deliverFollowupDecision(params: {
       completion: { kind: "progress" },
     });
   }
-  return {
-    kind: pending ? ("pending" as const) : ("completed" as const),
-    payloads: queuedPayloads,
-  };
+  return { kind: pending ? "pending" : "completed", payloads: queuedPayloads };
 }

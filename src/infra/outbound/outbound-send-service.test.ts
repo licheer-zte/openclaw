@@ -15,9 +15,7 @@ const mocks = vi.hoisted(() => ({
   access: { localRoots: ["/agent"], readFile: async () => Buffer.from("capability") },
   resolveAccess:
     vi.fn<typeof import("../../media/read-capability.js").resolveAgentScopedOutboundMediaAccess>(),
-  commit: vi.fn<
-    typeof import("../../sessions/confirmed-visible-message.js").commitConfirmedVisibleMessage
-  >(async () => ({ ok: true })),
+  mirror: vi.fn(async () => ({ ok: true })),
 }));
 // mock-isolation: Exercise send-service routing without invoking real channel actions.
 vi.mock("../../channels/plugins/message-action-dispatch.js", () => ({
@@ -30,9 +28,9 @@ vi.mock("../../media/read-capability.js", () => ({
   createAgentScopedHostMediaReadFile: () => mocks.access.readFile,
   resolveAgentScopedOutboundMediaAccess: mocks.resolveAccess,
 }));
-// mock-isolation: Capture destination history without a session store.
-vi.mock("../../sessions/confirmed-visible-message.js", () => ({
-  commitConfirmedVisibleMessage: mocks.commit,
+vi.mock("../../config/sessions/transcript.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/transcript.runtime.js")>()),
+  appendAssistantMessageToSessionTranscript: mocks.mirror,
 }));
 
 type Send = Parameters<typeof executeSendAction>[0];
@@ -59,14 +57,7 @@ const requester = {
   requesterSenderE164: "+15551234567",
 };
 const sourceSession = "agent:main:directchat:group:ops";
-const transcriptRoute = {
-  sessionKey: "agent:main:demo:channel:123",
-  baseSessionKey: "agent:main:demo:channel:123",
-  peer: { kind: "channel" as const, id: "123" },
-  chatType: "channel" as const,
-  from: "demo:channel:123",
-  to: destination.to,
-};
+const mirror = { sessionKey: "agent:main:demo:channel:123", agentId: "main" };
 const chart: ReplyPayload["presentation"] = {
   blocks: [
     {
@@ -205,19 +196,14 @@ it.each([
       {
         channelPlugin: plugin(mode),
         params: { to: destination.to, presentation: value },
-        transcriptRoute,
+        mirror,
         input: { runId: "presentation" },
       },
       { message, payload },
     );
     expect(result.handledBy).toBe("core");
     expect(mocks.dispatch).not.toHaveBeenCalled();
-    expectCall(mocks.send, {
-      content,
-      payloads: [payload],
-      transcriptRoute,
-      runId: "presentation",
-    });
+    expectCall(mocks.send, { content, payloads: [payload], mirror, runId: "presentation" });
   },
 );
 
@@ -253,6 +239,7 @@ it.each([
         },
       }),
       params: { ...destination, components, presentation, replyTo: reply.replyToId },
+      mirror: { ...mirror, text: "Summary" },
     },
     { reply, message: "Summary", payload: { text: "Summary", presentation } },
   );
@@ -267,9 +254,7 @@ it.each([
     }),
   });
   expect(mocks.send).not.toHaveBeenCalled();
-  expectCall(mocks.commit, {
-    payload: expect.objectContaining({ text: "Summary\n\nPortable", presentation }),
-  });
+  expectCall(mocks.mirror, { ...mirror, text: "Summary\n\nPortable" });
 });
 
 it.each([
@@ -299,36 +284,14 @@ it("preserves explicitly supplied media access", async () => {
   });
 });
 
-it("records plain plugin sends with fallback media under their delivery identity", async () => {
+it("mirrors plain plugin sends with fallback media and idempotency intact", async () => {
   const mediaUrls = ["https://example.com/a.png", "https://example.com/b.png"];
-  const result = await send(
-    { transcriptRoute, idempotencyKey: "idem-plugin-send-1" },
-    { mediaUrls },
-  );
+  const target = { ...mirror, agentId: "agent-9", idempotencyKey: "idem-plugin-send-1" };
+  const result = await send({ mirror: target }, { mediaUrls });
   expect(result.handledBy).toBe("plugin");
   expect(result.deliveredText).toBeUndefined();
   expect(mocks.send).not.toHaveBeenCalled();
-  expectCall(mocks.commit, {
-    route: transcriptRoute,
-    payload: expect.objectContaining({ text: "hello", mediaUrls }),
-    deliveryId: "idem-plugin-send-1",
-    payloadIndex: 0,
-  });
-});
-
-it("keeps a confirmed plugin send when its history write fails", async () => {
-  mocks.commit.mockRejectedValueOnce(new Error("transcript unavailable"));
-  await expect(send()).resolves.toMatchObject({ handledBy: "plugin" });
-  expect(mocks.send).not.toHaveBeenCalled();
-});
-
-it("leaves destination history to a delegating client on both send paths", async () => {
-  const input = { callerRecordsDestinationHistory: true };
-  await send({ input });
-  expect(mocks.commit).not.toHaveBeenCalled();
-  mocks.dispatch.mockResolvedValueOnce(null);
-  await send({ input });
-  expectCall(mocks.send, { skipDestinationHistory: true });
+  expectCall(mocks.mirror, { ...target, text: "hello", mediaUrls });
 });
 
 it("bypasses plugin sends during dry runs", async () => {
@@ -419,7 +382,7 @@ it.each([false, true])("forwards core polls (dryRun: %s)", async (dryRun) => {
     ? { dryRun, silent: true, gateway, idempotencyKey: "stable-poll" }
     : {
         accountId: "acc-1",
-        input: { sessionKey: transcriptRoute.sessionKey, inboundEventKind: "room_event" as const },
+        input: { sessionKey: mirror.sessionKey, inboundEventKind: "room_event" as const },
       };
   await executePollAction({ ctx: context(policy), resolveCorePoll: () => corePoll });
   if (dryRun) {
@@ -429,10 +392,6 @@ it.each([false, true])("forwards core polls (dryRun: %s)", async (dryRun) => {
     ...corePoll,
     ...(dryRun
       ? { dryRun, silent: true, gateway, idempotencyKey: "stable-poll" }
-      : {
-          accountId: "acc-1",
-          sessionKey: transcriptRoute.sessionKey,
-          inboundEventKind: "room_event",
-        }),
+      : { accountId: "acc-1", sessionKey: mirror.sessionKey, inboundEventKind: "room_event" }),
   });
 });

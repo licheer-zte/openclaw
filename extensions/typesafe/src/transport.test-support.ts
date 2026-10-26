@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import type { IncomingMessage } from "node:http";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { vi } from "vitest";
@@ -32,7 +33,9 @@ export function stubAmbientProxies() {
 export function collectRequest(request: IncomingMessage, handle: (body: string) => void) {
   const chunks: Buffer[] = [];
   request.on("data", (chunk: Buffer) => chunks.push(chunk));
-  request.on("end", () => handle(Buffer.concat(chunks).toString("utf8")));
+  request.on("end", () => {
+    handle(Buffer.concat(chunks).toString("utf8"));
+  });
 }
 
 const choiceAnswer = (
@@ -102,7 +105,7 @@ export const mixedFixture = {
     },
   },
 };
-export function registeredPreparedDecisionProvider(
+export function registeredDecisionProvider(
   current: () => ReturnType<OpenClawPluginApi["runtime"]["config"]["current"]>,
 ) {
   const registerDecisionProvider = vi.fn<OpenClawPluginApi["registerDecisionProvider"]>();
@@ -110,17 +113,10 @@ export function registeredPreparedDecisionProvider(
     runtime: { config: { current } },
     registerDecisionProvider,
   } as unknown as OpenClawPluginApi);
-  const provider = registerDecisionProvider.mock.calls[0]![0];
+  const provider = registerDecisionProvider.mock.calls[0]?.[0];
+  assert(provider);
   if (provider.contractVersion !== 2) {
-    throw new Error("Expected the prepared TypeSafe provider");
+    throw new Error("TypeSafe fixture registered an unexpected decision contract");
   }
-  return provider;
-}
-
-export function registeredDecisionProvider(
-  current: () => ReturnType<OpenClawPluginApi["runtime"]["config"]["current"]>,
-) {
-  return legacyWireFixture(registeredPreparedDecisionProvider(current), () =>
-    resolveRuntimeConfig(current()),
-  );
+  return legacyWireFixture(provider, () => resolveRuntimeConfig(current()));
 }

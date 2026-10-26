@@ -1346,16 +1346,16 @@ describe("loadChatHistory retry handling", () => {
     },
   );
 
-  it("clears live tool cards for recorded content-block results", async () => {
+  it("clears live tool cards when history catches up with content-block tool ids", async () => {
     const persistedUser = userText("latest ask", { seq: 1 });
-    const persistedToolResult = {
+    const persistedToolCall = {
       role: "assistant",
-      content: [{ type: "toolResult", id: "call_1", name: "shell", text: "done" }],
+      content: [{ type: "toolCall", id: "call_1", name: "shell", arguments: {} }],
       timestamp: 2,
       __openclaw: { seq: 2 },
     };
     const state = createLiveToolHistoryState(
-      [persistedUser, persistedToolResult],
+      [persistedUser, persistedToolCall],
       "Still answering.",
       [toolCall("call_1")],
       [{ text: "before tool", ts: 1 }],
@@ -1364,7 +1364,7 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatMessages).toEqual([
       persistedUser,
       expect.objectContaining({ ...replyText("before tool"), timestamp: 1 }),
-      persistedToolResult,
+      persistedToolCall,
     ]);
     expect(state).toMatchObject({
       chatRunId: "run-1",

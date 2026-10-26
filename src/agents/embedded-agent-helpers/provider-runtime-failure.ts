@@ -14,6 +14,31 @@ import { isContextOverflowErrorFromTables } from "../failover/context-overflow-t
 import { matchesFormatErrorPattern, isTimeoutErrorMessage } from "../failover/message-patterns.js";
 import type { PreparedProviderFailoverOwner } from "../failover/provider-patterns.js";
 import type { FailoverSignal } from "../failover/signal.js";
+export type ProviderRuntimeFailureKind =
+  | "gateway_storage"
+  | "auth_scope"
+  | "auth_refresh"
+  | "refresh_timeout"
+  | "refresh_contention"
+  | "callback_timeout"
+  | "callback_validation"
+  | "auth_html"
+  /** Plain provider HTTP 401 auth failure that should not leak raw text to chat users. */
+  | "auth_invalid_token"
+  | "upstream_html"
+  | "proxy"
+  | "rate_limit"
+  | "dns"
+  | "timeout"
+  | "tls_certificate"
+  | "model_not_found"
+  | "schema"
+  | "sandbox_blocked"
+  | "replay_invalid"
+  | "empty_response"
+  | "no_error_details"
+  | "unclassified"
+  | "unknown";
 const AUTH_SCOPE_HINT_RE =
   /\b(?:missing|required|requires|insufficient)\s+(?:the\s+following\s+)?scopes?\b|\bmissing\s+scope\b/i;
 const AUTH_SCOPE_NAME_RE = /\b(?:api\.responses\.write|model\.request)\b/i;
@@ -72,22 +97,22 @@ function isOAuthRefreshContentionMessage(raw: string): boolean {
 export function classifyProviderRuntimeFailureKind(
   signal: FailoverSignal | string,
   opts?: { providerPlugin?: PreparedProviderFailoverOwner | null },
-) {
+): ProviderRuntimeFailureKind {
   const normalizedSignal = typeof signal === "string" ? { message: signal } : signal;
   if (classifyGatewayStorageFailure(normalizedSignal)) {
-    return "gateway_storage" as const;
+    return "gateway_storage";
   }
   const message = normalizedSignal.message?.trim() ?? "";
   const status = inferSignalStatus(normalizedSignal);
   const hasStructuredErrorSignal = Boolean(normalizedSignal.code || normalizedSignal.errorType);
   if (!message && typeof status !== "number" && !hasStructuredErrorSignal) {
-    return "empty_response" as const;
+    return "empty_response";
   }
   if (
     normalizedSignal.code === "refresh_contention" ||
     (message && isOAuthRefreshContentionMessage(message))
   ) {
-    return "refresh_contention" as const;
+    return "refresh_contention";
   }
   for (const [pattern, kind] of OAUTH_FAILURE_PATTERNS) {
     if (message && pattern.test(message)) {
@@ -95,13 +120,13 @@ export function classifyProviderRuntimeFailureKind(
     }
   }
   if (message && classifyOAuthRefreshFailure(message)) {
-    return "auth_refresh" as const;
+    return "auth_refresh";
   }
   if (message && isAuthScopeErrorMessage(message, status, normalizedSignal.provider)) {
-    return "auth_scope" as const;
+    return "auth_scope";
   }
   if (message && (status === 407 || PROXY_ERROR_RE.test(message))) {
-    return "proxy" as const;
+    return "proxy";
   }
   if (message && isHtmlErrorResponse(message, status)) {
     // Cloudflare challenge pages block programmatic requests at the CDN layer.
@@ -109,9 +134,9 @@ export function classifyProviderRuntimeFailureKind(
     // the more accurate "upstream_html" message, which already mentions
     // "CDN or gateway (e.g. Cloudflare) blocked the request".
     if (status === 403 && CLOUDFLARE_CHALLENGE_RE.test(message)) {
-      return "upstream_html" as const;
+      return "upstream_html";
     }
-    return status === 401 || status === 403 ? ("auth_html" as const) : ("upstream_html" as const);
+    return status === 401 || status === 403 ? "auth_html" : "upstream_html";
   }
   const failoverClassification = classifyFailoverSignal(
     { ...normalizedSignal, status, message: message || undefined },
@@ -128,13 +153,13 @@ export function classifyProviderRuntimeFailureKind(
       break;
   }
   if (message && DNS_ERROR_RE.test(message)) {
-    return "dns" as const;
+    return "dns";
   }
   if (message && (formatExecDeniedUserMessage(message) || SANDBOX_BLOCKED_RE.test(message))) {
-    return "sandbox_blocked" as const;
+    return "sandbox_blocked";
   }
   if (message && isReplayInvalidErrorMessage(message)) {
-    return "replay_invalid" as const;
+    return "replay_invalid";
   }
   const schemaOptions = message ? { ...opts, provider: normalizedSignal.provider } : undefined;
   // Schema copy requires message evidence, not a generic HTTP 400 classification.
@@ -144,9 +169,8 @@ export function classifyProviderRuntimeFailureKind(
     (classifyFailoverReason(message, schemaOptions) === "format" ||
       matchesFormatErrorPattern(message))
   ) {
-    return "schema" as const;
+    return "schema";
   }
-  /** Plain provider HTTP 401 auth failure that should not leak raw text to chat users. */
   // Plain HTTP 401 / invalid-token replies should be safe chat copy, but the
   // same failover reason also covers plain 403 and status-less auth payloads.
   // Require positive 401 evidence so we do not claim the wrong HTTP status.
@@ -162,10 +186,10 @@ export function classifyProviderRuntimeFailureKind(
     AUTH_INVALID_TOKEN_HINT_RE.test(message) &&
     !hasPermissionScopeSignal
   ) {
-    return "auth_invalid_token" as const;
+    return "auth_invalid_token";
   }
   if (failoverReason === "timeout" || failoverReason === "overloaded") {
-    return "timeout" as const;
+    return "timeout";
   }
   if (
     message &&
@@ -174,10 +198,10 @@ export function classifyProviderRuntimeFailureKind(
       (status !== undefined &&
         [408, 499, 500, 502, 503, 504, 521, 522, 523, 524, 529].includes(status)))
   ) {
-    return "timeout" as const;
+    return "timeout";
   }
   if (message && isExactUnknownNoDetailsError(message)) {
-    return "no_error_details" as const;
+    return "no_error_details";
   }
-  return "unclassified" as const;
+  return "unclassified";
 }

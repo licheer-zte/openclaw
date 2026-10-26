@@ -61,23 +61,16 @@ function expectPage(
   );
 }
 
-type ObservedQuery = { columns: string[]; expandedSQL: string };
-
 function observeQueries(nativeDb: ReturnType<typeof requireNativeSqliteDatabase>) {
   const prototype: StatementSync = Object.getPrototypeOf(nativeDb.prepare("SELECT 1"));
-  const statements = new Map<StatementSync, ObservedQuery>();
+  const statements = new Set<StatementSync>();
   const observers = (["all", "get", "iterate"] as const).map((method) => {
     const original = prototype[method];
     return vi.spyOn(prototype, method).mockImplementation(
       new Proxy(original, {
         apply(invoke, statement: StatementSync, args) {
-          const result = Reflect.apply(invoke, statement, args);
-          // Snapshot bound metadata before the executor releases the native statement.
-          statements.set(statement, {
-            columns: statement.columns().map(({ name }) => name),
-            expandedSQL: statement.expandedSQL,
-          });
-          return result;
+          statements.add(statement);
+          return Reflect.apply(invoke, statement, args);
         },
       }),
     );
@@ -85,10 +78,10 @@ function observeQueries(nativeDb: ReturnType<typeof requireNativeSqliteDatabase>
   return {
     statements,
     restore: () => observers.forEach((observer) => observer.mockRestore()),
-    plans: (selected: Iterable<ObservedQuery> = statements.values()) =>
-      [...selected].flatMap(({ expandedSQL }) =>
+    plans: (selected: Iterable<StatementSync> = statements) =>
+      [...selected].flatMap((statement) =>
         nativeDb
-          .prepare(`EXPLAIN QUERY PLAN ${expandedSQL}`)
+          .prepare(`EXPLAIN QUERY PLAN ${statement.expandedSQL}`)
           .all()
           .map(({ detail }) => detail),
       ),
@@ -113,12 +106,14 @@ function readHistoryWithQueryPlans(
     observed.restore();
   }
   const select = (matches: (columns: string[]) => boolean) =>
-    [...observed.statements.values()].filter(({ columns }) => matches(columns));
+    [...observed.statements].filter((statement) =>
+      matches(statement.columns().map(({ name }) => name)),
+    );
   const markers = select((columns) => columns.includes("following_message_position"));
   const anchors = select(
     (columns) => columns.length === 2 && columns.includes("event_id") && columns.includes("seq"),
   );
-  const searches = (statements: ObservedQuery[]) =>
+  const searches = (statements: StatementSync[]) =>
     observed
       .plans(statements)
       .filter((detail) => typeof detail === "string" && detail.startsWith("SEARCH "));

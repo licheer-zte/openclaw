@@ -18,14 +18,14 @@ import { migrateLegacyAcpSessionMetadata } from "./state-migrations.session-stor
 
 it.each(["plugin", "none", "matching", "different", "unbound"] as const)(
   "migrates ACP ownership with %s canonical metadata",
-  (currentBinding) =>
-    withOpenClawTestState({ label: "acp-owner-import" }, async (state) => {
+  async (currentBinding) => {
+    await withOpenClawTestState({ label: "acp-owner-import" }, async (state) => {
       const plugin = currentBinding === "plugin";
-      const agentId = "ops";
-      const sessionId = "session";
+      const agentId = plugin ? "voice" : "ops";
+      const sessionId = plugin ? "plugin-session" : "configured-binding-session";
       // Keep configured bindings ineligible for the later free-ACP alias repair.
       const sessionKey = plugin
-        ? "agent:ops:acp:session"
+        ? "agent:voice:acp:plugin-session"
         : "agent:ops:acp:binding:discord:default:af00112233445566";
       const cfg: OpenClawConfig = {
         agents: {
@@ -43,10 +43,10 @@ it.each(["plugin", "none", "matching", "different", "unbound"] as const)(
         mode: "persistent",
         state: "idle",
         lastActivityAt: 100,
-        runtimeSessionName: "legacy-runtime",
+        runtimeSessionName: plugin ? "plugin-owner-runtime" : "legacy-binding-runtime",
       };
       const storePath = await state.writeJson(
-        plugin ? "plugin-sessions/ops.json" : `agents/${agentId}/sessions/sessions.json`,
+        plugin ? "plugin-sessions/voice.json" : `agents/${agentId}/sessions/sessions.json`,
         { [sessionKey]: { sessionId, updatedAt: 100, acp: meta } },
       );
       const databaseKey = buildAcpDatabaseSessionKey(sessionKey, agentId);
@@ -62,7 +62,10 @@ it.each(["plugin", "none", "matching", "different", "unbound"] as const)(
         });
       if (plugin) {
         // Custom plugin stores are outside the canonical roster and directory scan.
-        expect((await run()).warnings).toEqual([]);
+        expect(await run()).toEqual({
+          changes: ["Migrated 1 ACP session metadata row → shared SQLite state"],
+          warnings: [],
+        });
         expect(row()).toMatchObject({
           session_id: sessionId,
           runtime_session_name: meta.runtimeSessionName,
@@ -129,14 +132,22 @@ it.each(["plugin", "none", "matching", "different", "unbound"] as const)(
         env: state.env,
         pluginId: "acpx",
       });
-      const expected = { agentId, sessionKey, binding: { sessionId }, meta: expectedMeta };
-      expect(claims).toMatchObject({ incomplete: [], claims: [expected] });
-      expect(claims.claims[0]?.meta).toEqual(expectedMeta);
+      expect(claims.incomplete).toEqual([]);
+      expect(claims.claims).toEqual([
+        expect.objectContaining({
+          agentId,
+          sessionKey,
+          binding: expect.objectContaining({ sessionId }),
+          meta: expectedMeta,
+        }),
+      ]);
+      expect(row()?.runtime_session_name).toBe(expectedMeta.runtimeSessionName);
       expect(row(sessionKey)).toBeUndefined();
       await expect(
         loadSessionTranscriptEvents({ agentId, sessionKey, sessionId, storePath, env: state.env }),
       ).resolves.toContainEqual(message);
       await expect(run()).resolves.toEqual({ changes: [], warnings: [] });
       expect(fs.existsSync(path.join(path.dirname(storePath), `${sessionId}.jsonl`))).toBe(false);
-    }),
+    });
+  },
 );

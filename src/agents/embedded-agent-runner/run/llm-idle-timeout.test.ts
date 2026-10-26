@@ -128,18 +128,11 @@ describe("streamWithIdleTimeout", () => {
     expect(onIdleTimeout).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { event: "acceptance", firstEventTimeoutMs: 50 },
-    { event: "activity", firstEventTimeoutMs: 50 },
-    { event: "acceptance", firstEventTimeoutMs: 200 },
-    { event: "activity", firstEventTimeoutMs: 200 },
-  ] as const)(
-    "guards a pending factory after $event with a $firstEventTimeoutMs ms creation budget",
-    async ({ event, firstEventTimeoutMs }) => {
+  it.each(["acceptance", "activity"] as const)(
+    "guards a pending cloud factory after provider %s without policing local gaps",
+    async (event) => {
       vi.useFakeTimers();
-      const timers = vi.spyOn(globalThis, "setTimeout");
       for (const scope of ["creation-and-gaps", "creation-only"] as const) {
-        timers.mockClear();
         const caller = new AbortController();
         const created = createDeferred<AssistantMessageEventStream>();
         const source = createAssistantMessageEventStream();
@@ -156,7 +149,7 @@ describe("streamWithIdleTimeout", () => {
         };
         const options: NonNullable<Parameters<StreamFn>[2]> & FirstStreamEventInternalOptions = {
           signal: caller.signal,
-          firstEventTimeoutMs,
+          firstEventTimeoutMs: 200,
         };
         const opening = Promise.resolve(
           streamWithIdleTimeout(baseFn, 50, onIdleTimeout, { scope })(
@@ -168,9 +161,6 @@ describe("streamWithIdleTimeout", () => {
         try {
           await vi.advanceTimersByTimeAsync(20);
           await accept();
-          expect(timers).toHaveBeenCalledTimes(
-            scope === "creation-and-gaps" && firstEventTimeoutMs !== 50 ? 2 : 1,
-          );
           await vi.advanceTimersByTimeAsync(49);
           expect(onIdleTimeout).not.toHaveBeenCalled();
           await vi.advanceTimersByTimeAsync(1);
@@ -539,13 +529,9 @@ describe("streamWithIdleTimeout caller cancellation", () => {
     },
   );
 
-  it.each([
-    { alreadyAborted: false, accepted: false },
-    { alreadyAborted: true, accepted: false },
-    { alreadyAborted: false, accepted: true },
-  ])(
-    "preempts provider stream creation (already aborted: $alreadyAborted, accepted: $accepted)",
-    async ({ alreadyAborted, accepted }) => {
+  it.each([false, true])(
+    "preempts provider stream creation (already aborted: %s)",
+    async (alreadyAborted) => {
       vi.useFakeTimers();
       const callerAbortController = new AbortController();
       const callerReason = new Error("caller cancelled");
@@ -565,13 +551,6 @@ describe("streamWithIdleTimeout caller cancellation", () => {
         {} as Parameters<typeof baseFn>[1],
         { signal: callerAbortController.signal },
       );
-      const providerSignal = (
-        baseFnMock.mock.calls.at(0)?.[2] as { signal?: AbortSignal } | undefined
-      )?.signal;
-      if (accepted) {
-        await vi.advanceTimersByTimeAsync(20);
-        notifyLlmRequestActivity(providerSignal);
-      }
 
       callerAbortController.abort(callerReason);
 
@@ -581,6 +560,9 @@ describe("streamWithIdleTimeout caller cancellation", () => {
         cause: callerReason,
       });
       await vi.advanceTimersByTimeAsync(50);
+      const providerSignal = (
+        baseFnMock.mock.calls.at(0)?.[2] as { signal?: AbortSignal } | undefined
+      )?.signal;
       expect([providerSignal?.reason, onIdleTimeout.mock.calls.length]).toEqual([callerReason, 0]);
     },
   );

@@ -1,7 +1,10 @@
 import path from "node:path";
 import { afterEach, beforeEach } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessageSync,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -50,6 +53,19 @@ export function useSessionStoreFixture(prefix: string): () => string {
 export function seedSessionEntries(storePath: string, entries: Record<string, SessionEntry>): void {
   for (const [sessionKey, entry] of Object.entries(entries)) {
     replaceSessionEntrySync({ sessionKey, storePath }, entry);
+  }
+}
+
+export function appendTranscriptMessages(params: {
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+  messages: unknown[];
+  agentId?: string;
+}) {
+  const { messages, agentId, ...target } = params;
+  for (const message of messages) {
+    appendTranscriptMessageSync({ ...target, agentId: agentId ?? "main" }, { message });
   }
 }
 

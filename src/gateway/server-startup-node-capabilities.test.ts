@@ -13,7 +13,6 @@ import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { createGatewayKernel } from "./server-kernel.js";
 import type { GatewayServer } from "./server-public.js";
 import * as fixture from "./server-startup-state.test-support.js";
-import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 import { gatewayTestTextTransport } from "./server/connection-transport.test-support.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { startClaimedGateway } from "./test-helpers.listener.js";
@@ -51,7 +50,9 @@ it("reconnects affected nodes when plugins attach after their handshake", async 
     });
     const peer = new WebSocket(`ws://127.0.0.1:${address.port}`);
     peerSockets.push(peer);
-    const closed = once(peer, "close").then(([code, reason]) => ({ code, reason: String(reason) }));
+    const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+      peer.once("close", (code, reason) => resolve({ code, reason: reason.toString() }));
+    });
     await once(peer, "open");
     const socket = await accepted;
     const client: GatewayWsClient = {
@@ -59,12 +60,10 @@ it("reconnects affected nodes when plugins attach after their handshake", async 
       connId: name,
       usesSharedGatewayAuth: false,
       connect: {
-        ...gatewayConnect(
-          undefined,
-          { id: "openclaw-macos", platform: "darwin", mode: "node" },
-          PROTOCOL_VERSION,
-          role,
-        ),
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: { id: "openclaw-macos", version: "test", platform: "darwin", mode: "node" },
+        role,
         caps,
       },
       pluginNodeCapabilitySurfaces: {},
@@ -76,15 +75,7 @@ it("reconnects affected nodes when plugins attach after their handshake", async 
   const operator = await connectPeer("operator", "operator", ["files"]);
   const peers = [affected, unaffected, operator];
   let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
-  let server: GatewayServer | undefined = undefined;
-  await using cleanup = new AsyncDisposableStack();
-  cleanup.defer(() => state.cleanup());
-  cleanup.defer(() => restoreActivePluginRegistrySnapshot(previousRegistry));
-  cleanup.defer(() => {
-    vi.restoreAllMocks();
-  });
-  cleanup.defer(() => server?.close());
-  cleanup.defer(() => kernel?.clients.clear());
+  let server: GatewayServer | undefined;
   let databaseReady = false;
   vi.spyOn(
     await import("./server-agent-database-startup.js"),
@@ -98,6 +89,7 @@ it("reconnects affected nodes when plugins attach after their handshake", async 
   vi.spyOn(await import("./server-kernel.js"), "createGatewayKernel").mockImplementation(
     async (...args) => {
       kernel = await createKernel(...args);
+      expect(kernel.workerPlacementRuntime).toBeDefined();
       vi.spyOn(kernel.workerPlacementRuntime!, "startRuntime").mockImplementation(async () => {
         await Promise.resolve();
         expect(databaseReady).toBe(true);
@@ -122,24 +114,35 @@ it("reconnects affected nodes when plugins attach after their handshake", async 
       subagentRecoverySettled: Promise.resolve(),
     };
   });
-  const token = "startup-node-capability-token";
-  const claim = await acquireTestPortBlock({ offsets: [0] });
-  server = await startClaimedGateway(claim, async () => {
-    await state.writeConfig({
-      gateway: fixture.gatewayStartupTestConfig(claim.port, token),
+  try {
+    const token = "startup-node-capability-token";
+    const claim = await acquireTestPortBlock({ offsets: [0] });
+    server = await startClaimedGateway(claim, async () => {
+      await state.writeConfig({
+        gateway: fixture.gatewayStartupTestConfig(claim.port, token),
+      });
+      state.applyEnv();
+      stageActivePluginRegistry(createEmptyPluginRegistry(), null, "default");
+      const { startGatewayServerCore } = await import("./server-start.js");
+      return await withAgentDatabaseStartupAdmission(() =>
+        startGatewayServerCore(claim.port, fixture.gatewayStartupTestOptions(token)),
+      );
     });
-    state.applyEnv();
-    stageActivePluginRegistry(createEmptyPluginRegistry(), null, "default");
-    const { startGatewayServerCore } = await import("./server-start.js");
-    return await withAgentDatabaseStartupAdmission(() =>
-      startGatewayServerCore(claim.port, fixture.gatewayStartupTestOptions(token)),
-    );
-  });
-  expect(affected.client.invalidated).toBe(true);
-  await expect(affected.closed).resolves.toEqual({
-    code: 1012,
-    reason: "node capabilities changed",
-  });
-  expect(unaffected.client.socket.readyState).toBe(WebSocket.OPEN);
-  expect(operator.client.socket.readyState).toBe(WebSocket.OPEN);
+    expect(affected.client.invalidated).toBe(true);
+    await expect(affected.closed).resolves.toEqual({
+      code: 1012,
+      reason: "node capabilities changed",
+    });
+    expect(unaffected.client.socket.readyState).toBe(WebSocket.OPEN);
+    expect(operator.client.socket.readyState).toBe(WebSocket.OPEN);
+  } finally {
+    kernel?.clients.clear();
+    try {
+      await server?.close();
+    } finally {
+      vi.restoreAllMocks();
+      restoreActivePluginRegistrySnapshot(previousRegistry);
+      await state.cleanup();
+    }
+  }
 });

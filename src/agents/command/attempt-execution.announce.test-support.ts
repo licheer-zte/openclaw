@@ -5,7 +5,6 @@ import type { AgentCommandOpts } from "./types.js";
 
 const CHILD_SESSION_KEY = "agent:main:subagent:child";
 const REQUESTER_TOOLS = ["read", "exec", "sessions_spawn", "message"];
-type HandoffTarget = Omit<NonNullable<AgentCommandOpts["trustedInternalHandoff"]>, "kind">;
 type AnnounceToolOptions = {
   sourceReplyDeliveryMode: "automatic" | "message_tool_only";
   disableMessageTool?: boolean;
@@ -17,7 +16,7 @@ type AnnounceToolOptions = {
 };
 
 export function createCompletionHandoff(
-  target: HandoffTarget,
+  target: Omit<NonNullable<AgentCommandOpts["trustedInternalHandoff"]>, "kind">,
 ): Pick<AgentCommandOpts, "trustedInternalHandoff" | "inputProvenance" | "internalEvents"> {
   return {
     trustedInternalHandoff: { kind: "subagent-completion", ...target },
@@ -56,8 +55,12 @@ export function createSubagentAnnounceConfig(
 }
 
 export function createSubagentAnnounceHandoffOptions(
-  params: AnnounceToolOptions &
-    Omit<HandoffTarget, "sourceSessionKey" | "sourceSessionId" | "settleBatch">,
+  params: AnnounceToolOptions & {
+    targetSessionKey: string;
+    targetSessionId: string;
+    provider: string;
+    model: string;
+  },
 ): Partial<AgentCommandOpts> {
   const { trustedInternalHandoff, ...handoff } = createCompletionHandoff({
     sourceSessionKey: CHILD_SESSION_KEY,
@@ -131,12 +134,14 @@ export const SUBAGENT_ANNOUNCE_CLAUDE_CLI_DELIVERY_CASES = [
     inheritedToolDeny: ["message"],
   }),
   deliveryCase("a current operator message deny", { operatorTools: { deny: ["message"] } }),
-  ...(["all", "non-main"] as const).map((sandboxMode) =>
-    deliveryCase(`a ${sandboxMode} sandbox message deny`, {
-      operatorTools: { sandbox: { tools: { deny: ["message"] } } },
-      sandboxMode,
-    }),
-  ),
+  deliveryCase("an active sandbox message deny", {
+    operatorTools: { sandbox: { tools: { deny: ["message"] } } },
+    sandboxMode: "all",
+  }),
+  deliveryCase("a non-main sandbox message deny", {
+    operatorTools: { sandbox: { tools: { deny: ["message"] } } },
+    sandboxMode: "non-main",
+  }),
   deliveryCase("an empty runtime allowlist", { runtimeToolsAllow: [] }),
   deliveryCase("an intersected runtime allowlist excluding message", {
     runtimeToolsAllow: attachToolAllowlistIntersection(["*", "message"], [["*"], ["read"]]),

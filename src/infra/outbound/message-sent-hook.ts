@@ -8,6 +8,7 @@ import {
 } from "../../hooks/message-hook-mappers.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { DeliveryMirror } from "./mirror.js";
 import type { PreparedOutboundBatch } from "./prepared-batch.js";
 import type { OutboundSessionContext } from "./session-context.js";
 
@@ -90,12 +91,13 @@ export function createOutboundMessageSentEmitter(
     channel: string;
     to: string;
     accountId?: string;
+    mirror?: DeliveryMirror;
     session?: OutboundSessionContext;
     preparedBatch?: PreparedOutboundBatch;
   },
   logPrefix: string,
 ) {
-  const sessionKeyForInternalHooks = params.session?.key;
+  const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
   return {
     ...createMessageSentEmitter({
       hookRunner: getGlobalHookRunner(),
@@ -103,7 +105,8 @@ export function createOutboundMessageSentEmitter(
       to: params.to,
       accountId: params.accountId,
       sessionKeyForInternalHooks,
-      isGroup: params.session?.conversationType === "group",
+      isGroup: params.mirror?.isGroup,
+      groupId: params.mirror?.groupId,
       runId: params.preparedBatch?.runId,
       logPrefix,
     }),

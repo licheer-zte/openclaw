@@ -507,8 +507,7 @@ export type StageContext = {
   routeAgentId: string;
   agentDir: string;
   workspace: string;
-  /** Caller authority ends once configPersisted is set; saved activation then completes. */
-  effects: { credentialsSaved: boolean; configPersisted: boolean };
+  effects: { credentialsSaved: boolean };
   beforePersistentEffect: (effect?: "credential") => Promise<void>;
 };
 

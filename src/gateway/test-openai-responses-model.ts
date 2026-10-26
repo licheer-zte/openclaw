@@ -8,11 +8,7 @@ type MockOpenAiResponsesProviderConfig = Omit<ModelProviderConfig, "models"> & {
   models: [ModelDefinitionConfig];
 };
 
-export function buildOpenAiResponsesTestModel(
-  id = "gpt-5.4",
-  contextWindow = 128_000,
-  maxTokens = 4096,
-): ModelDefinitionConfig {
+function buildOpenAiResponsesTestModel(id = "gpt-5.4"): ModelDefinitionConfig {
   return {
     id,
     name: id,
@@ -20,8 +16,8 @@ export function buildOpenAiResponsesTestModel(
     reasoning: false,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow,
-    maxTokens,
+    contextWindow: 128_000,
+    maxTokens: 4096,
   };
 }
 

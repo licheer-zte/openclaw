@@ -75,8 +75,9 @@ if (role === "worker") {
   process.stdout.write("stale-ready\n");
   const [message] = await nextMessage;
   assert.equal(message, "tick");
-  await tick();
+  const maintenance = tick();
   process.send?.("survived-tick");
+  await maintenance;
 } else {
   const current = new DatabaseSync(databasePath);
   current.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;");

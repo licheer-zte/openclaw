@@ -36,7 +36,7 @@ it.each([
   { tokenizer: "unicode61", original: "quartz", replacement: "saffron" },
   { tokenizer: "trigram", original: "uart", replacement: "affr" },
 ] as const)(
-  "keeps canonical $tokenizer search fresh after re-admission",
+  "keeps canonical $tokenizer search fresh after re-admission without DDL",
   ({ tokenizer, original, replacement }) => {
     using db = openNodeSqliteDatabase(":memory:");
     db.exec(
@@ -53,7 +53,9 @@ it.each([
         VALUES (41, 'chunk', 'quartz.md', 1, 1, 'hash', 'model', 'quartz compass', X'', 1);
     `);
     const definition = memoryTextSearchSchema(tokenizer);
-    admitStoreSearch(db, definition, { extension: "memory.text" });
+    const first = admitStoreSearch(db, definition, { extension: "memory.text" });
+    expect(first.text.body?.table).toBe("memory_index_chunks_fts");
+    expect(first.text.paths?.table).toBe("memory_index_paths_fts");
     const body = db.prepare(
       "SELECT rowid, id FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?",
     );
@@ -63,7 +65,10 @@ it.each([
     expect(body.all(original)).toEqual([{ rowid: 41, id: "chunk" }]);
     expect(paths.all(original)).toEqual([{ rowid: 17, path: "quartz.md" }]);
 
+    const exec = vi.spyOn(db, "exec");
     admitStoreSearch(db, definition, { extension: "memory.text" });
+    expect(exec.mock.calls.filter(([sql]) => /\b(?:CREATE|DROP|ALTER)\b/iu.test(sql))).toEqual([]);
+    exec.mockRestore();
 
     db.exec(`
       UPDATE memory_index_sources SET path = 'saffron.md' WHERE id = 17;
@@ -105,7 +110,12 @@ it.each(["admission", "writer", "existing table admission"] as const)(
     }
     firstVector.write(firstIndex, [{ id: "before", embedding: [1, 0, 0] }]);
 
+    const prepare = vi.spyOn(db, "prepare");
+    const exec = vi.spyOn(db, "exec");
     const readmitted = admit();
+    expect([...prepare.mock.calls, ...exec.mock.calls]).toEqual([]);
+    prepare.mockRestore();
+    exec.mockRestore();
     const vector = readmitted.vector!;
     const index = readmitted.vectors.chunks!;
     expect(vector.prepareExists(index)("before")).toBe(true);
@@ -118,5 +128,8 @@ it.each(["admission", "writer", "existing table admission"] as const)(
     const exists = rebuilt.vector!.prepareExists(rebuilt.vectors.chunks!);
     expect(exists("before")).toBe(false);
     expect(exists("after")).toBe(true);
+    expect(
+      db.prepare("SELECT vec_length(embedding) AS dimensions FROM memory_index_chunks_vec").all(),
+    ).toEqual([{ dimensions: 4 }]);
   },
 );

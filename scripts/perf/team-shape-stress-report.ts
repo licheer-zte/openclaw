@@ -4,25 +4,21 @@ import path from "node:path";
 import type { GatewayResourceSnapshot } from "../lib/gateway-bench-profile.ts";
 
 type RpcSummary = { count: number; p50Ms: number; p95Ms: number; p99Ms: number; maxMs: number };
-type HeapSpaces = Array<{ space_name: string; space_used_size: number }>;
 type Telemetry = {
   mode: string;
   durationMs: number;
   mainThreadCpuPercent: number;
   sampledAllocatedBytesPerSecond: number | null;
-  sampledSurvivorBytesPerSecond?: number | null;
-  initialHeapSpaces?: HeapSpaces;
   gc: Record<
     string,
     { count: number; totalMs: number; p95Ms: number; p99Ms: number; maxMs: number }
   >;
   eventLoop: { count: number; p95Ms: number | null; p99Ms: number | null; maxMs: number | null };
   stalls: { count: number; totalMs: number; maxMs: number };
-  lastSample: { memory: NodeJS.MemoryUsage; heapSpaces?: HeapSpaces };
+  lastSample: { memory: NodeJS.MemoryUsage };
 };
 type SoakResult = {
   completedTurns: number;
-  worktreeToolChurn?: boolean;
   teamStress: {
     committedWrites: number;
     prometheusScrapes: number;
@@ -41,7 +37,6 @@ type RunOptions = {
   pair: number;
   mode: string;
   smoke: boolean;
-  control?: boolean;
 };
 export type StressRun = RunOptions & {
   durationMs: number;
@@ -56,12 +51,6 @@ export type StressRun = RunOptions & {
 };
 const MIB = 1024 ** 2;
 
-function oldGenerationBytes(spaces: HeapSpaces | undefined) {
-  return spaces
-    ?.filter((space) => ["old_space", "large_object_space"].includes(space.space_name))
-    .reduce((sum, space) => sum + space.space_used_size, 0);
-}
-
 export function summarizeStressRun(options: RunOptions): StressRun {
   const result: SoakResult = JSON.parse(
     readFileSync(path.join(options.resultDir, "result.json"), "utf8"),
@@ -73,12 +62,7 @@ export function summarizeStressRun(options: RunOptions): StressRun {
     throw new Error("Stress capture is shorter than the required measured duration");
   }
   if (
-    telemetry.mode !==
-    (options.mode === "retention"
-      ? "retention-diagnostic"
-      : options.mode === "allocation"
-        ? "allocation-diagnostic"
-        : "untraced-timing")
+    telemetry.mode !== (options.mode === "allocation" ? "allocation-diagnostic" : "untraced-timing")
   ) {
     throw new Error("Stress telemetry instrumentation does not match the requested pass");
   }
@@ -111,7 +95,7 @@ export function summarizeStressRun(options: RunOptions): StressRun {
     "chat.history",
     "chat.startup",
     "sessions.diff",
-    ...(result.worktreeToolChurn ? [] : ["connect"]),
+    "connect",
     "chat.inject",
   ]) {
     if (!rpc[method]?.count) {
@@ -143,15 +127,12 @@ export function summarizeStressRun(options: RunOptions): StressRun {
   if (options.mode === "allocation" && !(telemetry.sampledAllocatedBytesPerSecond! > 0)) {
     throw new Error("Stress allocation pass did not record allocations");
   }
-  if (options.mode === "retention" && !(telemetry.sampledSurvivorBytesPerSecond! > 0)) {
-    throw new Error("Stress retention pass did not record sampled survivor bytes");
-  }
   const resources = result.memorySamples.findLast((sample) => !sample.collectedGarbage)?.resources;
   const collected = result.memorySamples.findLast((sample) => sample.collectedGarbage)?.resources;
   const workers = resources?.workers;
-  const oldGeneration = oldGenerationBytes(collected?.heapSpaces);
-  const initialOldGeneration = oldGenerationBytes(telemetry.initialHeapSpaces);
-  const endOldGeneration = oldGenerationBytes(telemetry.lastSample.heapSpaces);
+  const oldGeneration = collected?.heapSpaces
+    .filter((space) => ["old_space", "large_object_space"].includes(space.space_name))
+    .reduce((sum, space) => sum + space.space_used_size, 0);
   const memory = telemetry.lastSample.memory;
   const durationMinutes = telemetry.durationMs / 60_000;
   const list = rpc["sessions.list"]!;
@@ -187,16 +168,6 @@ export function summarizeStressRun(options: RunOptions): StressRun {
         telemetry.sampledAllocatedBytesPerSecond === null
           ? null
           : telemetry.sampledAllocatedBytesPerSecond / MIB,
-      sampledSurvivorMiBPerSecond:
-        telemetry.sampledSurvivorBytesPerSecond == null
-          ? null
-          : telemetry.sampledSurvivorBytesPerSecond / MIB,
-      initialOldGenerationMiB:
-        initialOldGeneration === undefined ? null : initialOldGeneration / MIB,
-      oldGenerationGrowthMiB:
-        initialOldGeneration === undefined || endOldGeneration === undefined
-          ? null
-          : (endOldGeneration - initialOldGeneration) / MIB,
       gcSecondsPerMinute:
         Object.values(telemetry.gc).reduce((sum, metric) => sum + metric.totalMs, 0) /
         1000 /
@@ -234,14 +205,8 @@ export function summarizeStressRun(options: RunOptions): StressRun {
 /** Mean signed paired deltas; never average percentages from tiny baselines or minute quantiles. */
 export function compareStressRuns(runs: StressRun[]) {
   const rows = [];
-  const groups = new Map(
-    runs.map((run) => [
-      `${run.mode}:${Boolean(run.control)}`,
-      { mode: run.mode, control: Boolean(run.control) },
-    ]),
-  );
-  for (const { mode, control } of groups.values()) {
-    const scoped = runs.filter((run) => run.mode === mode && Boolean(run.control) === control);
+  for (const mode of new Set(runs.map((run) => run.mode))) {
+    const scoped = runs.filter((run) => run.mode === mode);
     const pairs = [...new Set(scoped.map((run) => run.pair))].map((pair) => ({
       base: scoped.find((run) => run.pair === pair && run.side === "base"),
       candidate: scoped.find((run) => run.pair === pair && run.side === "candidate"),
@@ -269,9 +234,7 @@ export function compareStressRuns(runs: StressRun[]) {
           ? "inconclusive: missing paired metric"
           : scoped.some((run) => run.smoke)
             ? "smoke only"
-            : mode !== "timing" &&
-                metric !== "allocationMiBPerSecond" &&
-                metric !== "sampledSurvivorMiBPerSecond"
+            : mode === "allocation" && metric !== "allocationMiBPerSecond"
               ? "diagnostic pass"
               : minimum && scoped.some((run) => (run.metrics[tailSamples] ?? 0) < minimum)
                 ? `context: fewer than ${minimum} tail samples`
@@ -279,7 +242,6 @@ export function compareStressRuns(runs: StressRun[]) {
       rows.push({
         metric,
         mode,
-        control,
         base,
         candidate,
         absolute,

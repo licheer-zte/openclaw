@@ -143,7 +143,12 @@ suite.define(() => {
         models,
         methodResponses: {
           "chat.startup": {
-            agentsList: agentRoster({ main: "OpenClaw" }, "main", "agent"),
+            agentsList: {
+              agents: [{ id: "main", name: "OpenClaw" }],
+              defaultId: "main",
+              mainKey: "main",
+              scope: "agent",
+            },
             messages: [],
             sessionId: "session:agent:main:main",
             thinkingLevel: null,

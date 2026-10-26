@@ -134,23 +134,18 @@ export function sortWikiSearchResults(results: WikiSearchResult[]): WikiSearchRe
   });
 }
 
-// Normalize comparisons only; preserve the original page text, snippets, and paths.
-function normalizeWikiSearchText(value: string | undefined): string {
-  return normalizeLowercaseStringOrEmpty(value).normalize("NFC");
-}
-
 function buildSnippet(raw: string, query: string): string {
-  const queryLower = normalizeWikiSearchText(query);
+  const queryLower = normalizeLowercaseStringOrEmpty(query);
   const queryTokens = buildQueryTokens(queryLower);
   const searchable = buildSearchableBody(raw);
   const lines = searchable.split(/\r?\n/).filter((line) => line.trim().length > 0);
   let matchingLine = lines.find((line) =>
-    lineMatchesQuery(normalizeWikiSearchText(line), queryLower, queryTokens),
+    lineMatchesQuery(normalizeLowercaseStringOrEmpty(line), queryLower, queryTokens),
   );
   if (matchingLine === undefined && queryTokens.length > 0) {
     let bestHits = 0;
     for (const line of lines) {
-      const lineLower = normalizeWikiSearchText(line);
+      const lineLower = normalizeLowercaseStringOrEmpty(line);
       const hits = queryTokens.filter((token) => lineLower.includes(token)).length;
       if (hits > bestHits) {
         bestHits = hits;
@@ -285,11 +280,11 @@ function isClaimTextOrIdMatch(
   queryLower: string,
   queryTokens: readonly string[] = buildQueryTokens(queryLower),
 ): boolean {
-  const textLower = normalizeWikiSearchText(claim.text);
+  const textLower = normalizeLowercaseStringOrEmpty(claim.text);
   if (lineMatchesQuery(textLower, queryLower, queryTokens)) {
     return true;
   }
-  return lineMatchesQuery(normalizeWikiSearchText(claim.id), queryLower, queryTokens);
+  return lineMatchesQuery(normalizeLowercaseStringOrEmpty(claim.id), queryLower, queryTokens);
 }
 
 function scoreClaimMatch(params: {
@@ -302,15 +297,17 @@ function scoreClaimMatch(params: {
   queryTokens?: readonly string[];
 }): number {
   let score = 0;
-  if (normalizeWikiSearchText(params.text).includes(params.queryLower)) {
+  if (normalizeLowercaseStringOrEmpty(params.text).includes(params.queryLower)) {
     score += 25;
   } else if (
     params.queryTokens?.length &&
-    params.queryTokens.every((token) => normalizeWikiSearchText(params.text).includes(token))
+    params.queryTokens.every((token) =>
+      normalizeLowercaseStringOrEmpty(params.text).includes(token),
+    )
   ) {
     score += 18;
   }
-  if (normalizeWikiSearchText(params.id).includes(params.queryLower)) {
+  if (normalizeLowercaseStringOrEmpty(params.id).includes(params.queryLower)) {
     score += 10;
   }
   if (params.confidence !== undefined) {
@@ -342,7 +339,7 @@ function hasAnyQueryMatch(
   queryTokens: readonly string[],
 ) {
   return values.some((value) =>
-    lineMatchesQuery(normalizeWikiSearchText(value), queryLower, queryTokens),
+    lineMatchesQuery(normalizeLowercaseStringOrEmpty(value), queryLower, queryTokens),
   );
 }
 
@@ -376,7 +373,7 @@ export function buildDigestCandidatePaths(params: {
   maxResults: number;
   mode: WikiSearchMode;
 }): string[] {
-  const queryLower = normalizeWikiSearchText(params.query);
+  const queryLower = normalizeLowercaseStringOrEmpty(params.query);
   const queryTokens = buildQueryTokens(queryLower);
   const claimsByPage = new Map<string, MemoryWikiCompiledClaim[]>();
   for (const claim of params.snapshot.claims) {
@@ -388,7 +385,9 @@ export function buildDigestCandidatePaths(params: {
   return params.snapshot.digest.pages
     .map((page) => {
       const claims = claimsByPage.get(page.path) ?? [];
-      const metadataLower = normalizeWikiSearchText(buildDigestPageSearchText(page, claims));
+      const metadataLower = normalizeLowercaseStringOrEmpty(
+        buildDigestPageSearchText(page, claims),
+      );
       if (
         !lineMatchesQuery(metadataLower, queryLower, queryTokens) &&
         !(
@@ -443,9 +442,11 @@ function scorePage(params: {
   mode: WikiSearchMode;
 }): number {
   const { page, claims, matchingClaims, queryLower, queryTokens, mode } = params;
-  const titleLower = normalizeWikiSearchText(page.title);
-  const pathLower = normalizeWikiSearchText("relativePath" in page ? page.relativePath : page.path);
-  const idLower = normalizeWikiSearchText(page.id);
+  const titleLower = normalizeLowercaseStringOrEmpty(page.title);
+  const pathLower = normalizeLowercaseStringOrEmpty(
+    "relativePath" in page ? page.relativePath : page.path,
+  );
+  const idLower = normalizeLowercaseStringOrEmpty(page.id);
   let score = 1;
   if (titleLower === queryLower) {
     score += 50;
@@ -458,7 +459,7 @@ function scorePage(params: {
   if (idLower.includes(queryLower)) {
     score += 20;
   }
-  if (page.sourceIds.some((id) => normalizeWikiSearchText(id).includes(queryLower))) {
+  if (page.sourceIds.some((id) => normalizeLowercaseStringOrEmpty(id).includes(queryLower))) {
     score += 12;
   }
   const [bestMatchingClaim] = matchingClaims;
@@ -539,8 +540,8 @@ function scorePage(params: {
   if (!("raw" in page)) {
     return score;
   }
-  const metadataLower = normalizeWikiSearchText(buildPageSearchText(page));
-  const rawLower = normalizeWikiSearchText(buildSearchableBody(page.raw));
+  const metadataLower = normalizeLowercaseStringOrEmpty(buildPageSearchText(page));
+  const rawLower = normalizeLowercaseStringOrEmpty(buildSearchableBody(page.raw));
   const fields = [titleLower, pathLower, idLower, metadataLower, rawLower];
   const combinedLower = fields.join("\n");
   if (
@@ -604,7 +605,7 @@ export function toWikiSearchResult(
   query: string,
   mode: WikiSearchMode,
 ): WikiSearchResult {
-  const queryLower = normalizeWikiSearchText(query);
+  const queryLower = normalizeLowercaseStringOrEmpty(query);
   const queryTokens = buildQueryTokens(queryLower);
   const matchingClaims = getMatchingClaims(page.claims, queryLower, queryTokens, (claim) =>
     scoreClaimMatch({

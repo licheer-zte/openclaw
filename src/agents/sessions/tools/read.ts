@@ -1,7 +1,15 @@
 import { readdir as fsReaddir, stat as fsStat } from "node:fs/promises";
 import * as os from "node:os";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
-import type { Component, Keybinding, Text } from "@earendil-works/pi-tui";
+import {
+  type Component,
+  getCapabilities,
+  getImageDimensions,
+  getKeybindings,
+  imageFallback,
+  type Keybinding,
+  Text,
+} from "@earendil-works/pi-tui";
 import { classifyAttachmentBytes } from "@openclaw/media-core/attachment-classify";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { hasErrnoCode, toErrorObject } from "../../../infra/errors.js";
@@ -21,7 +29,6 @@ import {
   interactiveAgentTheme,
   type Theme,
 } from "../../modes/interactive/theme/theme.js";
-import { loadTuiRuntime } from "../../modes/interactive/tui-runtime.js";
 import { getReadmePath } from "../../package-metadata.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { sanitizeBinaryOutput } from "../../shell-utils.js";
@@ -71,14 +78,12 @@ function trimTrailingEmptyLines(lines: readonly string[]): string[] {
 }
 
 function reuseTextComponent(lastComponent: Component | undefined, content: string): Text {
-  const { Text } = loadTuiRuntime();
   const text = (lastComponent as Text | undefined) ?? new Text("", 0, 0); // SAFETY: Render slots only reuse the component returned by this renderer.
   text.setText(content);
   return text;
 }
 
 function keyText(keybinding: Keybinding): string {
-  const { getKeybindings } = loadTuiRuntime();
   return getKeybindings()
     .getKeys(keybinding)
     .join("/")
@@ -371,7 +376,6 @@ function formatReadResult(
     .map((c) => sanitizeBinaryOutput(c.text || "", { ansiMode: "compat" }).replace(/\r/g, ""))
     .join("\n");
 
-  const { getCapabilities, getImageDimensions, imageFallback } = loadTuiRuntime();
   const caps = getCapabilities();
   if (imageBlocks.length > 0 && (!caps.images || !showImages)) {
     // When inline images are unavailable, preserve visible evidence that media was returned.

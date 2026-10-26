@@ -3,25 +3,10 @@ import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-eve
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-function isTerminalFailedSubagentRestartRecovery(entry: SubagentRunRecord): boolean {
-  return (
-    entry.terminalOwner === "interrupted-recovery" &&
-    entry.endedReason === "subagent-error" &&
-    entry.execution.status === "terminal" &&
-    entry.execution.outcome?.status === "error" &&
-    typeof entry.execution.endedAt === "number" &&
-    entry.execution.interruptionReason === undefined
-  );
-}
-
 /** Restart custody survives the process; explicit cancellation never supplies it. */
-export function isRestartInterruptedSubagent(
-  entry: SubagentRunRecord,
-  options?: { allowTerminalFailure: true },
-): boolean {
+export function isRestartInterruptedSubagent(entry: SubagentRunRecord): boolean {
   return (
-    (entry.execution.interruptionReason === "gateway-restart" ||
-      (options?.allowTerminalFailure === true && isTerminalFailedSubagentRestartRecovery(entry))) &&
+    entry.execution.interruptionReason === "gateway-restart" &&
     !entry.killIntent &&
     !entry.killReconciliation &&
     !entry.pauseReason &&
@@ -35,8 +20,7 @@ export function isQuietSubagentRestartContinuation(entry: SubagentRunRecord): bo
     !entry.collect &&
     entry.expectsCompletionMessage === false &&
     entry.completionTarget === "parent" &&
-    (entry.execution.interruptionReason === "gateway-restart" ||
-      isTerminalFailedSubagentRestartRecovery(entry))
+    entry.execution.interruptionReason === "gateway-restart"
   );
 }
 

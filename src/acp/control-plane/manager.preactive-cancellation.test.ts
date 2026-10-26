@@ -1,5 +1,6 @@
+/** Cancellation must own accepted work before provider submission. */
 import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
-import { expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
@@ -11,55 +12,69 @@ import {
   disposeAcpSessionManagerInstance,
   installAcpSessionManagerTestLifecycle,
   mockParentedAcpSessionEntries,
-  runtimeHandle,
 } from "./manager.test-helpers.js";
 
 installAcpSessionManagerTestLifecycle();
 
-it.each(["controls", "submission", "setup-disposal"] as const)(
-  "settles cancellation during %s without submitting a prompt",
-  async (phase) => {
-    const state = createAcceptedFixture({ sessionKey: "agent:codex:acp:preactive" });
+describe("ACP accepted-turn cancellation", () => {
+  it.each(["controls", "submission"] as const)(
+    "settles cancellation during %s without submitting a prompt",
+    async (phase) => {
+      const state = createAcceptedFixture({ sessionKey: "agent:codex:acp:preactive" });
+      const paused = gate();
+      const lifecycle: unknown[] = [];
+      if (phase === "controls") {
+        state.getCapabilities.mockImplementationOnce(async () => {
+          await paused.wait();
+          return { controls: [] };
+        });
+      }
+      const { turn, events } = state.startTurn("preactive-turn", {
+        text: "must not submit",
+        onLifecycle: (event) => {
+          lifecycle.push(event);
+        },
+        ...(phase === "submission" ? { onBeforePrompt: paused.wait } : {}),
+      });
+      // Observe rejection immediately so the baseline cannot leak an unhandled rejection.
+      const settlement = Promise.allSettled([turn]);
+      await paused.entered;
+      const cancel = stopAcpControllerTurns({
+        ...state.target,
+        reason: "preactive-proof",
+      });
+      const cancellation = Promise.allSettled([cancel]);
+      paused.release();
+      const [turnResults, cancelResults] = await Promise.all([settlement, cancellation]);
+      expect([turnResults[0].status, cancelResults[0].status]).toEqual(["fulfilled", "fulfilled"]);
+      expect(state.runTurn).not.toHaveBeenCalled();
+      expect(lifecycle).toEqual([]);
+      expect(events).toEqual([cancelledEvent]);
+      expect(state.manager.getObservabilitySnapshot().turns.active).toBe(0);
+    },
+  );
+
+  it("disposes a late setup handle without allowing its prompt", async () => {
+    const sessionKey = "agent:codex:acp:dispose-setup";
+    const state = createAcceptedFixture({ sessionKey });
     const paused = gate();
-    const onLifecycle = vi.fn();
-    if (phase === "controls") {
-      state.getCapabilities.mockImplementationOnce(async () => {
-        await paused.wait();
-        return { controls: [] };
-      });
-    } else if (phase === "setup-disposal") {
-      state.ensureSession.mockImplementationOnce(async () => {
-        await paused.wait();
-        return runtimeHandle(state.target.sessionKey, "dispose-late");
-      });
-    }
-    const { turn, events } = state.startTurn("preactive-turn", {
-      text: "must not submit",
-      onLifecycle,
-      ...(phase === "submission" ? { onBeforePrompt: paused.wait } : {}),
+    state.ensureSession.mockImplementationOnce(async () => {
+      await paused.wait();
+      return { sessionKey, backend: "acpx", runtimeSessionName: "dispose-late" };
     });
-    // Observe rejection before releasing the paused producer.
+    const { turn, events } = state.startTurn("dispose-turn", { text: "must not submit" });
     const settlement = Promise.allSettled([turn]);
     await paused.entered;
-    const cancellation =
-      phase === "setup-disposal"
-        ? disposeAcpSessionManagerInstance(state.manager, "shutdown")
-        : stopAcpControllerTurns({ ...state.target, reason: "preactive-proof" });
+    const disposal = disposeAcpSessionManagerInstance(state.manager, "shutdown");
     paused.release();
-    const [turnResults] = await Promise.all([settlement, cancellation]);
-    if (phase === "setup-disposal") {
-      expect(state.cancel).toHaveBeenCalledOnce();
-      expect(state.close).toHaveBeenCalledOnce();
-      expect(state.manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
-    } else {
-      expect(turnResults[0].status).toBe("fulfilled");
-    }
+    await Promise.all([settlement, disposal]);
     expect(state.runTurn).not.toHaveBeenCalled();
-    expect(onLifecycle).not.toHaveBeenCalled();
+    expect(state.cancel).toHaveBeenCalledOnce();
+    expect(state.close).toHaveBeenCalledOnce();
     expect(events).toEqual([cancelledEvent]);
-    expect(state.manager.getObservabilitySnapshot().turns.active).toBe(0);
-  },
-);
+    expect(state.manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
+  });
+});
 
 it("retains a silent successor after the retired predecessor settles", async () => {
   await withStateDirEnv("openclaw-acp-manager-", async () => {
@@ -69,11 +84,17 @@ it("retains a silent successor after the retired predecessor settles", async () 
     const oldGate = gate();
     const freshGate = gate();
     let ensureCount = 0;
-    state.ensureSession.mockImplementation(async (input) =>
-      runtimeHandle(input.sessionKey, `runtime-${++ensureCount}`),
-    );
+    state.ensureSession.mockImplementation(async (input) => ({
+      sessionKey: input.sessionKey,
+      backend: "acpx",
+      runtimeSessionName: `runtime-${++ensureCount}`,
+    }));
     state.runTurn.mockImplementation(async function* (input) {
-      await (input.text === "old turn" ? oldGate : freshGate).wait();
+      if (input.text === "old turn") {
+        await oldGate.wait();
+      } else {
+        await freshGate.wait();
+      }
       yield { type: "done" as const };
     });
     mockParentedAcpSessionEntries({
@@ -125,7 +146,9 @@ it("builds a fresh manager that submits prompts after shutdown disposal", async 
     mode: "prompt",
     requestId: "after-restart-turn",
     admittedRunContext: createTestAdmittedRunContext("after-restart-turn"),
-    onEvent: (event) => void events.push(event),
+    onEvent: (event) => {
+      events.push(event);
+    },
   });
   expect(events).not.toContainEqual(cancelledEvent);
   expect(state.runTurn).toHaveBeenCalledOnce();

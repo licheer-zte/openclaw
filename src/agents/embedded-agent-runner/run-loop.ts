@@ -98,10 +98,6 @@ export async function runPreparedEmbeddedLoop(
       }),
     { config: params.config },
   );
-  // Retain the same transport cleanup through preamble failures and execution settlement.
-  await using _ = {
-    [Symbol.asyncDispose]: () => preparedRuntime.releaseTransport(),
-  };
   const abortSignal = input.laneController.abortSignal;
   params = { ...params, admittedRunContext: preparedRuntime.admittedRunContext, abortSignal };
   const accountingAuthority = getAdmittedRunDelegatedAuthority(preparedRuntime.admittedRunContext);
@@ -199,17 +195,18 @@ export async function runPreparedEmbeddedLoop(
     lifecycleGeneration,
     onInterrupt: (reason) => input.laneController.laneTaskAbortController.abort(reason),
   });
-  input.onInitialWriterPrepared(sessionPromptState);
   const providerReview = createProviderReviewRun({
     run: admittedRunInput,
     runtime: preparedRuntime,
     session: sessionPromptState,
     assertCurrent: assertAdmittedActive,
   });
+  input.onInitialWriterPrepared(sessionPromptState);
   const originalCompactionTarget = { ...sessionPromptState.sessionTarget };
   const durableCompactionAccounting =
     params.sessionPersistence !== "detached" &&
     !(params.sessionManager && !params.sessionManager.getSessionTarget());
+  const permissionChanges = createEmbeddedRunPermissionChanges(params);
   const failoverRetryController = createEmbeddedRunFailoverRetryController({
     runInput: admittedRunInput,
     preparedRuntime,
@@ -217,10 +214,9 @@ export async function runPreparedEmbeddedLoop(
   });
   const { contextEngine, contextEngineLogicalTurnLease, ownsContextEngineLogicalTurnLease } =
     await admitEmbeddedContextEngine(admittedRunInput, initialHarness);
-  const permissionChanges = createEmbeddedRunPermissionChanges(params);
+  startupStages.mark("context-engine");
+  notifyExecutionPhase("context_engine", { provider, model: modelId });
   try {
-    startupStages.mark("context-engine");
-    notifyExecutionPhase("context_engine", { provider, model: modelId });
     await providerReview.admit();
     const compactionRuntime = createEmbeddedRunCompactionRuntime({
       runParams: params,
@@ -654,19 +650,23 @@ export async function runPreparedEmbeddedLoop(
     // must restore terminal suppression before asynchronous settlement begins.
     contextRecoveryState.restoreTimeoutRecoveryAbandonment();
     permissionChanges.close();
-    await settleEmbeddedRun({
-      runInput: admittedRunInput,
-      runtime: preparedRuntime,
-      compaction: {
-        state: contextRecoveryState,
-        session: sessionPromptState,
-        originalTarget: originalCompactionTarget,
-        durable: durableCompactionAccounting,
-        authority: accountingAuthority,
-      },
-      ownedContextEngineLease: ownsContextEngineLogicalTurnLease
-        ? contextEngineLogicalTurnLease
-        : undefined,
-    });
+    try {
+      await settleEmbeddedRun({
+        runInput: admittedRunInput,
+        runtime: preparedRuntime,
+        compaction: {
+          state: contextRecoveryState,
+          session: sessionPromptState,
+          originalTarget: originalCompactionTarget,
+          durable: durableCompactionAccounting,
+          authority: accountingAuthority,
+        },
+        ownedContextEngineLease: ownsContextEngineLogicalTurnLease
+          ? contextEngineLogicalTurnLease
+          : undefined,
+      });
+    } finally {
+      await preparedRuntime.releaseTransport();
+    }
   }
 }

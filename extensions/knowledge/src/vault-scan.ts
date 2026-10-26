@@ -10,7 +10,7 @@ import {
 } from "./evidence-files.js";
 import { readText, parseYaml, safeRoot } from "./files.js";
 import { RECORD_MAX_BYTES, AUXILIARY_MAX_BYTES } from "./limits.js";
-import { carryLinkExtraction, resolveLinks } from "./markdown-links.js";
+import { resolveLinks } from "./markdown-links.js";
 import { linkTargets, mergeProblem } from "./merge.js";
 import { approvedRecall, Envelope, type Issue, type LoadedRecord, type Scope } from "./model.js";
 import {
@@ -44,9 +44,9 @@ function sameScope(a: unknown, b: Scope): boolean {
 }
 
 export type { ScanResult };
-/** A null stamp retains link ownership but never admits a cached record read. */
+/** One record file's parse, valid while the file keeps `stamp`. */
 type ParsedFile = {
-  stamp: string | null;
+  stamp: string;
   descriptors: Map<string, string>;
   record?: LoadedRecord;
   issue?: string;
@@ -235,10 +235,12 @@ export class VaultScanner {
           seen.add(file);
           const stamp = fileStamp(this.root, file),
             known = parsed?.get(file);
-          const knownSourcesCurrent =
+          if (
             known &&
-            [...known.descriptors].every(([p, s]) => settledStamp(s) && descriptorStamp(p) === s);
-          if (known && known.stamp === stamp && settledStamp(stamp) && knownSourcesCurrent) {
+            known.stamp === stamp &&
+            settledStamp(stamp) &&
+            [...known.descriptors].every(([p, s]) => settledStamp(s) && descriptorStamp(p) === s)
+          ) {
             for (const [p, s] of known.descriptors) {
               evidence.stamps.set(p, s);
             }
@@ -252,12 +254,8 @@ export class VaultScanner {
           // Cache only deterministic outcomes of settled files; a failed read is retried.
           const descriptors = new Map<string, string>();
           const remember = (value: Omit<ParsedFile, "stamp" | "descriptors">) => {
-            // Unsettled files are still reread and validated; retain their parse
-            // identity only to reuse links when those freshly read bytes match.
-            const reusable =
-              settledStamp(stamp) && [...descriptors.values()].every((s) => settledStamp(s));
-            if (reusable || value.record) {
-              parsed?.set(file, { stamp: reusable ? stamp : null, descriptors, ...value });
+            if (settledStamp(stamp) && [...descriptors.values()].every((s) => settledStamp(s))) {
+              parsed?.set(file, { stamp, descriptors, ...value });
             } else {
               parsed?.delete(file);
             }
@@ -326,9 +324,6 @@ export class VaultScanner {
               raw,
               hash: digest(raw),
             };
-            if (known?.record?.raw === raw && knownSourcesCurrent) {
-              carryLinkExtraction(known.record, record);
-            }
             // Cache a pristine copy (metadata frozen, shared by later scans):
             // validation and observation adjust only the scan's own copy.
             if (!overlay?.artifacts[file]) {

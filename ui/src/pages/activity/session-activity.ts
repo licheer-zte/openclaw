@@ -30,11 +30,18 @@ export const TIME_LABELS: Record<ActivityTimeFilter, string> = {
   all: "activityFeed.timeAll",
 };
 
-export type SessionActivityFilters = ReturnType<typeof parseSessionActivityFilters>;
+export type SessionActivityFilters = {
+  personId: string | null;
+  query: string;
+  time: ActivityTimeFilter;
+};
 
 const DEFAULT_ACTIVITY_TIME_FILTER: ActivityTimeFilter = "7d";
 
-export function parseSessionActivityFilters(search: string, pathPersonId?: string | null) {
+export function parseSessionActivityFilters(
+  search: string,
+  pathPersonId?: string | null,
+): SessionActivityFilters {
   const params = new URLSearchParams(search);
   const rawTime = params.get("time");
   return {

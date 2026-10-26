@@ -36,7 +36,8 @@ function inspectSession(): InspectableRealtimeTalkSession {
 
 async function start() {
   await state.toggleRealtimeTalk();
-  return inspectSession();
+  const session = inspectSession();
+  return { session, callbacks: session.callbacks };
 }
 
 function mockVideo() {
@@ -44,7 +45,7 @@ function mockVideo() {
 }
 
 async function startVideo() {
-  const session = await start();
+  const { session } = await start();
   session.callbacks.onVideoCapability?.(true);
   return session;
 }
@@ -97,7 +98,6 @@ beforeEach(() => {
     },
     connected: true,
     sessionKey: "main",
-    chatMessages: [],
     ...createInitialChatRealtimeState(),
   } as unknown as ChatRealtimeState;
   attachChatRealtimeActions(state);

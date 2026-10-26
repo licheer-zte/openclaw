@@ -68,43 +68,6 @@ export async function preparePluginStateRead<T>(
   store: PluginStateKeyedStore<T>,
   key: string,
 ): Promise<{ read(): T | undefined; release(): void } | undefined> {
-  const facts = await preparePluginStateEntry(store, key);
-  return (
-    facts && {
-      // SAFETY: The store owns this namespace's JSON value type, as with lookup.
-      read: () => facts.read() as T | undefined,
-      release: () => facts.release(),
-    }
-  );
-}
-
-/** Validate committed ownership and every possible pending value without exposing a stale read.
- * The predicate must be pure and synchronous. Release with the effect owner's custody.
- */
-export async function preparePluginStateGuard<T>(
-  store: PluginStateKeyedStore<T>,
-  key: string,
-  assertValueCurrent: (value: T | undefined) => void,
-): Promise<{ assertCurrent: () => void; release: () => void } | undefined> {
-  const facts = await preparePluginStateEntry(store, key, (value) =>
-    // SAFETY: The namespace's JSON type is store-owned; predicates must validate its domain shape.
-    assertValueCurrent(value as T | undefined),
-  );
-  return (
-    facts && {
-      assertCurrent: () => {
-        facts.read();
-      },
-      release: () => facts.release(),
-    }
-  );
-}
-
-async function preparePluginStateEntry(
-  store: object,
-  key: string,
-  assertValueCurrent?: (value: unknown) => void,
-) {
   const binding = capturePluginStateNativeBindingStore(store);
   if (!binding) {
     return undefined;
@@ -117,9 +80,12 @@ async function preparePluginStateEntry(
     binding,
     validateKey(key, "lookup"),
     true,
-    assertValueCurrent,
   );
-  return facts;
+  return {
+    // SAFETY: The store owns this namespace's JSON value type, as with lookup.
+    read: () => facts.read() as T | undefined,
+    release: () => facts.release(),
+  };
 }
 
 /** Deny pending or unknown owner writes before a retained synchronous effect guard reads. */

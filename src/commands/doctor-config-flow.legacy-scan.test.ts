@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { resolveDoctorHealthContributions } from "../flows/doctor-health-contributions.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -17,14 +16,18 @@ it("does not rediscover settled legacy state after config preflight", () =>
     const countPath = path.join(home, "detections");
     fs.mkdirSync(pluginRoot, { recursive: true });
     const action = { id: "state", doctorOnly: true };
-    writeFixtureJsonSync(path.join(pluginRoot, "package.json"), {
-      openclaw: { extensions: ["./index.cjs"] },
-    });
-    writeFixtureJsonSync(path.join(pluginRoot, "openclaw.plugin.json"), {
-      id: "scan-counter",
-      configSchema: {},
-      doctorContract: { stateMigrations: [action] },
-    });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({ openclaw: { extensions: ["./index.cjs"] } }),
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "scan-counter",
+        configSchema: {},
+        doctorContract: { stateMigrations: [action] },
+      }),
+    );
     fs.writeFileSync(path.join(pluginRoot, "index.cjs"), "throw new Error('runtime unloaded');\n");
     fs.writeFileSync(
       path.join(pluginRoot, "doctor-contract-api.cjs"),

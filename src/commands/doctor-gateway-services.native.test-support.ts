@@ -4,6 +4,7 @@ import { readEmbeddedGatewayTokenForTest } from "./doctor-service-audit.test-hel
 
 // Native boundary mocks are shared; each test file registers its own reset/cleanup hooks.
 const fsMocks = vi.hoisted(() => ({ realpath: vi.fn() }));
+
 vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
   return {
@@ -52,20 +53,24 @@ const mocks = vi.hoisted(() => ({
   }),
   note: vi.fn(),
 }));
+
 vi.mock("../config/paths.js", () => ({
   isDefaultInstallIdentity: mocks.isDefaultInstallIdentity,
   resolveGatewayPort: mocks.resolveGatewayPort,
   resolveIsNixMode: mocks.resolveIsNixMode,
 }));
+
 vi.mock("../daemon/inspect.js", () => ({
   findExtraGatewayServices: mocks.findExtraGatewayServices,
   renderGatewayServiceCleanupHints: mocks.renderGatewayServiceCleanupHints,
 }));
+
 vi.mock("../daemon/runtime-paths.js", () => ({
   renderSystemNodeWarning: mocks.renderSystemNodeWarning,
   resolveSystemNodeInfo: mocks.resolveSystemNodeInfo,
   resolveNodeRuntimeInfo: mocks.resolveNodeRuntimeInfo,
 }));
+
 vi.mock("../daemon/service-audit.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../daemon/service-audit.js")>();
   return {
@@ -75,6 +80,7 @@ vi.mock("../daemon/service-audit.js", async (importOriginal) => {
     readEmbeddedGatewayToken: readEmbeddedGatewayTokenForTest,
   };
 });
+
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: () => ({
     readCommand: mocks.readCommand,
@@ -84,6 +90,7 @@ vi.mock("../daemon/service.js", () => ({
     restart: mocks.restart,
   }),
 }));
+
 vi.mock("../daemon/systemd.js", () => ({
   isSystemdUnitActive: mocks.isSystemdUnitActive,
   uninstallLegacySystemdUnits: mocks.uninstallLegacySystemdUnits,
@@ -91,20 +98,25 @@ vi.mock("../daemon/systemd.js", () => ({
   isSystemUnitActiveAndEnabled: mocks.isSystemUnitActiveAndEnabled,
   uninstallUserSystemdGatewayUnit: mocks.uninstallUserSystemdGatewayUnit,
 }));
+
 vi.mock("../infra/container-environment.js", () => ({
   isContainerEnvironment: mocks.isContainerEnvironment,
 }));
+
 vi.mock("../daemon/launchd-exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/launchd-exec.js")>()),
   execLaunchctl: mocks.execLaunchctl,
 }));
+
 vi.mock("../../packages/terminal-core/src/note.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../packages/terminal-core/src/note.js")>()),
   note: mocks.note,
 }));
+
 vi.mock("./daemon-install-helpers.js", () => ({
   buildGatewayInstallPlan: mocks.buildGatewayInstallPlan,
 }));
+
 vi.mock("./doctor-gateway-auth-token.js", () => ({
   resolveGatewayAuthTokenForService: mocks.resolveGatewayAuthTokenForService,
   preserveGatewayAuthTokenForService: mocks.preserveGatewayAuthTokenForService,

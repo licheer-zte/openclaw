@@ -641,8 +641,12 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
             writeId: "node-proof-write",
           });
           const notifications = await readNodeProcessNotifications(frames, "node-proof", 3);
-          // The helper checks the exact count, sequence and terminal closed event;
-          // the exit and output assertions below account for the other two frames.
+          // Codex drains output independently of exit; only closed is terminal in seq order.
+          expect(
+            notifications
+              .map((message) => message.method)
+              .toSorted((left, right) => String(left).localeCompare(String(right))),
+          ).toEqual(["process/closed", "process/exited", "process/output"]);
           expect(
             notifications.find((message) => message.method === "process/exited"),
           ).toMatchObject({
@@ -741,17 +745,17 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
               message.method === "process/closed" &&
               (message.params as { processId?: string }).processId === "node-policy",
           );
-          expect(
-            frames.outbound.some((message) => message.method === "network/policyDecision"),
-          ).toBe(true);
-          expect(frames.outbound).toContainEqual(
-            expect.objectContaining({
-              method: "process/output",
-              params: expect.objectContaining({
-                processId: "node-policy",
-                chunk: Buffer.from("HTTP/1.1 403 Forbidden\n").toString("base64"),
+          expect(frames.outbound).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ method: "network/policyDecision" }),
+              expect.objectContaining({
+                method: "process/output",
+                params: expect.objectContaining({
+                  processId: "node-policy",
+                  chunk: Buffer.from("HTTP/1.1 403 Forbidden\n").toString("base64"),
+                }),
               }),
-            }),
+            ]),
           );
           const pendingResponse = readNodeResponse(frames, 21);
           const closed = new Error("paired-device attempt completed");
@@ -771,6 +775,7 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
           expect(workspace.release).toHaveBeenCalledOnce();
         }
 
+        expect(isolatedHome).toEqual(expect.any(String));
         await expect(access(isolatedHome!)).rejects.toMatchObject({ code: "ENOENT" });
       },
     );

@@ -190,7 +190,7 @@ describe("applyPatch", () => {
     const result = await applyPatch(patch, memory.options);
 
     expect(memory.files.get("/sandbox/notes.txt")).toBe("new\n");
-    expect(result.details.summary.added).toEqual(["notes.txt"]);
+    expect(result.summary.added).toEqual(["notes.txt"]);
   });
 
   it("fails closed on sandbox adds when atomic create is unavailable", async () => {
@@ -204,14 +204,14 @@ describe("applyPatch", () => {
   });
 
   it("updates and moves a file", async () => {
-    const memory = createMemoryPatchSandbox({ "source.txt": "It\u2019s here\nold\n" });
-    const patch = buildUpdatePatch("source.txt", " It's here\n-old\n+new", "dest.txt");
+    const memory = createMemoryPatchSandbox({ "source.txt": "foo\nbar\n" });
+    const patch = buildUpdatePatch("source.txt", " foo\n-bar\n+baz", "dest.txt");
 
     const result = await applyPatch(patch, memory.options);
 
-    expect(memory.files.get("/sandbox/dest.txt")).toBe("It\u2019s here\nnew\n");
+    expect(memory.files.get("/sandbox/dest.txt")).toBe("foo\nbaz\n");
     expect(memory.files.has("/sandbox/source.txt")).toBe(false);
-    expect(result.details.summary.modified).toEqual(["dest.txt"]);
+    expect(result.summary.modified).toEqual(["dest.txt"]);
   });
 
   it.each(["./source.txt", "/sandbox/./source.txt", "/sandbox//source.txt"])(
@@ -232,7 +232,7 @@ describe("applyPatch", () => {
       expect(memory.files.size).toBe(1);
       expect(memory.createFileExclusive).not.toHaveBeenCalled();
       expect(memory.remove).not.toHaveBeenCalled();
-      expect(result.details.summary.modified).toEqual(["source.txt"]);
+      expect(result.summary.modified).toEqual(["source.txt"]);
     },
   );
 
@@ -253,11 +253,10 @@ describe("applyPatch", () => {
       const move = (before: string, after: string) =>
         buildUpdatePatch("source.txt", `-${before}\n+${after}`, movePath);
       await expect(applyPatch(move("before", "after"), memory.options)).resolves.toMatchObject({
-        details: { summary: { modified: ["source.txt"] } },
+        summary: { modified: ["source.txt"] },
       });
       await expect(applyPatch(move("after", "after"), memory.options)).resolves.toMatchObject({
-        content: [{ type: "text", text: "No changes made to source.txt." }],
-        details: { summary: { added: [], modified: [], deleted: [] } },
+        noOp: true,
       });
       expect([...memory.files.values()]).toEqual(["after\n"]);
       expect(memory.writeFile).toHaveBeenCalledTimes(1);
@@ -377,7 +376,7 @@ describe("applyPatch", () => {
     const patch = buildAddFilePatch(relativeEscape);
 
     const result = await applyPatch(patch, { cwd: dir, workspaceOnly: false });
-    expect(result.details.summary.added.length).toBe(1);
+    expect(result.summary.added.length).toBe(1);
     await expect(fs.readFile(escapedPath, "utf8")).resolves.toBe("escaped\n");
   });
 
@@ -395,7 +394,7 @@ describe("applyPatch", () => {
     const patch = buildDeletePatch("link");
 
     const result = await applyPatch(patch, { cwd: dir });
-    expect(result.details.summary.deleted).toEqual(["link"]);
+    expect(result.summary.deleted).toEqual(["link"]);
     await expectMissingPath(fs.lstat(linkDir));
     await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("keep\n");
   });
@@ -635,7 +634,7 @@ describe("apply_patch unrestricted host writes", () => {
 
     const result = await hostUpdate(filePath);
 
-    expect(result.details.summary.modified).toEqual(["important.txt"]);
+    expect(result.summary.modified).toEqual(["important.txt"]);
     await expect(fs.readFile(filePath, "utf8")).resolves.toBe("replacement\n");
     const after = await fs.stat(filePath);
     expect(after.ino).toBe(before.ino);

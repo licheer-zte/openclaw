@@ -61,8 +61,11 @@ it.each([50, 101])("loads a %i-child roster and reconciles renamed rows", async 
   await sessions.refresh({ force: true, agentId: "worker" });
   expect(sessions.state.result?.sessions[0]?.label).toBe(previous.label);
   const list = vi.spyOn(sessions, "refreshList");
+
   const rows = await load(sessions);
+
   expect(rows).toHaveLength(count);
+  expect(list).toHaveBeenCalledTimes(count > 100 ? 2 : 1);
   expect(list).toHaveBeenCalledWith({
     spawnedBy: parentKey,
     limit: 100,
@@ -70,6 +73,9 @@ it.each([50, 101])("loads a %i-child roster and reconciles renamed rows", async 
     includeUnknown: false,
     configuredAgentsOnly: true,
   });
+  if (count > 100) {
+    expect(list.mock.calls[1]?.[0]).toMatchObject({ offset: 100, limit: 100 });
+  }
   const sampled = rows?.find((row) => row.key === renamed.key);
   expect(sessions.reconcile(sampled)).toBe(true);
   expect(sessions.state.result?.sessions[0]?.label).toBe(renamed.label);
@@ -85,6 +91,7 @@ it.each([
   );
   const target = children[0]!;
   const deletion = createDeferred<{ ok: true; deleted: boolean }>();
+  const offsets: number[] = [];
   const sessions = capability((method, params) => {
     if (method === "sessions.delete") {
       return deletion.promise;
@@ -95,6 +102,7 @@ it.each([
       return listResult(children, children.length, null);
     }
     const offset = query.offset ?? 0;
+    offsets.push(offset);
     // Optional cursor flags are absent: advance using raw page membership.
     const page = children.slice(offset, offset + (query.limit ?? 100));
     return listResult(page, children.length);
@@ -105,6 +113,7 @@ it.each([
     const rows = await load(sessions);
     expect(rows).toHaveLength(count - 1);
     expect(rows?.some((row) => row.key === target.key)).toBe(false);
+    expect(offsets).toEqual(count > 100 ? [0, 100] : [0]);
     const snapshot = sessions.listSnapshot(childQuery);
     expect(snapshot.result).toMatchObject({ count: count - 1, totalCount: count });
     if (deleted) {

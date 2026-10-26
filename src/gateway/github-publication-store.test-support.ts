@@ -11,17 +11,17 @@ import {
   type GitHubPublicationEffectTransition,
 } from "./github-publication-execution-effects.js";
 import {
-  claimGitHubPublicationExecutionInDatabase as claimExecution,
-  createGitHubPublicationExecutionStoreInDatabase as createExecutionStore,
-  deferGitHubPublicationRequestsInDatabase as deferRequests,
+  claimGitHubPublicationExecutionInDatabase,
+  createGitHubPublicationExecutionStoreInDatabase,
+  deferGitHubPublicationRequestsInDatabase,
 } from "./github-publication-store.worker.js";
 import {
-  bindRepositoryGitHubPublicationCheckpointInDatabase as bindCheckpoint,
-  claimRepositoryGitHubPublicationInDatabase as claimRepository,
-  deferRepositoryGitHubPublicationClaimsInDatabase as deferClaims,
-  failRepositoryGitHubPublicationPreparationInDatabase as failPreparation,
-  insertRepositoryGitHubPublicationInDatabase as insertRepository,
-  readRepositoryGitHubPublicationInDatabase as readRepository,
+  bindRepositoryGitHubPublicationCheckpointInDatabase,
+  claimRepositoryGitHubPublicationInDatabase,
+  deferRepositoryGitHubPublicationClaimsInDatabase,
+  failRepositoryGitHubPublicationPreparationInDatabase,
+  insertRepositoryGitHubPublicationInDatabase,
+  readRepositoryGitHubPublicationInDatabase,
   writeRepositoryGitHubPublicationInDatabase as writeRepository,
 } from "./github-repository-publication-store.worker.js";
 
@@ -36,23 +36,35 @@ export function ensureGitHubPublicationStoreFixture() {
   ensureGitHubPublicationSchema(openOpenClawStateDatabase().db);
 }
 
-export const claimGitHubPublicationExecutionFixture = transaction(claimExecution);
-export const deferGitHubPublicationRequestsFixture = transaction(deferRequests);
-export const insertRepositoryGitHubPublicationFixture = transaction(insertRepository);
-export const bindRepositoryGitHubPublicationCheckpointFixture = transaction(bindCheckpoint);
-export const failRepositoryGitHubPublicationPreparationFixture = transaction(failPreparation);
-export const deferRepositoryGitHubPublicationClaimsFixture = transaction(deferClaims);
+export const claimGitHubPublicationExecutionFixture = transaction(
+  claimGitHubPublicationExecutionInDatabase,
+);
+export const deferGitHubPublicationRequestsFixture = transaction(
+  deferGitHubPublicationRequestsInDatabase,
+);
+export const insertRepositoryGitHubPublicationFixture = transaction(
+  insertRepositoryGitHubPublicationInDatabase,
+);
+export const bindRepositoryGitHubPublicationCheckpointFixture = transaction(
+  bindRepositoryGitHubPublicationCheckpointInDatabase,
+);
+export const failRepositoryGitHubPublicationPreparationFixture = transaction(
+  failRepositoryGitHubPublicationPreparationInDatabase,
+);
+export const deferRepositoryGitHubPublicationClaimsFixture = transaction(
+  deferRepositoryGitHubPublicationClaimsInDatabase,
+);
 
 export function readRepositoryGitHubPublicationFixture(requestId: string) {
-  return readRepository(openOpenClawStateDatabase().db, requestId);
+  return readRepositoryGitHubPublicationInDatabase(openOpenClawStateDatabase().db, requestId);
 }
 
-type ExecutionStore = ReturnType<typeof createExecutionStore>;
+type ExecutionStore = ReturnType<typeof createGitHubPublicationExecutionStoreInDatabase>;
 
 export function createGitHubPublicationExecutionStoreFixture(instanceId: string) {
   const write = <T>(operation: (store: ExecutionStore) => T) =>
     runOpenClawStateWriteTransaction((database) =>
-      operation(createExecutionStore(database, instanceId)),
+      operation(createGitHubPublicationExecutionStoreInDatabase(database, instanceId)),
     );
   return {
     bindWorkspaceSnapshot: (...args: Parameters<ExecutionStore["bindWorkspaceSnapshot"]>) =>
@@ -65,13 +77,13 @@ export function createGitHubPublicationExecutionStoreFixture(instanceId: string)
 }
 
 export function claimRepositoryGitHubPublicationFixture(
-  row: Parameters<typeof claimRepository>[1],
+  row: Parameters<typeof claimRepositoryGitHubPublicationInDatabase>[1],
   instanceId: string,
-  authority: Parameters<typeof claimRepository>[4],
+  authority: Parameters<typeof claimRepositoryGitHubPublicationInDatabase>[4],
 ) {
   const executionId = randomUUID();
   const claimed = runOpenClawStateWriteTransaction((database) =>
-    claimRepository(database, row, instanceId, executionId, authority),
+    claimRepositoryGitHubPublicationInDatabase(database, row, instanceId, executionId, authority),
   );
   const interruptedStatus = row.owner_profile_id === null ? "requested" : "needs_confirmation";
   const apply = (transition: GitHubPublicationEffectTransition) => {

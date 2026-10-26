@@ -5,6 +5,7 @@ import {
   readRequestText as readRequestBody,
   respondJson,
 } from "../../test/helpers/gateway-integration-fixtures.js";
+import type { ClawHubPackageSecurityResponse } from "../infra/clawhub-packages.js";
 import { clawHubSecurityResponse } from "../plugins/clawhub.test-fixtures.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 
@@ -37,7 +38,7 @@ export async function startClawHubPackageFixture(options: ClawHubFixtureOptions)
       createServer((request, response) => {
         const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
         requests.push(`${request.method} ${pathname}`);
-        void (async () => {
+        const handle = async () => {
           if (request.method === "POST" && pathname === "/api/cli/telemetry/install") {
             telemetry.push(JSON.parse(await readRequestBody(request)));
             const status = options.telemetryStatus ?? 200;
@@ -45,7 +46,8 @@ export async function startClawHubPackageFixture(options: ClawHubFixtureOptions)
             return;
           }
           if (request.method === "GET" && pathname === `${packagePath}/download`) {
-            response.writeHead(200, { "content-type": "application/zip" }).end(archive);
+            response.writeHead(200, { "content-type": "application/zip" });
+            response.end(archive);
             return;
           }
           const routes: Record<string, unknown> = {
@@ -54,10 +56,12 @@ export async function startClawHubPackageFixture(options: ClawHubFixtureOptions)
                 ...pkg,
                 runtimeId: options.id,
                 latestVersion: options.version,
+                tags: { latest: options.version },
                 compatibility: options.packageCompatibility ?? {},
               },
             },
             [`${versionPath}/artifact`]: {
+              package: pkg,
               version: {
                 version: options.version,
                 sha256hash,
@@ -67,17 +71,23 @@ export async function startClawHubPackageFixture(options: ClawHubFixtureOptions)
               },
             },
             [`${versionPath}/security`]: {
-              ...clawHubSecurityResponse(options.name, options.version),
+              package: pkg,
+              release: { version: options.version },
+              overview: "Synthetic plugin fixture.",
               securityAuditUrl: `http://${request.headers.host}${versionPath}/security`,
-            },
+              trust: clawHubSecurityResponse().trust,
+            } satisfies ClawHubPackageSecurityResponse,
           };
           if (request.method === "GET" && Object.hasOwn(routes, pathname)) {
             respondJson(response, routes[pathname]);
           } else {
-            response.writeHead(404).end("unknown fixture route");
+            response.writeHead(404);
+            response.end("unknown fixture route");
           }
-        })().catch((error: unknown) => {
-          response.writeHead(500).end(error instanceof Error ? error.message : String(error));
+        };
+        void handle().catch((error: unknown) => {
+          response.writeHead(500);
+          response.end(error instanceof Error ? error.message : String(error));
         });
       }),
   });

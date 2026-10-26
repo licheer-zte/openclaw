@@ -43,17 +43,18 @@ vi.mock("../../auto-reply/reply/queue/drain.js", () => ({
     throw new Error("Unexpected followup drain");
   },
 }));
-vi.mock("../../auto-reply/reply/queue/delivery-context.js", async (importOriginal) => {
-  const unexpectedOverflow = () => {
+vi.mock("../../auto-reply/reply/queue/delivery-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../auto-reply/reply/queue/delivery-context.js")>()),
+  createOverflowSummaryRetrySource: () => {
     throw new Error("Unexpected queue overflow");
-  };
-  return {
-    ...(await importOriginal<typeof import("../../auto-reply/reply/queue/delivery-context.js")>()),
-    createOverflowSummaryRetrySource: unexpectedOverflow,
-    resolveFollowupAuthorizationKey: unexpectedOverflow,
-    resolveFollowupDeliveryStorageKey: unexpectedOverflow,
-  };
-});
+  },
+  resolveFollowupAuthorizationKey: () => {
+    throw new Error("Unexpected queue overflow");
+  },
+  resolveFollowupDeliveryStorageKey: () => {
+    throw new Error("Unexpected queue overflow");
+  },
+}));
 vi.mock("../../agents/model-thinking-default.js", () => ({
   resolveThinkingSelection: () => {
     throw new Error("Unexpected model selection refresh");
@@ -91,7 +92,10 @@ import {
   bindSessionControllerSource,
   beginSessionControllerSourceInjection,
 } from "../../sessions/session-controller.mailbox.js";
-import { isRpcSourceRegistered } from "../../sessions/session-controller.rpc-sources.js";
+import {
+  isRpcSourceRegistered,
+  type RpcSourceRef,
+} from "../../sessions/session-controller.rpc-sources.js";
 import {
   cancelCapturedSessionControllerSource,
   captureSessionControllerStop,
@@ -104,10 +108,8 @@ import { claimRpcSourceForTest, createRpcSourceForTest } from "../test-helpers.r
 // One teardown owns drainage and deletion so a failed drain retains the fixture root.
 const tempDirs = createTempDirTracker();
 const storedImageId = "stored-image.png";
-const canonicalImageId = "canonical-image.png";
 const storedImagePath = `/state/media/inbound/${storedImageId}`;
 const storedImageData = Buffer.from("stored-image");
-const canonicalImageData = Buffer.from("canonical-image");
 const sourceScope = { agentId: "main", sessionKey };
 const transcriptScope = { ...sourceScope, sessionId: sourceSessionId };
 const imageAttachment = {
@@ -116,11 +118,7 @@ const imageAttachment = {
 };
 const editorReply = {
   editorText: "edit me",
-  editorAttachments: [
-    { mimeType: "image/png", data: "aW1hZ2U=" },
-    imageAttachment,
-    { mimeType: "image/png", data: canonicalImageData.toString("base64") },
-  ],
+  editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }, imageAttachment],
 };
 
 function sourceStore() {
@@ -142,10 +140,6 @@ function invalid(respond: ReturnType<typeof vi.fn>, message: string) {
   });
 }
 
-function expectReplyFields(respond: ReturnType<typeof vi.fn>, fields: Record<string, unknown>) {
-  expectCutReply(respond, expect.objectContaining(fields));
-}
-
 function sourceTarget() {
   return captureSessionTarget({
     ...sourceScope,
@@ -156,15 +150,14 @@ function sourceTarget() {
 
 beforeEach(async () => {
   mocks.readMediaBuffer.mockReset().mockImplementation(async (id: string) => {
-    if (id !== storedImageId && id !== canonicalImageId) {
+    if (id !== storedImageId) {
       throw new Error(`missing media: ${id}`);
     }
-    const buffer = id === canonicalImageId ? canonicalImageData : storedImageData;
     return {
       id,
-      path: `/state/media/inbound/${id}`,
-      buffer,
-      size: buffer.byteLength,
+      path: storedImagePath,
+      buffer: storedImageData,
+      size: storedImageData.byteLength,
     };
   });
   setActivePluginRegistry(createEmptyPluginRegistry());
@@ -192,15 +185,6 @@ beforeEach(async () => {
             // Duplicate ref proves dedupe: the response must carry this image once.
             { path: storedImagePath, contentType: "image/png" },
             { path: `${storedImagePath}.missing`, contentType: "image/png" },
-            ...[
-              `media://inbound/${canonicalImageId}`,
-              "media://inbound/%63anonical-image.png",
-              `media://outbound/${storedImageId}`,
-              "media://inbound/nested%2Fimage.png",
-              `media://inbound/${storedImageId}?query=1`,
-              "https://example.test/stored-image.png",
-              "file:///tmp/stored-image.png",
-            ].map((url) => ({ url, contentType: "image/png" })),
           ],
         },
       },
@@ -236,7 +220,10 @@ afterEach(async () => {
   }
 });
 
-type QueuedSessionWork = ReturnType<typeof enqueueSessionWork>;
+type QueuedSessionWork = {
+  followup: FollowupRun;
+  rpcSource: RpcSourceRef;
+};
 
 function clearQueuedSessionWork(target: SessionTarget | undefined): void {
   if (target) {
@@ -246,7 +233,7 @@ function clearQueuedSessionWork(target: SessionTarget | undefined): void {
   }
 }
 
-function enqueueSessionWork(label: string) {
+function enqueueSessionWork(label: string): QueuedSessionWork {
   const followup = createQueueTestRun(
     {
       prompt: `${label} follow-up`,
@@ -334,7 +321,7 @@ describe("session message-cut methods", () => {
     const fork = await invoke("sessions.fork", "user-entry", options);
     const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
 
-    expectReplyFields(fork, { sessionKey: expect.any(String) });
+    expectCutReply(fork, expect.objectContaining({ sessionKey: expect.any(String) }));
     expect(await readEntry(forkKey ?? "")).toMatchObject({
       createdActor: { type: "human", id: profile.id },
       sandbox: "required",
@@ -368,7 +355,7 @@ describe("session message-cut methods", () => {
       },
     });
 
-    expectReplyFields(respond, { editorText: "edit me" });
+    expectCutReply(respond, expect.objectContaining({ editorText: "edit me" }));
     await expectSessionWorkCleared(work);
   });
 
@@ -441,7 +428,46 @@ describe("session message-cut methods", () => {
     }
   });
 
-  it("restores editor text and deduplicated inbound media for rewind and fork", async () => {
+  it.each(["sessions.rewind", "sessions.fork"] as const)(
+    "%s restores canonical inbound media facts and skips invalid URI hints",
+    async (method) => {
+      await appendTranscriptMessage(transcriptScope, {
+        eventId: "canonical-image",
+        parentId: "assistant-entry",
+        message: {
+          role: "user",
+          content: "canonical image prompt",
+          __openclaw: {
+            media: [
+              { url: `media://inbound/${storedImageId}`, contentType: "image/png" },
+              { url: "media://inbound/%73tored-image.png", contentType: "image/png" },
+              { url: `media://outbound/${storedImageId}`, contentType: "image/png" },
+              { url: "media://inbound/nested%2Fimage.png", contentType: "image/png" },
+              { url: `media://inbound/${storedImageId}?query=1`, contentType: "image/png" },
+              { url: "https://example.test/stored-image.png", contentType: "image/png" },
+              { url: "file:///tmp/stored-image.png", contentType: "image/png" },
+            ],
+          },
+        },
+      });
+      const respond = await invoke(method, "canonical-image");
+      expectCutReply(
+        respond,
+        expect.objectContaining({
+          editorText: "canonical image prompt",
+          editorAttachments: [imageAttachment],
+        }),
+      );
+      expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(1);
+      expect(mocks.readMediaBuffer).toHaveBeenCalledWith(
+        storedImageId,
+        "inbound",
+        expect.any(Number),
+      );
+    },
+  );
+
+  it("returns editor text for rewind and a new key for fork", async () => {
     await patchSessionEntryCore(sourceScope, () => ({
       sandboxMode: "off",
       nativeRuntimeConsent: "native-fixture",
@@ -458,18 +484,14 @@ describe("session message-cut methods", () => {
         },
       } as GatewayClient,
     });
-    expectReplyFields(fork, { ...editorReply, sessionKey: expect.any(String) });
-    expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(3);
-    expect(mocks.readMediaBuffer).toHaveBeenCalledWith(
-      storedImageId,
-      "inbound",
-      expect.any(Number),
+    expectCutReply(
+      fork,
+      expect.objectContaining({
+        ...editorReply,
+        sessionKey: expect.any(String),
+      }),
     );
-    expect(mocks.readMediaBuffer).toHaveBeenCalledWith(
-      canonicalImageId,
-      "inbound",
-      expect.any(Number),
-    );
+    expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(2);
     const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
     expect(forkKey).toBeTruthy();
     const forkEntry = await readEntry(forkKey ?? "");
@@ -486,7 +508,7 @@ describe("session message-cut methods", () => {
 
     const rewind = await invoke("sessions.rewind", "user-entry");
     expectCutReply(rewind, editorReply);
-    expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(6);
+    expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(4);
     expect((await readEntry())?.sandboxMode).toBe("off");
     expect((await entries()).map((row) => row.sessionKey).toSorted()).toEqual(
       [sessionKey, forkKey ?? ""].toSorted(),
@@ -527,7 +549,9 @@ describe("session message-cut methods", () => {
       const source = createRpcSourceForTest(
         {},
         {
-          ...transcriptScope,
+          sessionKey,
+          sessionId: sourceSessionId,
+          agentId: "main",
           storeScope: sourceStore(),
         },
       );
@@ -545,6 +569,12 @@ describe("session message-cut methods", () => {
     },
   );
 });
+
+const forkFailure = {
+  status: "failed",
+  code: "upstream-unavailable",
+  message: "Codex is offline. Try again.",
+};
 
 function installUpstreamForkHarness(
   executionEnvironment?: "host-only",
@@ -581,7 +611,9 @@ describe("upstream session message-cut methods", () => {
       }),
     ).toBe(true);
   });
-  it("lists empty branches for externally owned conversations", async () => {
+  it("rejects mutation but lists empty branches for externally owned conversations", async () => {
+    const respond = await invoke("sessions.branches.switch", "off-path-entry");
+    expectExternalOwner(respond);
     // Listing is read-only: "no local branches" is the truthful steady state,
     // not an error to latch into the UI.
     const listed = await invoke("sessions.branches.list");
@@ -609,12 +641,16 @@ describe("upstream session message-cut methods", () => {
       let retainedAssertCurrent: (() => void) | undefined;
       const message =
         outcome === "upstream-unavailable"
-          ? "Codex is offline. Try again."
+          ? forkFailure.message
           : "boundary failed: drift-mismatch";
       const result =
         outcome === "created"
           ? { status: "created", key: "agent:main:dashboard:forked", editorText: "edit me" }
-          : { status: "failed", code: outcome, message };
+          : {
+              status: "failed",
+              code: outcome,
+              message,
+            };
       mocks.upstreamFork.mockImplementation(
         async ({ assertCurrent }: { assertCurrent: () => void }) => {
           assertCurrent();

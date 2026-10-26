@@ -28,11 +28,13 @@ vi.mock("../lib/idle-import.ts", async (original) => {
     },
   };
 });
-let store: ReturnType<typeof createSidebarAttentionStore> | undefined;
+const stores = new Set<ReturnType<typeof createSidebarAttentionStore>>();
 afterEach(() => {
   document.body.replaceChildren();
-  store?.dispose();
-  store = undefined;
+  for (const store of stores) {
+    store.dispose();
+  }
+  stores.clear();
   loadFailure.mockReset();
   vi.mocked(showToast).mockClear();
 });
@@ -51,10 +53,11 @@ async function mountAttention() {
     agents: { state: { agentsList: null }, subscribe: () => () => {} },
   };
   // SAFETY: The fixture supplies exactly the owners observed by Inbox.
-  store = createSidebarAttentionStore(
+  const store = createSidebarAttentionStore(
     sources as unknown as Parameters<typeof createSidebarAttentionStore>[0],
   );
   store.activate(SidebarAttentionStoreOwner);
+  stores.add(store);
   // SAFETY: The context fixture fills unrelated application capabilities.
   const provider = createApplicationContextProvider({
     ...sources,

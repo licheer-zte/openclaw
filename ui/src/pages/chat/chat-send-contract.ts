@@ -7,7 +7,6 @@ import type { ChatAttachment, ChatGoalDraftMode, HumanMention } from "../../lib/
 import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
 import type { SessionRefreshTarget } from "../../lib/sessions/index.ts";
 import type { ChatCommandHost } from "./chat-commands.ts";
-import type { ChatOutboxReloadBinding } from "./chat-outbox-reload-recovery.ts";
 import type { QueuedMessageEdit } from "./queued-message-edit.ts";
 import type { ToolStreamHost } from "./tool-stream-contract.ts";
 
@@ -32,7 +31,6 @@ export type ChatSendSubmitOptions = {
 export type ChatHost = ToolStreamHost &
   ChatCommandHost & {
     chatSubmissions: ApplicationChatSubmissions;
-    outboxRecovery?: ChatOutboxReloadBinding;
     canRestoreComposer?: () => boolean;
     /** Captures this composer's identity while its presentation may hand ownership off. */
     captureComposerRecoveryOwner?: () => ChatComposerRecoveryOwner | undefined;

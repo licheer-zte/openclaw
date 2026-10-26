@@ -1,3 +1,6 @@
+/**
+ * Tests plugin SDK migration runtime facades and migration helper behavior.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,10 +13,6 @@ import {
   writeMigrationReport,
 } from "./migration-runtime.js";
 import { createMigrationItem, summarizeMigrationItems } from "./migration.js";
-/**
- * Tests plugin SDK migration runtime facades and migration helper behavior.
- */
-import { createMigrationSummaryFixture } from "./migration.test-support.js";
 import type { MigrationProviderContext } from "./plugin-entry.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -367,7 +366,15 @@ describe("writeMigrationReport", () => {
     await writeMigrationReport({
       providerId: "hermes",
       source: path.join(root, "hermes"),
-      summary: createMigrationSummaryFixture(1, 0, 1),
+      summary: {
+        total: 1,
+        planned: 0,
+        migrated: 1,
+        skipped: 0,
+        conflicts: 0,
+        errors: 0,
+        sensitive: 0,
+      },
       items: [
         createMigrationItem({
           id: "config:mcp-servers",

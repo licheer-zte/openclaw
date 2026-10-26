@@ -89,7 +89,7 @@ export function ChatCiAutomationView(props: ChatCiAutomationProps) {
                     fallback={
                       <label class="chat-ci__automation-option">
                         <input
-                          ref={(element) => binding.ref?.(element)}
+                          ref={binding.ref}
                           class="chat-ci__automation-checkbox"
                           type="checkbox"
                           name={entry[0]}

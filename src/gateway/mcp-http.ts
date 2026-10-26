@@ -565,22 +565,13 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
   setActiveMcpLoopbackRuntime({ port: address.port, ownerToken, nonOwnerToken });
   logDebug(`mcp loopback listening on 127.0.0.1:${address.port}`);
 
-  let cleanupDone = false;
-  const cleanup = () => {
-    if (cleanupDone) {
-      return;
-    }
-    cleanupDone = true;
+  return async () => {
+    // Stop admitting this runtime's child grants before draining accepted
+    // requests. A delayed old-server close cannot revoke a successor runtime.
     clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken);
     revokeMcpLoopbackClientGrantsForRuntime(ownerToken);
     unregisterGrantRevocation();
     toolCache.clear();
-  };
-
-  const close = async () => {
-    // Stop admitting this runtime's child grants before draining accepted
-    // requests. A delayed old-server close cannot revoke a successor runtime.
-    cleanup();
     try {
       await new Promise<void>((resolve, reject) => {
         httpServer.close((error) => (error ? reject(error) : resolve()));
@@ -590,18 +581,6 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
       await work.drain();
     }
   };
-  const handleUnexpectedClose = () => {
-    cleanup();
-    if (closeActiveMcpLoopbackServer === close) {
-      closeActiveMcpLoopbackServer = undefined;
-      logWarn("mcp-loopback: listener closed unexpectedly; the next run will restart it");
-    }
-    void work.drain().catch((error: unknown) => {
-      logWarn(`mcp-loopback: unexpected server close drain failed: ${String(error)}`);
-    });
-  };
-  httpServer.once("close", handleUnexpectedClose);
-  return close;
 }
 
 /** Waits for the process-owned MCP loopback server, starting one if needed. */

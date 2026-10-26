@@ -1,4 +1,3 @@
-import { setImmediate as drainContinuations } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import { buildEmbeddedRunExecutionParams } from "../../auto-reply/reply/agent-runner-utils.js";
 import { createTestFollowupRun } from "../../auto-reply/reply/agent-runner.test-fixtures.js";
@@ -55,30 +54,37 @@ it("preserves prepared model facts and restrictive policy without foreground aut
 
 it.each([false, true])(
   "reads before maintenance and drains cleanup (wait for owner: %s)",
-  (waitForOwner) =>
-    withOpenClawTestState({ label: "maintenance-queued-read" }, async ({ env }) => {
+  async (waitForOwner) => {
+    await withOpenClawTestState({ label: "maintenance-queued-read" }, async ({ env }) => {
       const { scope, schedule } = await setup(env, "maintenance-queued-read");
       const events: string[] = [];
-      const record = (event: string) => events.push(event);
       let scheduler: ReplyOperation | undefined;
-      const flush = blockFlush(() => record("flush"));
-      memory.runSessionCompactionIfNeeded.mockImplementationOnce(
-        async () => void record("compaction"),
-      );
+      const flush = blockFlush(() => events.push("flush"));
+      memory.runSessionCompactionIfNeeded.mockImplementationOnce(async () => {
+        events.push("compaction");
+      });
       try {
         await withSessionTurn(scope, async (operation) => {
           scheduler = operation;
+          expect(operation).toBeDefined();
           const ownerSettles = operation?.ownerSettlement.then(
             () => operation.result?.kind === "completed",
           );
           schedule(waitForOwner ? ownerSettles : undefined);
-          const checkpoint = waitForSessionMaintenance(scope.sessionKey).then(() => record("read"));
-          await drainContinuations(); // Drain no-I/O admission/checkpoint continuations.
+          const checkpoint = waitForSessionMaintenance(scope.sessionKey).then(() => {
+            events.push("read");
+          });
+          // Both admission and the checkpoint have only no-I/O continuations before blocking.
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
           expect(events).toEqual(["read"]);
           await checkpoint;
         });
         expect(scheduler?.result?.kind).toBe("completed");
-        const drained = waitForSessionMaintenance(scope.sessionKey).then(() => record("drained"));
+        const drained = waitForSessionMaintenance(scope.sessionKey).then(() =>
+          events.push("drained"),
+        );
         await flush.started;
         const operation = memory.runMemoryFlushIfNeeded.mock.calls[0]?.[0].replyOperation;
         expect(operation !== undefined && isCurrentSessionControllerOperation(operation)).toBe(
@@ -94,5 +100,6 @@ it.each([false, true])(
         flush.release();
         await waitForSessionMaintenance(scope.sessionKey);
       }
-    }),
+    });
+  },
 );

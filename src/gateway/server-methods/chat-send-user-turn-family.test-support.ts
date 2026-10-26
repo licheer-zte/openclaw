@@ -71,12 +71,18 @@ export function prepareVoice({
   assertClientUploadAllowed,
   assertInputCurrent,
   input,
-}: Partial<Pick<TurnParams["session"], "agentId" | "sessionKey" | "clientRunId" | "cfg">> &
-  Pick<TurnOptions, "attachments" | "assertInputCurrent" | "input"> & {
-    text?: string;
-    clientInfo?: TurnParams["request"]["clientInfo"];
-    assertClientUploadAllowed?: TurnParams["admission"]["assertClientUploadAllowed"];
-  } = {}) {
+}: {
+  text?: string;
+  clientInfo?: TurnParams["request"]["clientInfo"];
+  agentId?: string;
+  sessionKey?: string;
+  clientRunId?: string;
+  cfg?: TurnParams["session"]["cfg"];
+  attachments?: Partial<TurnParams["attachments"]>;
+  assertClientUploadAllowed?: TurnParams["admission"]["assertClientUploadAllowed"];
+  assertInputCurrent?: TurnParams["assertInputCurrent"];
+  input?: TurnOptions["input"];
+} = {}) {
   return prepareTurn({
     inputText: text,
     input,

@@ -1,20 +1,24 @@
 import type { JSX } from "@solidjs/web";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import type { MenuEntry, MenuItem } from "../../../components/solid/menu.tsx";
-import "../../../styles/settings-native-controls.css";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 
-export function menuDivider(id: string): Extract<MenuEntry, { kind: "content" }> {
+registerEnglishCatalog(registerChatComposerEnglish);
+
+export function menuDivider(id: string): MenuEntry {
   return {
     kind: "content",
     id,
     content: <div class="agent-chat__capability-menu-divider" role="separator" />,
   };
 }
+
 export function renderCapabilityMenuState(
   id: string,
   message: JSX.Element,
   role?: "status" | "alert",
-): Extract<MenuEntry, { kind: "content" }> {
+): MenuEntry {
   return {
     kind: "content",
     id,
@@ -25,57 +29,15 @@ export function renderCapabilityMenuState(
     ),
   };
 }
-export function menuSection(id: string, title: string, action?: JSX.Element): MenuEntry {
-  return {
-    kind: "content",
-    id,
-    content: (
-      <div class="agent-chat__capability-menu-section">
-        <span>{title}</span>
-        {action}
-      </div>
-    ),
-  };
-}
-export function skillIcon(emoji?: string): JSX.Element {
-  return emoji ? (
-    <span class="agent-chat__capability-menu-emoji" aria-hidden="true">
-      {emoji}
-    </span>
-  ) : (
-    <Icon name="wandSparkles" />
-  );
-}
-export function menuChevron(): JSX.Element {
-  return (
-    <span class="agent-chat__capability-menu-chevron" aria-hidden="true">
-      <Icon name="chevronRight" />
-    </span>
-  );
-}
-export function renderBackRow(title: string, details?: JSX.Element): MenuItem {
+
+export function renderBackRow(): MenuItem {
   return {
     id: "back",
-    label: title,
-    class: "agent-chat__capability-menu-item agent-chat__capability-menu-header",
-    icon: <Icon name="chevronLeft" />,
-    details,
+    label: t("chat.composer.menu.back"),
+    class: "agent-chat__capability-menu-item",
+    icon: <Icon name="arrowLeft" />,
     closeOnSelect: false,
   };
-}
-export function MenuSwitch(props: { checked: boolean }): JSX.Element {
-  return (
-    <span
-      class={[
-        "agent-chat__capability-menu-switch",
-        "settings-toggle",
-        { "agent-chat__capability-menu-switch--active": props.checked },
-      ]}
-      aria-hidden="true"
-    >
-      <span class="settings-toggle__control" />
-    </span>
-  );
 }
 
 export function renderCapabilityToggleRow(options: {
@@ -85,26 +47,50 @@ export function renderCapabilityToggleRow(options: {
   disabled: boolean;
   title?: string | null;
   icon?: IconName;
-  emoji?: string;
-  skill?: boolean;
+  note?: string | null;
+  sessionNote?: string;
+  checkbox?: boolean;
 }): MenuItem {
   return {
     id: options.value,
-    label: options.label,
+    label: [options.label, options.note, options.sessionNote].filter(Boolean).join(" "),
     type: "checkbox",
     checked: options.checked,
     disabled: options.disabled,
-    class:
-      "agent-chat__capability-menu-item agent-chat__capability-menu-toggle agent-chat__capability-menu-toggle--switch",
+    class: [
+      "agent-chat__capability-menu-item agent-chat__capability-menu-toggle",
+      {
+        "agent-chat__capability-menu-toggle--switch": !options.checkbox,
+      },
+    ],
     attributes: { title: options.title ?? "" },
-    icon: options.skill ? (
-      skillIcon(options.emoji)
-    ) : options.icon ? (
-      <Icon name={options.icon} />
-    ) : (
-      <span />
+    icon: options.icon ? <Icon name={options.icon} /> : undefined,
+    content: (
+      <span class="agent-chat__capability-menu-label">
+        <span>{options.label}</span>
+        {options.note ? (
+          <span class="agent-chat__capability-menu-note">
+            {options.note}
+            {options.sessionNote ? (
+              <span class="agent-chat__capability-menu-session-tag">{options.sessionNote}</span>
+            ) : null}
+          </span>
+        ) : null}
+      </span>
     ),
-    details: <MenuSwitch checked={options.checked} />,
+    details: options.checkbox ? undefined : (
+      <span
+        class={[
+          "agent-chat__capability-menu-switch chat-controls__speed-toggle",
+          {
+            "chat-controls__speed-toggle--active": options.checked,
+          },
+        ]}
+        aria-hidden="true"
+      >
+        <span class="chat-controls__speed-toggle-thumb" />
+      </span>
+    ),
     closeOnSelect: false,
   };
 }

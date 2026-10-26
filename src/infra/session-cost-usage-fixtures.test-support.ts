@@ -1,5 +1,3 @@
-import { readUsageOverviewBatch } from "./session-cost-usage-overview-batch.js";
-import type { UsageOverviewLoad } from "./session-cost-usage-overview-load.js";
 import { partitionUsageCostRollup } from "./session-cost-usage-partitions.js";
 import {
   encodeUsageCostRollup,
@@ -9,9 +7,13 @@ import {
 
 export function createUsageTranscriptEntry(
   totalTokens: number,
-  options: { cost?: number } & Partial<
-    Record<"timestamp" | "provider" | "model" | "content", string>
-  > = {},
+  options: {
+    timestamp?: string;
+    cost?: number;
+    provider?: string;
+    model?: string;
+    content?: string;
+  } = {},
 ) {
   const { timestamp = "2026-09-18T00:00:00Z", cost, ...message } = options;
   return {
@@ -64,43 +66,38 @@ export function encodeOversizedUsageRollup(
   toolPrefix = "synthetic-tool-",
 ) {
   const entry = structuredClone(source);
-  const partition = variant === "compressed partition";
-  const timestampMs = Date.UTC(2026, 8, 18);
-  const bucket = partition
-    ? (entry.rollup.buckets[String(timestampMs)] = {
-        ...entry.rollup.untimestamped,
-        timestampMs,
-        latency: { centroids: [], count: 0, max: 0, sum: 0 },
-      })
-    : entry.rollup.untimestamped;
   if (variant !== "corrupt-length") {
-    bucket.tools = [
+    const tools = [
       {
         name: toolPrefix + "x".repeat((variant === "stored body" ? 2 : 35) * 1024 * 1024),
         count: 1,
       },
     ];
+    if (variant === "compressed partition") {
+      entry.rollup.buckets[String(Date.UTC(2026, 8, 18))] = {
+        ...entry.rollup.untimestamped,
+        tools,
+        timestampMs: Date.UTC(2026, 8, 18),
+        latency: { centroids: [], count: 0, max: 0, sum: 0 },
+      };
+    } else {
+      entry.rollup.untimestamped.tools = tools;
+    }
   }
-  const encoded = partition
-    ? partitionUsageCostRollup(entry)
-    : { ...encodeUsageCostRollup(entry), partitions: [] };
-  const envelope = JSON.parse(encoded.valueJson);
+  const encoded =
+    variant === "compressed partition"
+      ? partitionUsageCostRollup(entry)
+      : { ...encodeUsageCostRollup(entry), partitions: [] };
   if (variant === "stored body") {
     encoded.blob = Uint8Array.from(Buffer.from(JSON.stringify(entry.rollup)));
+    const envelope = JSON.parse(encoded.valueJson);
     envelope.body.encoding = "identity";
     envelope.body.storedBytes = encoded.blob.byteLength;
+    encoded.valueJson = JSON.stringify(envelope);
   } else if (variant === "corrupt-length") {
+    const envelope = JSON.parse(encoded.valueJson);
     envelope.body.bytes = 35 * 1024 * 1024;
+    encoded.valueJson = JSON.stringify(envelope);
   }
-  encoded.valueJson = JSON.stringify(envelope);
   return encoded;
-}
-
-/** Overview load with its rows expanded, as the off-thread report reads them. */
-export function overviewRows({ usage, ...load }: UsageOverviewLoad) {
-  return {
-    ...load,
-    rows:
-      usage.kind === "packed" ? readUsageOverviewBatch(usage.batch, usage.refreshing) : usage.rows,
-  };
 }

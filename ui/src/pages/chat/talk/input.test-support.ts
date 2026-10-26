@@ -2,12 +2,6 @@ import { afterEach, beforeEach, onTestFinished, vi } from "vitest";
 import { RealtimeTalkInputOwner } from "./input.ts";
 
 export const mockAudioNode = () => ({ connect: vi.fn(), disconnect: vi.fn() });
-const mockAnalyser = (level: number) => ({
-  fftSize: 0,
-  smoothingTimeConstant: 0,
-  disconnect: vi.fn(),
-  getFloatTimeDomainData: (samples: Float32Array) => samples.fill(level),
-});
 export type MockAudioProcessor = ReturnType<typeof mockAudioNode> & {
   onaudioprocess:
     | ((event: { inputBuffer: { getChannelData: (channel: number) => Float32Array } }) => void)
@@ -23,37 +17,39 @@ export class MockAudioBufferSource {
   readonly stop = vi.fn();
 }
 
-class MockAudioContextBase {
-  readonly destination = {};
-  readonly close = vi.fn(async () => undefined);
-  createMediaStreamSource = mockAudioNode;
-  createScriptProcessor(): MockAudioProcessor {
-    return { ...mockAudioNode(), onaudioprocess: null };
-  }
-  createGain() {
-    return { ...mockAudioNode(), gain: { value: 1 } };
-  }
-}
-
 export function createPcmAudioContext(
   processors: MockAudioProcessor[],
   sinks: MockAudioSink[],
   sources: MockAudioBufferSource[],
 ) {
-  return class extends MockAudioContextBase {
-    override createScriptProcessor() {
-      const processor = super.createScriptProcessor();
+  return class {
+    readonly destination = {};
+    readonly close = vi.fn(async () => undefined);
+
+    createMediaStreamSource() {
+      return mockAudioNode();
+    }
+
+    createScriptProcessor() {
+      const processor: MockAudioProcessor = { ...mockAudioNode(), onaudioprocess: null };
       processors.push(processor);
       return processor;
     }
 
-    override createGain() {
-      const sink = super.createGain();
+    createGain() {
+      const sink = { ...mockAudioNode(), gain: { value: 1 } };
       sinks.push(sink);
       return sink;
     }
 
-    createAnalyser = () => mockAnalyser(0.25);
+    createAnalyser() {
+      return {
+        fftSize: 0,
+        smoothingTimeConstant: 0,
+        disconnect: vi.fn(),
+        getFloatTimeDomainData: (samples: Float32Array) => samples.fill(0.25),
+      };
+    }
 
     createBuffer(_channels: number, length: number, sampleRate: number) {
       const channel = new Float32Array(length);
@@ -68,11 +64,27 @@ export function createPcmAudioContext(
   };
 }
 
-export class MockDictationAudioContext extends MockAudioContextBase {
+export class MockDictationAudioContext {
+  readonly destination = {};
   readonly sampleRate = 8000;
+  readonly close = vi.fn(async () => undefined);
+  createMediaStreamSource = mockAudioNode;
+
+  createScriptProcessor(): MockAudioProcessor {
+    return { ...mockAudioNode(), onaudioprocess: null };
+  }
+
+  createGain() {
+    return { ...mockAudioNode(), gain: { value: 1 } };
+  }
 
   createAnalyser() {
-    return { ...mockAnalyser(0), connect: vi.fn() };
+    return {
+      fftSize: 0,
+      smoothingTimeConstant: 0,
+      ...mockAudioNode(),
+      getFloatTimeDomainData: (samples: Float32Array) => samples.fill(0),
+    };
   }
 }
 
@@ -121,7 +133,12 @@ export async function prepareRealtimeTalkTestInput(
 export function useRealtimeTalkMicrophoneFixture(): void {
   beforeEach(() => {
     vi.stubGlobal("navigator", {
-      mediaDevices: { getUserMedia: vi.fn(async () => audioFixture().stream) },
+      mediaDevices: {
+        getUserMedia: vi.fn(async () => {
+          const track = Object.assign(new EventTarget(), { stop: vi.fn() });
+          return { getTracks: () => [track], getAudioTracks: () => [track] };
+        }),
+      },
     });
   });
   afterEach(() => vi.unstubAllGlobals());

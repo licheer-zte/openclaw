@@ -221,6 +221,10 @@ it("keeps native monitor guards current through worker-published binding reads",
   vi.spyOn(state, "lookup").mockImplementation(() => {
     throw new Error("Native guards must not open a synchronous database");
   });
+  const reader = await store.prepareRead(identity);
+  if (!reader) {
+    throw new Error("Expected a prepared native binding reader");
+  }
   const owner = createCodexNativeSubagentHistoryOwner({
     parentThreadId: binding.threadId,
     sessionId: identity.sessionId,
@@ -229,32 +233,7 @@ it("keeps native monitor guards current through worker-published binding reads",
   if (!owner) {
     throw new Error("Expected a native history owner");
   }
-  const guard = await store.prepareNativeSubagentGuard(identity, owner);
-  if (!guard) {
-    throw new Error("Expected a prepared binding guard");
-  }
-  const logicalIdentity = { ...identity, sessionId: "logical-parent" };
-  const scoped = scopeCodexRunBindingStore({
-    bindingStore: store,
-    logicalIdentity,
-    physicalIdentity: identity,
-  });
-  const scopedGuard = await scoped.prepareNativeSubagentGuard(logicalIdentity, {
-    ...owner,
-    sessionId: logicalIdentity.sessionId,
-  });
-  const mismatchedGuard = await scoped.prepareNativeSubagentGuard(logicalIdentity, {
-    ...owner,
-    sessionId: "another-parent",
-  });
-  expect(scopedGuard).toBeDefined();
-  expect(mismatchedGuard).toBeDefined();
-  const common = {
-    bindingStore: store,
-    assertBindingCurrent: guard.assertCurrent,
-    identity,
-    owner,
-  };
+  const common = { bindingStore: store, readBinding: reader.read, identity, owner };
   const submissions = createNativeSubagentSubmissionStore({
     ...common,
     assertLifecycleCurrentAsync: async () => {},
@@ -262,16 +241,14 @@ it("keeps native monitor guards current through worker-published binding reads",
   const assignments = createNativeSubagentAssignmentStore(common);
   const expectStale = () => {
     expect(() => submissions.assertCurrent()).toThrow(
-      "Native subagent binding is no longer current",
+      "Native submission binding is no longer current",
     );
     expect(() => assignments.assertCurrent()).toThrow(
-      "Native subagent binding is no longer current",
+      "Native assignment binding is no longer current",
     );
   };
   try {
-    guard.assertCurrent();
-    scopedGuard?.assertCurrent();
-    expect(mismatchedGuard?.assertCurrent).toThrow("Native subagent binding");
+    expect(reader.read()).toEqual(binding);
     await submissions.assertCurrentAsync();
     await assignments.assertCurrentAsync();
     const assignment = {
@@ -311,26 +288,11 @@ it("keeps native monitor guards current through worker-published binding reads",
     await peer.mutate(identity, { kind: "set", binding });
     submissions.assertCurrent();
     assignments.assertCurrent();
-    const key = bindingStoreKey(identity);
-    for (const replacement of [
-      { version: 1, state: "cleared", sessionId: identity.sessionId },
-      { ...activeRow(binding), sessionId: "replacement-generation" },
-      activeRow({ ...binding, appServerRuntimeFingerprint: "replacement-connection" }),
-      { version: 1, state: "active", binding: { threadId: 42 } },
-    ]) {
-      state.register(key, replacement as never);
-      expect(guard.assertCurrent).toThrow();
-      expect(scopedGuard?.assertCurrent).toThrow();
-      state.register(key, { ...activeRow(binding), sessionId: identity.sessionId });
-      guard.assertCurrent();
-      scopedGuard?.assertCurrent();
-    }
   } finally {
-    mismatchedGuard?.release();
-    scopedGuard?.release();
-    guard.release();
+    reader.release();
   }
-  expect(guard.assertCurrent).toThrow("unavailable");
+  expect(reader.read()).toBeUndefined();
+  expectStale();
 });
 
 it("propagates failed bulk acquisition without synchronous reads or retries", async () => {

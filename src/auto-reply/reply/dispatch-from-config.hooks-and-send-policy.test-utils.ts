@@ -7,7 +7,6 @@ import {
 } from "../../agents/reply-completion.js";
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { createRestartRecoveryTombstoneFixture } from "../../config/sessions/main-session-recovery-fixtures.test-support.js";
 import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
@@ -43,8 +42,6 @@ import {
   createHookCtx,
   describe1BeforeEach0,
   describe2BeforeEach0,
-  createMessageToolOnlyDispatchArgs,
-  mockPluginBoundDiscordBinding,
 } from "./dispatch-from-config.test-support.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
@@ -1005,9 +1002,15 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       SessionKey: "agent:main:telegram:direct:user1",
     });
 
-    const result = await dispatchReplyFromConfig(
-      createMessageToolOnlyDispatchArgs(ctx, dispatcher, replyResolver),
-    );
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
 
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(result.queuedFinal).toBe(false);
@@ -1554,10 +1557,14 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       },
       { receiveMessages: false },
     );
-    mockPluginBoundDiscordBinding({
+    mockPluginBinding({
       bindingId: "binding-archived",
       targetSessionKey: "plugin-binding:codex:archived",
-      conversationId: "channel:archived-test",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:archived-test",
+      },
       pluginRoot: "/tmp/plugin",
     });
     const archivedAt = Date.now() - 1_000;
@@ -1843,7 +1850,16 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         updatedAt: Date.now(),
         archivedAt,
         status: "failed",
-        mainRestartRecovery: createRestartRecoveryTombstoneFixture(),
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 4,
+          chargedAttempts: 3,
+          tombstone: {
+            reason: "automatic recovery exhausted",
+            recoveredSessionId: "dashboard-successor",
+            recoveredSessionKey: "agent:main:dashboard:successor",
+          },
+        },
       };
       const dispatcher = createDispatcher();
       const replyResolver = vi.fn(async () => {
@@ -1911,10 +1927,14 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     // process the message with delivery suppressed. See #53328.
     setNoAbort();
     mockPluginBindingClaim();
-    mockPluginBoundDiscordBinding({
+    mockPluginBinding({
       bindingId: "binding-deny",
       targetSessionKey: "plugin-binding:codex:abc123",
-      conversationId: "channel:deny-test",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:deny-test",
+      },
       pluginRoot: "/tmp/plugin",
     });
     sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
@@ -2111,9 +2131,15 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       Body: "observed message",
     });
 
-    const result = await dispatchReplyFromConfig(
-      createMessageToolOnlyDispatchArgs(ctx, dispatcher, replyResolver),
-    );
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
 
     expect(result).toEqual({
       queuedFinal: false,
@@ -2186,9 +2212,15 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       WasMentioned: false,
     });
 
-    const result = await dispatchReplyFromConfig(
-      createMessageToolOnlyDispatchArgs(ctx, dispatcher, replyResolver),
-    );
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
 
     const claimCall = firstMockCall(
       hookMocks.runner.runInboundClaimForPluginOutcome,
@@ -2486,9 +2518,15 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
     const ctx = buildTestCtx({ SessionKey: "test:session", ChatType: "channel" });
 
-    const result = await dispatchReplyFromConfig(
-      createMessageToolOnlyDispatchArgs(ctx, dispatcher, replyResolver),
-    );
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
 
     expect(result.queuedFinal).toBe(false);
     expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
@@ -2758,9 +2796,15 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const replyResolver = vi.fn(async () => failureNotice satisfies ReplyPayload);
     const ctx = buildTestCtx({ SessionKey: "test:session" });
 
-    const result = await dispatchReplyFromConfig(
-      createMessageToolOnlyDispatchArgs(ctx, dispatcher, replyResolver),
-    );
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(result.queuedFinal).toBe(true);

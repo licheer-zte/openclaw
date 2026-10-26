@@ -27,6 +27,7 @@ import { createDirectChatContext } from "../../server-chat.agent-events.test-hel
 import type { GatewayRequestContext } from "../../server-methods/types.js";
 import * as sessionAuthorization from "../../session-sharing-authorization-async.js";
 import {
+  closeRelaySession,
   ensureTalkRealtimeRelayVoiceSession,
   sendTalkRealtimeRelayAudio,
   stopTalkRealtimeRelaySession,
@@ -69,12 +70,6 @@ describe("Talk voice RPC ownership", () => {
   const runtimes = voiceRuntimes();
   const pending: Promise<void>[] = [];
   const broadcast = vi.fn<GatewayRequestContext["broadcastToConnIds"]>();
-
-  const readyParams = (changeId: string, voiceSessionId: string) => ({
-    changeId,
-    voiceSessionId,
-    outcome: "ready",
-  });
 
   function client(connId: string) {
     connections.add(connId);
@@ -261,6 +256,7 @@ describe("Talk voice RPC ownership", () => {
         expectFailure(respond, "not in this call's catalog");
       }
       expect(broadcast).not.toHaveBeenCalled();
+      expect(spy).toHaveBeenCalledOnce();
       expect(release).toHaveBeenCalledOnce();
     } finally {
       release();
@@ -328,7 +324,7 @@ describe("Talk voice RPC ownership", () => {
     const replacementId = await replace(changeId);
     markTalkVoiceSessionReady(replacementId, browser.connId, sessionTarget.agentId);
     expect(changing.respond).not.toHaveBeenCalled();
-    const completion = readyParams(changeId, replacementId);
+    const completion = { changeId, voiceSessionId: replacementId, outcome: "ready" };
     for (const caller of [client("other-browser"), runtime.client]) {
       const rejected = await invoke("talk.voice.complete", completion, caller);
       expectFailure(rejected);
@@ -352,7 +348,11 @@ describe("Talk voice RPC ownership", () => {
     const { changeId } = changing;
     const replacementId = await replace(changeId, false);
     markTalkVoiceSessionReady(replacementId, browser.connId, sessionTarget.agentId);
-    const ready = start("talk.voice.complete", readyParams(changeId, replacementId));
+    const ready = start("talk.voice.complete", {
+      changeId,
+      voiceSessionId: replacementId,
+      outcome: "ready",
+    });
     await Promise.resolve();
     expect(changing.respond).not.toHaveBeenCalled();
     expect(ready.respond).not.toHaveBeenCalled();
@@ -407,7 +407,11 @@ describe("Talk voice RPC ownership", () => {
       await changing.completed;
       expectFailure(changing.respond);
       markTalkVoiceSessionReady(replacementId, browser.connId, sessionTarget.agentId);
-      const late = await invoke("talk.voice.complete", readyParams(changeId, replacementId));
+      const late = await invoke("talk.voice.complete", {
+        changeId,
+        voiceSessionId: replacementId,
+        outcome: "ready",
+      });
       expectFailure(late);
       expect(changing.respond).toHaveBeenCalledOnce();
     },
@@ -441,6 +445,7 @@ describe("realtime relay close persistence", () => {
     }
   });
   it.each([
+    {},
     { fails: true },
     { providerAsync: false },
     { providerAsync: false, fails: true },
@@ -553,10 +558,12 @@ describe("realtime relay close persistence", () => {
         persistence.beginClose();
       }
       const closing = stopTalkRealtimeRelaySession(target);
+      expect(closeRelaySession(owned, "completed")).toBe(closing);
       const settled = vi.fn();
       void Promise.resolve(closing).then(settled, settled);
       await Promise.resolve();
       expect(settled).not.toHaveBeenCalled();
+      expect(close).toHaveBeenCalledOnce();
       expect(() => sendTalkRealtimeRelayAudio({ ...target, audioBase64: "AQI=" })).toThrow(
         "Unknown realtime relay session",
       );

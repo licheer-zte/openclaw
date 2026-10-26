@@ -5,8 +5,19 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
+export type FaceTimeTalkEventSummary = {
+  type: string;
+  turnId?: string;
+  callId?: string;
+  final?: boolean;
+  byteLength?: number;
+  name?: string;
+  text?: string;
+  message?: string;
+};
+
 export function summarizeRecentTalkEvents(events: readonly TalkEvent[]) {
-  return events.slice(-12).map((event) => {
+  return events.slice(-12).map((event): FaceTimeTalkEventSummary => {
     const payload = asRecord(event.payload);
     return {
       type: event.type,

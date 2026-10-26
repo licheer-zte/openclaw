@@ -1,6 +1,6 @@
 import { generateImage } from "openclaw/plugin-sdk/image-generation-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
-import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
@@ -16,8 +16,7 @@ function references(count = 1) {
   return Array.from({ length: count }, () => ({ buffer, mimeType: "image/png" }));
 }
 
-beforeEach(() => {
-  vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue(auth);
+function mockGeneratedImage() {
   fetchWithSsrFGuardMock.mockReset();
   for (const response of [
     Response.json({ images: [{ url: "https://v3.fal.media/out.webp" }] }),
@@ -25,7 +24,7 @@ beforeEach(() => {
   ]) {
     fetchWithSsrFGuardMock.mockResolvedValueOnce({ response, release: vi.fn(async () => {}) });
   }
-});
+}
 
 const provider = buildFalImageGenerationProvider();
 const target = { provider: "fal", model: "openai/gpt-image-2.5/flare/text-to-image" };
@@ -38,63 +37,72 @@ function generate(req: Partial<Parameters<typeof generateImage>[0]>, warn?: () =
 }
 
 const auth = { apiKey: "fal-test-key", source: "env", mode: "api-key" } as const;
-afterEach(() => vi.restoreAllMocks());
+beforeEach(() => {
+  vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue(auth);
+});
 
-it.each([
-  ["5:4", 1536, 1232, false],
-  ["4:5", 1232, 1536, true],
-  ["2.35:1", 1536, 656, true],
-] as const)("maps %s to dimensions", async (aspectRatio, width, height, edit) => {
-  await generate({
-    modelOverride: `fal/${target.model}`,
-    aspectRatio,
-    ...(edit ? { inputImages: references(), inferredResolution: "4K" as const } : {}),
-  });
-  const body = JSON.parse(String(fetchWithSsrFGuardMock.mock.calls[0]?.[0].init.body));
-  expect(body.image_size).toEqual({ width, height });
-  expect(body).not.toHaveProperty("resolution");
+afterEach(() => {
+  fetchWithSsrFGuardMock.mockReset();
+  vi.restoreAllMocks();
 });
 
 it.each([
-  ["flare", "generate"],
-  ["sunburst", "edit"],
-  ["flare", "explicit-edit"],
-  ["sunburst", "default-edit"],
-] as const)("routes %s %s through runtime", async (variant, mode) => {
+  ["1:1", 1536, 1536],
+  ["5:4", 1536, 1232],
+  ["4:5", 1232, 1536],
+  ["2.35:1", 1536, 656],
+  ["21:9", 1536, 656],
+] as const)("maps %s to generation and edit dimensions", async (aspectRatio, width, height) => {
+  for (const variant of ["flare", "sunburst"]) {
+    mockGeneratedImage();
+    await generate({
+      modelOverride: `fal/openai/gpt-image-2.5/${variant}/text-to-image`,
+      aspectRatio,
+      ...(variant === "sunburst"
+        ? { inputImages: references(), inferredResolution: "4K" as const }
+        : {}),
+    });
+    const body = JSON.parse(String(fetchWithSsrFGuardMock.mock.calls[0]?.[0].init.body));
+    expect(body.image_size).toEqual({ width, height });
+    expect(body).not.toHaveProperty("resolution");
+  }
+});
+
+it.each(["flare", "sunburst"])("generates and edits %s through runtime", async (variant) => {
   const model = `openai/gpt-image-2.5/${variant}/text-to-image`;
   const editModel = model.replace("/text-to-image", "/edit");
-  const edit = mode !== "generate";
-  const size = mode === "default-edit" ? undefined : edit ? "auto" : "1536x864";
-  const quality = variant === "flare" ? "xhigh" : "max";
-  const referenceUrl = "data:image/png;base64,cmVmZXJlbmNl";
-  const result = await generate({
-    modelOverride: `fal/${mode === "generate" || mode === "edit" ? model : editModel}`,
-    quality,
-    size,
-    outputFormat: "webp",
-    background: "transparent",
-    ...(edit ? { inputImages: references(16), inferredResolution: "4K" as const } : {}),
-  });
-  const request = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
-  assert(request, "Expected an image generation request");
-  expect(request.url).toBe(`https://fal.run/${edit ? editModel : model}`);
-  expect(JSON.parse(String(request.init.body))).toEqual({
-    prompt: "A sticker",
-    num_images: 1,
-    quality,
-    output_format: "webp",
-    background: "transparent",
-    ...(size ? { image_size: edit ? "auto" : { width: 1536, height: 864 } } : {}),
-    ...(edit ? { image_urls: Array(16).fill(referenceUrl) } : {}),
-  });
-  expect(result.ignoredOverrides).toEqual([]);
-});
-
-it.each(["flare", "sunburst"])("rejects more than 16 %s references", async (variant) => {
-  const modelOverride = `fal/openai/gpt-image-2.5/${variant}/text-to-image`;
-  await expect(generate({ modelOverride, inputImages: references(17) }, vi.fn())).rejects.toThrow(
-    "16",
-  );
+  const refs = references(16);
+  for (const mode of ["generate", "edit", "explicit-edit"] as const) {
+    mockGeneratedImage();
+    const result = await generate({
+      modelOverride: `fal/${mode === "explicit-edit" ? editModel : model}`,
+      prompt: "A transparent sticker",
+      quality: variant === "flare" ? "xhigh" : "max",
+      outputFormat: "webp",
+      background: "transparent",
+      size: mode === "generate" ? "1536x864" : "auto",
+      ...(mode !== "generate" ? { inputImages: refs, inferredResolution: "4K" as const } : {}),
+    });
+    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0].url).toBe(
+      `https://fal.run/${mode === "generate" ? model : editModel}`,
+    );
+    expect(JSON.parse(String(fetchWithSsrFGuardMock.mock.calls[0]?.[0].init.body))).toEqual({
+      prompt: "A transparent sticker",
+      num_images: 1,
+      quality: variant === "flare" ? "xhigh" : "max",
+      output_format: "webp",
+      background: "transparent",
+      image_size: mode === "generate" ? { width: 1536, height: 864 } : "auto",
+      ...(mode !== "generate"
+        ? { image_urls: Array.from({ length: 16 }, () => "data:image/png;base64,cmVmZXJlbmNl") }
+        : {}),
+    });
+    expect(result.ignoredOverrides).toEqual([]);
+  }
+  fetchWithSsrFGuardMock.mockReset();
+  await expect(
+    generate({ modelOverride: `fal/${model}`, inputImages: references(17) }, vi.fn()),
+  ).rejects.toThrow("16");
   expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
 });
 
@@ -112,4 +120,17 @@ it.each([
     /fal GPT Image 2.5.*size/,
   );
   expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+});
+
+it("keeps edit auto geometry when no size is requested", async () => {
+  mockGeneratedImage();
+  await provider.generateImage({
+    ...target,
+    ...defaults(),
+    model: "openai/gpt-image-2.5/sunburst/text-to-image",
+    inputImages: references(),
+  });
+  const body = JSON.parse(String(fetchWithSsrFGuardMock.mock.calls[0]?.[0].init.body));
+  expect(body).not.toHaveProperty("image_size");
+  expect(body).not.toHaveProperty("resolution");
 });

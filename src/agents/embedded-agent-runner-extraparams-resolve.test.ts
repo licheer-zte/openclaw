@@ -1,25 +1,46 @@
+// Covers resolving configured extra params before provider stream wrapping.
 import { describe, expect, it } from "vitest";
 import { resolveExtraParams } from "./embedded-agent-runner/extra-params.js";
 
-const gpt5Defaults = { parallel_tool_calls: true, text_verbosity: "low" };
-
 describe("resolveExtraParams", () => {
-  it("does not apply OpenAI GPT-5 defaults to OpenRouter models", () => {
-    expect(
-      resolveExtraParams({ cfg: undefined, provider: "openrouter", modelId: "gpt-5.4" }),
-    ).toBeUndefined();
+  it.each([
+    [
+      "applies default runtime params for OpenAI GPT-5 models",
+      "openai",
+      {
+        parallel_tool_calls: true,
+        text_verbosity: "low",
+      },
+    ],
+    ["does not apply OpenAI GPT-5 defaults to OpenRouter models", "openrouter", undefined],
+  ] as const)("%s", (_name, provider, expected) => {
+    const result = resolveExtraParams({ cfg: undefined, provider, modelId: "gpt-5.4" });
+    if (expected === undefined) {
+      expect(result).toBeUndefined();
+    } else {
+      expect(result).toEqual(expected);
+    }
   });
 
-  it("ignores unrelated model entries", () => {
-    expect(
-      resolveExtraParams({
-        cfg: {
-          agents: { defaults: { models: { "openai/gpt-4": { params: { temperature: 0.7 } } } } },
-        },
-        provider: "openai",
-        modelId: "gpt-4.1-mini",
-      }),
-    ).toBeUndefined();
+  it.each([
+    [
+      "returns params for exact provider/model key",
+      "gpt-4",
+      { temperature: 0.7, maxTokens: 2048 },
+      { temperature: 0.7, maxTokens: 2048 },
+    ],
+    ["ignores unrelated model entries", "gpt-4.1-mini", { temperature: 0.7 }, undefined],
+  ] as const)("%s", (_name, modelId, configuredParams, expected) => {
+    const result = resolveExtraParams({
+      cfg: { agents: { defaults: { models: { "openai/gpt-4": { params: configuredParams } } } } },
+      provider: "openai",
+      modelId,
+    });
+    if (expected === undefined) {
+      expect(result).toBeUndefined();
+    } else {
+      expect(result).toEqual(expected);
+    }
   });
 
   it("merges per-agent params over global model defaults", () => {
@@ -53,42 +74,62 @@ describe("resolveExtraParams", () => {
   });
 
   it.each([
-    ["gpt-4.1", "parallel_tool_calls", "parallelToolCalls", true, false],
-    ["gpt-5.4", "text_verbosity", "textVerbosity", "high", "low"],
-    ["gpt-5.4", "response_format", "responseFormat", { type: "text" }, { type: "json_object" }],
-  ] as const)(
-    "canonicalizes agent overrides for %s: %s",
-    (modelId, canonical, alias, modelValue, agentValue) => {
+    {
+      name: "parallelToolCalls",
+      modelId: "gpt-4.1",
+      modelParams: { parallel_tool_calls: true },
+      agentParams: { parallelToolCalls: false },
+      expected: { parallel_tool_calls: false },
+    },
+    {
+      name: "textVerbosity",
+      modelId: "gpt-5.4",
+      modelParams: { text_verbosity: "high" },
+      agentParams: { textVerbosity: "low" },
+      expected: { parallel_tool_calls: true, text_verbosity: "low" },
+    },
+    {
+      name: "responseFormat",
+      modelId: "gpt-5.4",
+      modelParams: { response_format: { type: "text" } },
+      agentParams: { responseFormat: { type: "json_object" } },
+      expected: {
+        parallel_tool_calls: true,
+        response_format: { type: "json_object" },
+        text_verbosity: "low",
+      },
+    },
+  ])(
+    "canonicalizes $name after applying agent override precedence",
+    ({ modelId, modelParams, agentParams, expected }) => {
       expect(
         resolveExtraParams({
           cfg: {
             agents: {
-              defaults: {
-                models: { [`openai/${modelId}`]: { params: { [canonical]: modelValue } } },
-              },
-              entries: { main: { params: { [alias]: agentValue } } },
+              defaults: { models: { [`openai/${modelId}`]: { params: modelParams } } },
+              entries: { main: { params: agentParams } },
             },
           },
           provider: "openai",
           modelId,
           agentId: "main",
         }),
-      ).toEqual({ ...(modelId === "gpt-5.4" ? gpt5Defaults : {}), [canonical]: agentValue });
+      ).toEqual(expected);
     },
   );
 
   it("ignores per-agent params when agentId does not match", () => {
-    expect(
-      resolveExtraParams({
-        cfg: {
-          agents: {
-            entries: { "risk-reviewer": { params: { cacheRetention: "none" } } },
-          },
+    const result = resolveExtraParams({
+      cfg: {
+        agents: {
+          entries: { "risk-reviewer": { params: { cacheRetention: "none" } } },
         },
-        provider: "anthropic",
-        modelId: "claude-opus-4-6",
-        agentId: "main",
-      }),
-    ).toBeUndefined();
+      },
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      agentId: "main",
+    });
+
+    expect(result).toBeUndefined();
   });
 });

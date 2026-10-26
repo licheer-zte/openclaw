@@ -1,25 +1,43 @@
-import { expect, it } from "vitest";
+import path from "node:path";
+import { expect, it, vi } from "vitest";
 import { configFor, modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
+import * as indexes from "../plugins/installed-plugin-index-record-builder.js";
+import * as owners from "../plugins/provider-owner-index.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { collectRuntimeToolSchemaFindings } from "./doctor-tool-schema-runtime.js";
 
-it("bounds metadata copies while inspecting a fleet's per-agent schemas", async () => {
+it("shares metadata across a fleet while inspecting each workspace's actual tools", async () => {
   await withOpenClawTestState({ env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } }, async (state) => {
-    await state.writeJson("extensions/fleet-tool/openclaw.plugin.json", {
-      id: "fleet-tool",
-      contracts: { tools: ["fleet-tool"] },
-      configSchema: { type: "object", additionalProperties: false },
-    });
-    await state.writeText(
-      "extensions/fleet-tool/index.cjs",
-      `module.exports = { id: "fleet-tool", register(api) {
+    const event = `doctor-fleet-tools:${state.root}`;
+    const factories: Array<{ agentId: string; workspaceDir: string }> = [];
+    const onFactory = (context: { agentId: string; workspaceDir: string }) =>
+      factories.push(context);
+    for (const [directory, id] of [
+      [state.statePath("extensions/fleet-tool"), "fleet-tool"],
+      [state.path("workspace100/.openclaw/extensions/workspace-tool"), "workspace-tool"],
+    ] as const) {
+      const relative = path.relative(state.stateDir, directory);
+      await state.writeJson(`${relative}/openclaw.plugin.json`, {
+        id,
+        contracts: { tools: [id] },
+        configSchema: { type: "object", additionalProperties: false },
+      });
+      await state.writeText(
+        `${relative}/index.cjs`,
+        `module.exports = { id: ${JSON.stringify(id)}, register(api) {
           api.registerTool(context => {
-            return { name: "fleet-tool", label: "Fleet fixture", description: "Synthetic tool",
+            if (${JSON.stringify(id)} === "fleet-tool") process.emit(${JSON.stringify(event)}, {
+              agentId: context.agentId, workspaceDir: context.workspaceDir
+            });
+            return { name: ${JSON.stringify(id)}, label: "Fleet fixture", description: "Synthetic tool",
               parameters: context.agentId === "agent100" ? { type: "array", items: { type: "string" } } : { type: "object", properties: {} },
               execute: async () => ({ content: [], details: {} }) };
-          }, { name: "fleet-tool" });
+          }, { name: ${JSON.stringify(id)} });
         } };`,
-    );
+      );
+    }
+    const builds = vi.spyOn(owners, "buildDeclaredProviderOwnerIndex");
+    const indexBuilds = vi.spyOn(indexes, "buildInstalledPluginIndexRecords");
     const clone = globalThis.structuredClone;
     let indexClones = 0;
     globalThis.structuredClone = (value, options) => {
@@ -33,6 +51,8 @@ it("bounds metadata copies while inspecting a fleet's per-agent schemas", async 
       }
       return clone(value, options);
     };
+    process.on(event, onFactory);
+    const started = performance.now();
     try {
       const findings = await collectRuntimeToolSchemaFindings(
         {
@@ -44,7 +64,7 @@ it("bounds metadata copies while inspecting a fleet's per-agent schemas", async 
                 `agent${i}`,
                 {
                   workspace: state.path(`workspace${i}`),
-                  tools: { allow: ["fleet-tool"] },
+                  tools: { allow: ["fleet-tool", "workspace-tool"] },
                 },
               ]),
             ),
@@ -53,20 +73,43 @@ it("bounds metadata copies while inspecting a fleet's per-agent schemas", async 
             api: "openai-completions",
             models: [modelDefinition("local", { name: "Local fixture", reasoning: false })],
           }),
-          plugins: { allow: ["fleet-tool"], slots: { memory: "none" } },
+          plugins: { allow: ["fleet-tool", "workspace-tool"], slots: { memory: "none" } },
         },
         { mode: "doctor", env: state.env },
       );
-      expect(findings).toEqual([
-        expect.objectContaining({
-          severity: "error",
-          target: "fleet-tool",
-          message: expect.stringContaining("Agent agent100 tool fleet-tool"),
+      expect(findings).toEqual(
+        ["fleet-tool", "workspace-tool"].map((target) =>
+          expect.objectContaining({
+            severity: "error",
+            target,
+            message: expect.stringContaining(`Agent agent100 tool ${target}`),
+          }),
+        ),
+      );
+      expect(factories).toEqual(
+        Array.from({ length: 200 }, (_, i) => ({
+          agentId: `agent${i}`,
+          workspaceDir: state.path(`workspace${i}`),
+        })),
+      );
+      console.log(
+        JSON.stringify({
+          agents: 200,
+          elapsedMs: performance.now() - started,
+          ownerBuilds: builds.mock.calls.length,
+          indexBuilds: indexBuilds.mock.calls.length,
+          indexClones,
         }),
-      ]);
+      );
+      // Shared, workspace-local, fleet-union, and their two tool-owner projections.
+      expect(builds.mock.calls.length).toBe(5);
+      expect(indexBuilds).toHaveBeenCalledTimes(2);
       expect(indexClones).toBeLessThanOrEqual(3);
     } finally {
       globalThis.structuredClone = clone;
+      process.off(event, onFactory);
+      builds.mockRestore();
+      indexBuilds.mockRestore();
     }
   });
 });

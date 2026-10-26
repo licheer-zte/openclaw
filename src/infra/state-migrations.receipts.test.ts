@@ -23,20 +23,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   });
 });
 
-it("preserves persisted source-key hashing with optional ownership scope", () => {
-  const sourcePath = path.join("fixtures", "legacy.json");
-  const resolvedPath = path.resolve(sourcePath);
-  const key = (input: string) => `test-json:${createHash("sha256").update(input).digest("hex")}`;
-  expect(resolveLegacyMigrationSourceKey("test-json", sourcePath)).toBe(key(resolvedPath));
-  expect(resolveLegacyMigrationSourceKey("test-json", sourcePath, "workspace-a")).toBe(
-    key(`workspace-a\0${resolvedPath}`),
-  );
-  expect(resolveLegacyMigrationSourceKey("test-json", sourcePath, "workspace-b")).not.toBe(
-    key(`workspace-a\0${resolvedPath}`),
-  );
-});
-
-it("records, rejects duplicates, removes, and resumes a receipt without replacing its report", () => {
+function createFixture() {
   const stateDir = tempDirs.make("openclaw-migration-receipts-");
   const sourcePath = path.join(stateDir, "legacy.json");
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
@@ -52,15 +39,35 @@ it("records, rejects duplicates, removes, and resumes a receipt without replacin
     now: 123,
     reportJson: '{"preserved":true}',
   };
-  const { db: database } = openOpenClawStateDatabase({ env });
-  const write = (run: (connection: typeof database) => void) =>
+  const { db } = openOpenClawStateDatabase({ env });
+  const write = (run: (connection: typeof db) => void) =>
     runOpenClawStateWriteTransaction(({ db: connection }) => run(connection), { env });
   write((connection) => recordLegacyMigrationReceipt(connection, receipt));
   const source = () =>
-    database.prepare("SELECT * FROM migration_sources WHERE source_key = ?").get(receipt.sourceKey);
+    db.prepare("SELECT * FROM migration_sources WHERE source_key = ?").get(receipt.sourceKey);
   const read = () => readLegacyMigrationReceipt(receipt.sourceKey, env);
   const remove = (label?: string) =>
     markLegacyMigrationSourceRemoved(receipt.sourceKey, env, label);
+  return { receipt, db, source, write, read, remove };
+}
+
+it("preserves persisted source-key hashing with optional ownership scope", () => {
+  const sourcePath = path.join("fixtures", "legacy.json");
+  const resolvedPath = path.resolve(sourcePath);
+  const digest = createHash("sha256").update(resolvedPath).digest("hex");
+  const scopedDigest = createHash("sha256").update(`workspace-a\0${resolvedPath}`).digest("hex");
+
+  expect(resolveLegacyMigrationSourceKey("test-json", sourcePath)).toBe(`test-json:${digest}`);
+  expect(resolveLegacyMigrationSourceKey("test-json", sourcePath, "workspace-a")).toBe(
+    `test-json:${scopedDigest}`,
+  );
+  expect(resolveLegacyMigrationSourceKey("test-json", sourcePath, "workspace-b")).not.toBe(
+    `test-json:${scopedDigest}`,
+  );
+});
+
+it("records, rejects duplicates, removes, and resumes a receipt without replacing its report", () => {
+  const { receipt, db: database, source, write, read, remove } = createFixture();
   const { sourceKey, reportJson } = receipt;
   const preserved = { sourceKey, reportJson, removedSource: false };
   expect(read()).toEqual({ ...preserved, sourceSha256: receipt.sourceSha256 });

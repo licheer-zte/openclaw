@@ -3,7 +3,6 @@ import "../../../styles/chat/composer-queue-content.css";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuHandle } from "../../../components/solid/menu.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
-import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import {
   chatQueueMovableSegments,
   isMovableChatQueueItem,
@@ -525,7 +524,7 @@ function ChatQueueItem(rowProps: {
         />
       ) : (
         <span class="chat-queue__copy">
-          <span class="chat-queue__text" title={text()} ref={createTextOverflow(text)}>
+          <span class="chat-queue__text" title={text()}>
             {text()}
           </span>
           {steered() && !canSteer() ? (

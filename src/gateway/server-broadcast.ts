@@ -636,17 +636,17 @@ export function createGatewayBroadcaster(params: {
           if (projected === undefined) {
             continue;
           }
-          const fragments = projected.serializeSession && (sessionFragments ??= new Map());
           payloadFragment =
-            fragments?.get(projected.payload) ||
-            projected.serializePayload?.() ||
+            (projected.serializeSession && sessionFragments?.get(projected.payload)) ||
             serializeFrameField(
               "payload",
               projected.payload,
               projected.serializeSession,
               projected.serializeMessage,
             );
-          fragments?.set(projected.payload, payloadFragment);
+          if (projected.serializeSession) {
+            (sessionFragments ??= new Map()).set(projected.payload, payloadFragment);
+          }
           delivered = projected.delivered;
         }
         // A drained write can refresh the recipient; cache only the profile at this send.

@@ -133,10 +133,6 @@ function describeLostField(change: LostField): string {
       return "unsandboxed execution (the creating conversation requires a sandbox)";
     case "admissionSource":
       return "operator admission";
-    case "automationsCli":
-      return "unscoped automations tool on CLI backends (now limited to this automation, as on embedded runs)";
-    case "requesterYield":
-      return "sessions_yield (scheduled runs cannot wait for child sessions; the run must finish its turn)";
     default:
       return change.field;
   }
@@ -157,7 +153,7 @@ function section(heading: string, lines: string[], footer?: string): string[] {
 export function formatScheduledContextReport(report: ScheduledContextReport): string | null {
   const lines = [
     ...section(
-      `${pluralize(report.losses.length, "automation")} will lose access at the next run:`,
+      `${pluralize(report.losses.length, "automation")} will lose access because runs use the authority of the conversation and person that created ${report.losses.length === 1 ? "it" : "them"}:`,
       report.losses.map(
         (entry) =>
           `- ${label(entry.job)}: ${entry.fields.map(describeLostField).join("; ")}${

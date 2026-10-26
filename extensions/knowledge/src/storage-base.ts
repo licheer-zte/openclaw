@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { jsonPathValue } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -64,10 +65,8 @@ export class StorageBase {
       await this.real.run(access, async () => undefined);
     }
   }
-  protected transaction<T>(operationLabel: string, run: (db: DatabaseSync) => T): T {
-    return this.store.withDatabase((db) =>
-      runSqliteImmediateTransactionSync(db, () => run(db), { operationLabel }),
-    );
+  protected transaction<T>(run: (db: DatabaseSync) => T): T {
+    return this.store.withDatabase((db) => runSqliteImmediateTransactionSync(db, () => run(db)));
   }
   protected identity(
     db: DatabaseSync,
@@ -118,16 +117,11 @@ export class StorageBase {
         .select(["scope", "request", "intent", "state", "plan", "receipt"])
         .where("scope", "=", scope)
         .where(
-          (eb) =>
-            eb.fn<string | null>("json_extract", [eb.ref("plan"), eb.val("$.source.provider")]),
+          (eb) => jsonPathValue(db, eb.ref("plan"), eb.val("$.source.provider")),
           "=",
           source.provider,
         )
-        .where(
-          (eb) => eb.fn<string | null>("json_extract", [eb.ref("plan"), eb.val("$.source.key")]),
-          "=",
-          source.key,
-        )
+        .where((eb) => jsonPathValue(db, eb.ref("plan"), eb.val("$.source.key")), "=", source.key)
         .orderBy("rowid", "desc")
         .limit(1),
     );
@@ -218,37 +212,14 @@ export class StorageBase {
       return;
     }
     access.assertCurrent();
-    this.store.withDatabase((db) => {
+    this.transaction((db) => {
       this.identity(db, new PublicationFiles(this.config.root));
       const scope = scopeKey(access.scope);
-      // The storage worker serializes operations. Keep the outbox ordered, but
-      // load only one exact snapshot at a time and never hold a SQL lock for Git.
-      const pending = db
-        .prepare(
-          "SELECT sequence FROM git_jobs WHERE scope=? AND state!='committed' ORDER BY sequence",
-        )
-        .all(scope);
-      if (!pending.length) {
-        return;
-      }
-      // This synchronous drain cannot accept another publication. Derive the
-      // receipt lookup once, without loading the large retained plans.
-      const requests = new Map(
-        db
-          .prepare("SELECT request FROM mutations WHERE scope=? AND state='published'")
-          .all(scope)
-          .map((row) => [this.publicationToken(scope, String(row.request)), row.request!]),
-      );
-      const jobAt = db.prepare("SELECT token,batch FROM git_jobs WHERE sequence=?");
-      const updateJob = db.prepare(
-        "UPDATE git_jobs SET state=?,commit_id=?,message=? WHERE sequence=?",
-      );
-      const receiptAt = db.prepare("SELECT receipt FROM mutations WHERE scope=? AND request=?");
-      const updateReceipt = db.prepare(
-        "UPDATE mutations SET receipt=? WHERE scope=? AND request=?",
-      );
-      for (const { sequence } of pending) {
-        const job = jobAt.get(sequence!)!;
+      // Retain ordered exact snapshots in SQLite. An earlier gap cannot be
+      // overtaken by a later checkpoint in the same authorized scope.
+      for (const job of db
+        .prepare("SELECT * FROM git_jobs WHERE scope=? AND state!='committed' ORDER BY sequence")
+        .all(scope)) {
         access.assertCurrent();
         let result: NonNullable<Receipt["git"]>;
         try {
@@ -261,21 +232,34 @@ export class StorageBase {
             message: (e as Error).message.slice(0, 500),
           };
         }
-        const request = requests.get(String(job.token));
-        // The checkpoint ref makes retries idempotent if this acknowledgement fails.
-        runSqliteImmediateTransactionSync(
-          db,
-          () => {
-            access.assertCurrent();
-            updateJob.run(result.state, result.commit ?? null, result.message, sequence!);
-            if (request !== undefined) {
-              const receipt: Receipt = JSON.parse(String(receiptAt.get(scope, request)!.receipt));
-              receipt.git = result;
-              updateReceipt.run(JSON.stringify(receipt), scope, request);
-            }
-          },
-          { operationLabel: "knowledge.git.settle" },
+        db.prepare("UPDATE git_jobs SET state=?,commit_id=?,message=? WHERE sequence=?").run(
+          result.state,
+          result.commit ?? null,
+          result.message,
+          job.sequence!,
         );
+        // Match on the request key first: receipt is stored after the large plan
+        // column, so reading it for every publication walks every plan.
+        for (const row of db
+          .prepare("SELECT request FROM mutations WHERE scope=? AND state='published'")
+          .all(scope)) {
+          if (this.publicationToken(scope, String(row.request)) !== job.token) {
+            continue;
+          }
+          const receipt: Receipt = JSON.parse(
+            String(
+              db
+                .prepare("SELECT receipt FROM mutations WHERE scope=? AND request=?")
+                .get(scope, row.request!)!.receipt,
+            ),
+          );
+          receipt.git = result;
+          db.prepare("UPDATE mutations SET receipt=? WHERE scope=? AND request=?").run(
+            JSON.stringify(receipt),
+            scope,
+            row.request!,
+          );
+        }
         if (result.state !== "committed") {
           break;
         }
@@ -340,7 +324,7 @@ export class StorageBase {
   private observe(records: LoadedRecord[], access: VaultAccess, evidence: EvidenceInspector) {
     const scope = access.scope;
     access.assertCurrent();
-    this.transaction("knowledge.observe", (db) => {
+    this.transaction((db) => {
       this.identity(db, new PublicationFiles(this.config.root));
       if (db.prepare("SELECT 1 FROM mutations WHERE state!='published' LIMIT 1").get()) {
         throw blocked();

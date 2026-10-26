@@ -10,7 +10,7 @@
  * @module @openclaw/oc-path/resolve
  */
 
-import type { AstItem, MdAst } from "./ast.js";
+import type { AstBlock, AstItem, FrontmatterEntry, MdAst } from "./ast.js";
 import type { OcPath } from "./oc-path.js";
 import {
   isOrdinalSeg,
@@ -20,12 +20,24 @@ import {
   unquoteSeg,
 } from "./oc-path.js";
 
+type OcPathMatch =
+  | { readonly kind: "root"; readonly node: MdAst }
+  | { readonly kind: "frontmatter"; readonly node: FrontmatterEntry }
+  | { readonly kind: "block"; readonly node: AstBlock }
+  | { readonly kind: "item"; readonly node: AstItem; readonly block: AstBlock }
+  | {
+      readonly kind: "item-field";
+      readonly node: AstItem;
+      /** The kv.value string, surfaced for convenience. */
+      readonly value: string;
+    };
+
 /**
  * Resolve. Slugs match case-insensitively. `[frontmatter]` is a
  * literal section sentinel; the frontmatter key sits at `item` (or
  * `field` for 4-segment callers).
  */
-export function resolveMdOcPath(ast: MdAst, path: OcPath) {
+export function resolveMdOcPath(ast: MdAst, path: OcPath): OcPathMatch | null {
   if (path.section === "[frontmatter]") {
     const key = path.item ?? path.field;
     if (key === undefined) {
@@ -35,11 +47,11 @@ export function resolveMdOcPath(ast: MdAst, path: OcPath) {
     if (entry === undefined) {
       return null;
     }
-    return { kind: "frontmatter", node: entry } as const;
+    return { kind: "frontmatter", node: entry };
   }
 
   if (path.section === undefined) {
-    return { kind: "root", node: ast } as const;
+    return { kind: "root", node: ast };
   }
 
   const block = ast.blocks.find((b) => b.slug === unquoteSeg(path.section!).toLowerCase());
@@ -47,7 +59,7 @@ export function resolveMdOcPath(ast: MdAst, path: OcPath) {
     return null;
   }
   if (path.item === undefined) {
-    return { kind: "block", node: block } as const;
+    return { kind: "block", node: block };
   }
 
   // Item dispatch: ordinal (#N) > positional ($last) > slug.
@@ -75,7 +87,7 @@ export function resolveMdOcPath(ast: MdAst, path: OcPath) {
     return null;
   }
   if (path.field === undefined) {
-    return { kind: "item", node: item, block } as const;
+    return { kind: "item", node: item, block };
   }
 
   if (item.kv === undefined) {
@@ -84,6 +96,5 @@ export function resolveMdOcPath(ast: MdAst, path: OcPath) {
   if (item.kv.key.toLowerCase() !== unquoteSeg(path.field).toLowerCase()) {
     return null;
   }
-  /** The kv.value string, surfaced for convenience. */
-  return { kind: "item-field", node: item, value: item.kv.value } as const;
+  return { kind: "item-field", node: item, value: item.kv.value };
 }

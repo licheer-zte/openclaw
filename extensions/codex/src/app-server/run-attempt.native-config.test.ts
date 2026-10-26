@@ -272,7 +272,7 @@ describe("Codex native configuration", () => {
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const run = runCodexAppServerAttempt(params);
       try {
-        if (outcome === "allowed" || outcome === "api-key-account") {
+        if (outcome === "allowed") {
           await run.waitForTurnAccepted();
           transport.send(
             completedTurn("thread-access", {
@@ -283,8 +283,8 @@ describe("Codex native configuration", () => {
           await expect(run).resolves.toMatchObject({ terminal: { kind: "ok" } });
         } else {
           await expect(run).rejects.toThrow(
-            outcome === "missing-account"
-              ? "requires an authenticated OpenAI account"
+            outcome === "missing-account" || outcome === "api-key-account"
+              ? "requires ChatGPT subscription authentication"
               : outcome === "missing-capability"
                 ? "not advertised for the current account and model"
                 : "Codex account changed while preparing the access program",
@@ -295,7 +295,7 @@ describe("Codex native configuration", () => {
         const turns = transport.writes
           .map((line) => JSON.parse(line) as { method: string; params: unknown })
           .filter(({ method }) => method === "turn/start");
-        if (outcome === "allowed" || outcome === "api-key-account") {
+        if (outcome === "allowed") {
           expect(turns).toEqual([
             {
               id: expect.any(Number),
@@ -315,9 +315,7 @@ describe("Codex native configuration", () => {
           outcome === "revoked-account" ||
           outcome === "replaced-account" ||
           outcome === "replaced-catalog";
-        expect(revisionBeforeEffect !== undefined).toBe(
-          outcome === "allowed" || outcome === "api-key-account" || lateChange,
-        );
+        expect(revisionBeforeEffect !== undefined).toBe(outcome === "allowed" || lateChange);
         if (lateChange) {
           expect(transport.client.getModelCatalogRevision()).toBeGreaterThan(revisionBeforeEffect!);
         }

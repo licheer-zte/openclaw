@@ -4,7 +4,19 @@ import * as workspace from "openclaw/plugin-sdk/agent-workspace-runtime";
 import type * as Plugin from "openclaw/plugin-sdk/plugin-entry";
 import * as testApi from "openclaw/plugin-sdk/plugin-test-api";
 import { expect, vi } from "vitest";
-import { createWorkspaceNodeDispatcher } from "./workspace-service.test-support.js";
+import { handleDirList } from "./node-host/dir-list.js";
+import { handleFileFetch } from "./node-host/file-fetch.js";
+import { handleFileStat } from "./node-host/file-stat.js";
+import { handleFileWrite } from "./node-host/file-write.js";
+import { createFileTransferNodeInvokePolicy } from "./shared/node-invoke-policy.js";
+import { createCtx } from "./shared/node-invoke-policy.test-support.js";
+
+const unaryHandlers = {
+  "file.fetch": handleFileFetch,
+  "file.stat": handleFileStat,
+  "file.write": handleFileWrite,
+  "dir.list": handleDirList,
+};
 
 export async function createWorkspaceFixture(parent: string, unary = false) {
   const state: {
@@ -12,7 +24,8 @@ export async function createWorkspaceFixture(parent: string, unary = false) {
     openDuplex: Plugin.OpenClawPluginServiceContext["openNodeDuplex"];
   } = { local: path.join(parent, "gateway"), openDuplex: undefined };
   const remote = path.join(parent, "harness");
-  await Promise.all([state.local, remote].map((dir) => fs.mkdir(dir)));
+  await fs.mkdir(state.local);
+  await fs.mkdir(remote);
   const nodePolicy: {
     allowReadPaths: string[];
     allowWritePaths: string[];
@@ -28,13 +41,30 @@ export async function createWorkspaceFixture(parent: string, unary = false) {
     workspaces: { main: { nodeId: "node-1", remoteRoot: remote } },
     nodes: { "node-1": nodePolicy },
   };
-  const dispatch = createWorkspaceNodeDispatcher(remote);
   const invoke = vi.fn<Plugin.OpenClawPluginApi["runtime"]["nodes"]["invoke"]>(async (request) => {
     if (!unary) {
       throw new Error("Lifecycle must use the paired stream");
     }
     expect(request.nodeId).toBe("node-1");
-    return dispatch(request, pluginConfig);
+    const { ctx, invokeNode } = createCtx({
+      command: request.command,
+      params: request.params as Record<string, unknown>,
+      pluginConfig,
+    });
+    invokeNode.mockImplementation(async (options = {}) => {
+      const handler = Object.entries(unaryHandlers).find(
+        ([command]) => command === request.command,
+      )?.[1];
+      if (!handler) {
+        throw new Error(`Unexpected command ${request.command}`);
+      }
+      return { ok: true, payload: await handler(options.params as Record<string, unknown>) };
+    });
+    const result = await createFileTransferNodeInvokePolicy().handle(ctx);
+    if (!result.ok) {
+      throw new Error(`${result.code}: ${result.message}`);
+    }
+    return result;
   });
   const registerService = vi.fn<Plugin.OpenClawPluginApi["registerService"]>();
   const scheduler = testApi.createTestPluginServiceScheduler();

@@ -64,7 +64,9 @@ describe("Crabline WhatsApp fixture authentication", () => {
   it("admits the actual restart scenario's direct peer through the Crabline provider contract", async () => {
     await withTransport("whatsapp", async (transport) => {
       const config = readQaScenarioExecutionConfig("whatsapp-restart-resume");
-      assert(typeof config?.conversationId === "string" && typeof config.senderId === "string");
+      if (typeof config?.conversationId !== "string" || typeof config.senderId !== "string") {
+        throw new Error("WhatsApp restart scenario is missing its direct peer");
+      }
       expect(config.conversationId).not.toBe(selfJid);
       await expect(
         transport.sendInbound({

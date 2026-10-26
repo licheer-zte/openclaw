@@ -50,10 +50,11 @@ it.each([
   };
   claim(firstTarget).commit();
 
-  claim({
+  const secondClaim = claimInbound({
     ...firstTarget,
     CommandTargetSessionKey: "agent:main:discord:channel:c1:thread:thread-1",
   });
+  expect(secondClaim.status).toBe("claimed");
   expect(claimInbound(firstTarget)).toEqual({ status: "duplicate" });
 });
 

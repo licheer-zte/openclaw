@@ -24,13 +24,12 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it.each(
   (["git", "package-to-git"] as const).flatMap((route) => [
-    { route, timeout: "omitted", timeoutMs: undefined },
-    { route, timeout: "explicit", timeoutMs: 42_000 },
+    { route, timeout: "omitted", timeoutMs: undefined, expectedTimeoutMs: undefined },
+    { route, timeout: "explicit", timeoutMs: 42_000, expectedTimeoutMs: 42_000 },
   ]),
 )(
   "passes the $timeout update timeout to the $route activation Doctor",
-  async ({ route, timeoutMs }) => {
-    const switchToGit = route === "package-to-git";
+  async ({ route, timeoutMs, expectedTimeoutMs }) => {
     const base = tempDirs.make("update-git-doctor-timeout-");
     const gitRoot = path.join(base, "checkout");
     const target = createNpmTarget(path.join(base, "node_modules"));
@@ -47,7 +46,10 @@ it.each(
     vi.spyOn(globalUpdate, "resolveGlobalInstallTarget").mockResolvedValue(target);
     vi.spyOn(shared, "resolveGitInstallDir").mockReturnValue(gitRoot);
     vi.spyOn(shared, "resolveGlobalManager").mockResolvedValue("npm");
-    vi.spyOn(shared, "ensureGitCheckout").mockResolvedValue({ checkoutDir: gitRoot, step: null });
+    vi.spyOn(shared, "ensureGitCheckout").mockResolvedValue({
+      checkoutDir: gitRoot,
+      step: null,
+    });
     vi.spyOn(snapshotCapacity, "assessInitialUpdateSnapshotCapacity").mockResolvedValue({
       name: "snapshot-space-preflight",
       command: "snapshot-space-preflight",
@@ -75,7 +77,7 @@ it.each(
       });
     vi.spyOn(gitRunner, "updateGitCheckout").mockImplementation(async ({ opts }) => {
       const steps: UpdateStepResult[] = [];
-      if (switchToGit) {
+      if (route === "package-to-git") {
         assert(opts.prepareGitExposure);
         await opts.prepareGitExposure(gitRoot, "a".repeat(40), env);
       } else {
@@ -93,9 +95,9 @@ it.each(
     vi.spyOn(performance, "now").mockReturnValue(1_000);
 
     const result = await updateGitInstall({
-      root: switchToGit ? target.packageRoot : gitRoot,
-      switchToGit,
-      installKind: switchToGit ? "package" : "git",
+      root: route === "package-to-git" ? target.packageRoot : gitRoot,
+      switchToGit: route === "package-to-git",
+      installKind: route === "package-to-git" ? "package" : "git",
       timeoutMs,
       startedAt: Date.now(),
       progress: {},
@@ -113,7 +115,7 @@ it.each(
     expect(result.steps.filter((step) => step.name === "openclaw doctor")).toEqual([
       expect.objectContaining({ exitCode: 0 }),
     ]);
-    expect(exposure).toHaveBeenCalledTimes(switchToGit ? 1 : 0);
+    expect(exposure).toHaveBeenCalledTimes(route === "package-to-git" ? 1 : 0);
     expect(doctor).toHaveBeenCalledExactlyOnceWith(
       [
         process.execPath,
@@ -122,7 +124,7 @@ it.each(
         "--non-interactive",
         "--fix",
       ],
-      expect.objectContaining({ cwd: gitRoot, timeoutMs }),
+      expect.objectContaining({ cwd: gitRoot, timeoutMs: expectedTimeoutMs }),
     );
   },
 );

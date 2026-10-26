@@ -6,7 +6,6 @@ import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.t
 import {
   hasOperatorApprovalsAccess,
   hasOperatorReadAccess,
-  hasOperatorSelfReadAccess,
   hasOperatorWriteAccess,
 } from "../../app/operator-access.ts";
 import {
@@ -24,11 +23,7 @@ import {
 import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { readSessionMethodScopeAccess } from "../../lib/session-method-access.ts";
-import type {
-  SessionCapability,
-  SessionRowObservation,
-} from "../../lib/sessions/session-capability.ts";
+import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { Icon } from "../solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
@@ -45,14 +40,14 @@ type DashboardDocumentState =
 
 type ProviderBinding = {
   client: NonNullable<ApplicationGatewaySnapshot["client"]>;
-  sessions?: Pick<SessionCapability, "describe" | "captureReconcile" | "observeRow">;
+  sessions?: Pick<SessionCapability, "describe">;
   sessionKey: string;
   presentationScope?: object;
 };
 
 export type BoardDocumentProps = {
   gatewaySnapshot?: ApplicationGatewaySnapshot;
-  sessions?: Pick<SessionCapability, "describe" | "captureReconcile" | "observeRow">;
+  sessions?: Pick<SessionCapability, "describe">;
   sessionKey?: string | null;
   preparedSession?: BoardGetParams | null;
   onDocumentClose?: (() => void) | null;
@@ -71,13 +66,7 @@ function createBoardDocument(
   let errorText = "";
   let ownedProvider: BoardProvider | null = null;
   let providerLease: BoardProviderLease | null = null;
-  let ownedBinding:
-    | (ProviderBinding & {
-        session: BoardGetParams;
-        observesSession: boolean;
-        observation?: SessionRowObservation;
-      })
-    | null = null;
+  let ownedBinding: (ProviderBinding & { session: BoardGetParams }) | null = null;
   let providerSubscriptions: (() => void)[] = [];
   let bindingGeneration = 0;
 
@@ -86,20 +75,9 @@ function createBoardDocument(
     notify();
   }
 
-  function providerCapabilities(
-    snapshot: ApplicationGatewaySnapshot,
-    observation = ownedBinding?.observation,
-  ) {
-    const connected = snapshot.phase === "connected" && !props.passive;
-    const auth = snapshot.hello?.auth ?? null;
-    const canMutate =
-      connected &&
-      (!auth?.scopes ||
-        readSessionMethodScopeAccess(auth, {
-          method: "board.update",
-          requiredScope: "operator.sessions.write",
-          session: observation?.row ?? undefined,
-        }).allowed);
+  function providerCapabilities(snapshot: ApplicationGatewaySnapshot) {
+    const connected = snapshot.phase === "connected";
+    const canMutate = connected && hasOperatorWriteAccess(snapshot.hello?.auth ?? null);
     return {
       canMutate,
       canGrant: connected && hasOperatorApprovalsAccess(snapshot.hello?.auth ?? null),
@@ -109,7 +87,6 @@ function createBoardDocument(
           true,
       canPinMcpApps:
         canMutate &&
-        hasOperatorReadAccess(auth) &&
         isGatewayMethodAdvertised(snapshot, "board.widget.appView") === true &&
         isGatewayMethodAdvertised(snapshot, "board.widget.put") === true,
     };
@@ -132,33 +109,22 @@ function createBoardDocument(
     }
     if (
       snapshot.phase === "connected" &&
-      (!hasOperatorSelfReadAccess(snapshot.hello?.auth ?? null) ||
+      (!hasOperatorReadAccess(snapshot.hello?.auth ?? null) ||
         isGatewayMethodAdvertised(snapshot, "board.get") === false)
     ) {
       releaseProvider();
       documentState = "unavailable";
       return;
     }
-    const observesSession =
-      snapshot.phase === "connected"
-        ? Boolean(
-            !props.passive &&
-            props.sessions &&
-            !hasOperatorWriteAccess(snapshot.hello?.auth ?? null),
-          )
-        : (ownedBinding?.observesSession ?? false);
+    const capabilities = providerCapabilities(snapshot);
     if (
       ownedBinding?.client === client &&
       ownedBinding.presentationScope === presentationScope &&
       ownedBinding.sessions === props.sessions &&
       ownedBinding.sessionKey === sessionKey &&
-      ownedBinding.observesSession === observesSession &&
-      (snapshot.phase !== "connected" ||
-        !ownedBinding.observation ||
-        ownedBinding.observation.isCurrent()) &&
       (!props.preparedSession || ownedBinding.session.agentId === props.preparedSession.agentId)
     ) {
-      providerLease?.update(client, snapshot.phase === "connected", providerCapabilities(snapshot));
+      providerLease?.update(client, snapshot.phase === "connected", capabilities);
       return;
     }
     releaseProvider();
@@ -169,7 +135,7 @@ function createBoardDocument(
     const generation = bindingGeneration;
     void bindProvider(
       { client, sessions: props.sessions, sessionKey, presentationScope },
-      observesSession,
+      capabilities,
       generation,
       props.preparedSession ?? null,
     );
@@ -177,7 +143,7 @@ function createBoardDocument(
 
   async function bindProvider(
     binding: ProviderBinding,
-    observesSession: boolean,
+    capabilities: ReturnType<typeof providerCapabilities>,
     generation: number,
     preparedSession: BoardGetParams | null,
   ): Promise<void> {
@@ -188,21 +154,14 @@ function createBoardDocument(
         notify();
         return;
       }
-      const reconcile = observesSession ? sessions?.captureReconcile() : undefined;
       const described =
-        (preparedSession && !observesSession) || !sessions
+        preparedSession || !sessions
           ? null
-          : await sessions.describe(
-              {
-                key: binding.sessionKey,
-                ...(preparedSession?.agentId ? { agentId: preparedSession.agentId } : {}),
-              },
-              { client: binding.client },
-            );
+          : await sessions.describe({ key: binding.sessionKey }, { client: binding.client });
       if (generation !== bindingGeneration) {
         return;
       }
-      if ((!preparedSession || observesSession) && !described?.session) {
+      if (!preparedSession && !described?.session) {
         documentState = "not-found";
         notify();
         return;
@@ -211,8 +170,6 @@ function createBoardDocument(
       if (
         !current ||
         current.client !== binding.client ||
-        current.phase !== "connected" ||
-        !hasOperatorSelfReadAccess(current.hello?.auth ?? null) ||
         readPresentationScope() !== binding.presentationScope
       ) {
         return;
@@ -221,37 +178,6 @@ function createBoardDocument(
         sessionKey: described!.session!.key,
         agentId: described!.session!.agentId,
       };
-      const nextBinding: NonNullable<typeof ownedBinding> = {
-        ...binding,
-        session,
-        observesSession,
-      };
-      if (observesSession && sessions && session.agentId) {
-        // Archived descriptors need an observer even when the primary roster excludes them.
-        nextBinding.observation = sessions.observeRow(
-          { key: session.sessionKey, agentId: session.agentId },
-          (row) => {
-            if (ownedBinding !== nextBinding) {
-              return;
-            }
-            if (!row) {
-              releaseProvider();
-            }
-            update();
-          },
-          {
-            onInvalidate: () => {
-              if (ownedBinding !== nextBinding) {
-                return;
-              }
-              releaseProvider();
-              update();
-            },
-          },
-        );
-        reconcile?.(described?.session ?? undefined, undefined, { resultAgentId: session.agentId });
-      }
-      const capabilities = providerCapabilities(current, nextBinding.observation);
       const lease = acquireBoardProviderForSession(
         session,
         binding.client,
@@ -265,7 +191,7 @@ function createBoardDocument(
       const provider = lease.provider;
       ownedProvider = provider;
       providerLease = lease;
-      ownedBinding = nextBinding;
+      ownedBinding = { ...binding, session };
       // Reconcile tab intent from provider receipts and preserve ordered focus commands.
       providerSubscriptions.push(
         provider.snapshot$.subscribe(() => reconcileProvider(provider)),
@@ -321,7 +247,6 @@ function createBoardDocument(
       unsubscribe();
     }
     providerSubscriptions = [];
-    ownedBinding?.observation?.dispose();
     providerLease?.release();
     ownedProvider = null;
     providerLease = null;
@@ -486,8 +411,7 @@ export const OpenClawBoardDocument = defineSolidBridge<BoardDocumentProps>(
         key === "gatewaySnapshot" ||
         key === "sessions" ||
         key === "sessionKey" ||
-        key === "preparedSession" ||
-        key === "passive"
+        key === "preparedSession"
       ) {
         inputUpdates.get(host)?.();
       }

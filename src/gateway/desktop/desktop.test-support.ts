@@ -1,7 +1,5 @@
-import assert from "node:assert/strict";
 import { once, type EventEmitter } from "node:events";
 import net, { type Server } from "node:net";
-import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createSuiteLogPathTracker } from "../../logging/log-test-helpers.js";
@@ -13,12 +11,16 @@ export async function listenLoopback(server: Server) {
   server.listen(0, "127.0.0.1");
   await listening;
   const address = server.address();
-  assert(address && typeof address !== "string", "expected TCP test address");
+  if (!address || typeof address === "string") {
+    throw new Error("expected TCP test address");
+  }
   return address.port;
 }
 
-export async function closeServer(server: Server) {
-  await promisify(server.close.bind(server))();
+export function closeServer(server: Server) {
+  return new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
 }
 
 export function waitForClose(emitter: EventEmitter) {
@@ -83,7 +85,9 @@ export function setupDesktopDiagnostics(
       }
       await Promise.all(cleanup.splice(0).map((run) => run()));
       await flushLogger();
-      await Promise.all(captures.map((capture) => capture.flush()));
+      for (const capture of captures) {
+        await capture.flush();
+      }
       if (vi.isFakeTimers()) {
         expect(vi.getTimerCount()).toBe(0);
       }

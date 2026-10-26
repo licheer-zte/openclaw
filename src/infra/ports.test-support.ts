@@ -3,7 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import net from "node:net";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
-import type { TestContext } from "vitest";
+import { expect, type TestContext } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -41,10 +41,11 @@ export async function withNativeSsConnection(
   inspect: (fixture: NativeConnection) => Promise<void>,
 ): Promise<void> {
   const accepted = createDeferred<net.Socket>();
-  let socket: net.Socket | undefined;
-  await using server = net.createServer((connected) => {
-    socket = connected;
-    accepted.resolve(connected);
+  const sockets = new Set<net.Socket>();
+  await using server = net.createServer((socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+    accepted.resolve(socket);
   });
   let child: ReturnType<typeof spawn> | undefined;
   let closed: Promise<unknown[]> | undefined;
@@ -79,12 +80,15 @@ export async function withNativeSsConnection(
         code: message,
       });
     }
-    const clientPort = (await wait(accepted.promise, "TCP fixture was not accepted")).remotePort;
+    const socket = await wait(accepted.promise, "TCP fixture was not accepted");
+    const clientPort = socket.remotePort;
     const pid = child.pid;
     assert(
       clientPort !== undefined && pid !== undefined,
       "Native TCP fixture needs a port and PID",
     );
+    expect(socket.remoteAddress).toBe("127.0.0.1");
+    expect(child).toMatchObject({ exitCode: null, signalCode: null });
 
     const captured = spawnSync(
       "ss",
@@ -107,6 +111,9 @@ export async function withNativeSsConnection(
     if (clientRow && !clientRow.includes("users:")) {
       skip("Native ss cannot expose process metadata for the owned client");
     }
+    expect(clientRow, "ss must capture the owned established client").toMatch(
+      new RegExp(`users:\\(\\("node worker:1",pid=${pid},fd=\\d+\\)`),
+    );
 
     await withinTest(inspect({ port, clientPort, pid, stdout: captured.stdout }), signal);
   } catch (error) {
@@ -122,7 +129,9 @@ export async function withNativeSsConnection(
         await closed;
       }
     } finally {
-      socket?.destroy();
+      for (const socket of sockets) {
+        socket.destroy();
+      }
     }
   }
 }

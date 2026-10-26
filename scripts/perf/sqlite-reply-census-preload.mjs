@@ -1,8 +1,5 @@
 // Diagnostic only: the benchmark driver supplies generated synthetic state.
-// team-shape-stress.ts --gateway-preload scripts/perf/sqlite-reply-census-preload.mjs
-// writes sqlite-census.sqlite-replies.json and bounded sample replies in the run output.
 import { writeFileSync } from "node:fs";
-import path from "node:path";
 import { deserialize } from "node:v8";
 import { isMainThread, Worker } from "node:worker_threads";
 
@@ -17,25 +14,15 @@ if (isMainThread) {
   const scope =
     "Synthetic SQLite worker replies received within the profile window; counts and samples are diagnostic, not timing evidence. Admission messages are excluded.";
 
-  process.on("message", (incoming) => {
-    const message =
-      incoming?.channel === "team-shape-stress"
-        ? {
-            ...incoming,
-            channel: "openclaw-gateway-bench-profile",
-            kind: "stress",
-            profilePath: path.join(incoming.output, "sqlite-census"),
-          }
-        : incoming;
+  process.on("message", (message) => {
     if (
       message?.channel !== "openclaw-gateway-bench-profile" ||
-      !["cpu", "heap", "stress"].includes(message.kind)
+      !["cpu", "heap"].includes(message.kind)
     ) {
       return;
     }
     if (message.action === "start") {
       captures.set(message.kind, {
-        startedAt: performance.now(),
         path: message.profilePath,
         groups: new Map(),
         samples: new Set(),
@@ -50,7 +37,6 @@ if (isMainThread) {
           JSON.stringify(
             {
               scope,
-              durationMs: performance.now() - capture.startedAt,
               sampleBytes: capture.sampleBytes,
               groups: Object.fromEntries(capture.groups),
             },
@@ -71,12 +57,7 @@ if (isMainThread) {
         let label = message.type;
         if (message.type === "execute" && message.input instanceof Uint8Array) {
           try {
-            const command = decodeCommand(message.input);
-            const inner = command?.input?.command;
-            label = inner ? `${command.type}.${inner.type}` : (command?.type ?? label);
-            if (typeof command?.input?.kind === "string") {
-              label += `.${command.input.kind}`;
-            }
+            label = decodeCommand(message.input)?.type ?? label;
           } catch {
             label = "unclassified";
           }

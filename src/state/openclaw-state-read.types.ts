@@ -93,10 +93,6 @@ export type OpenClawStateReadCommand =
       input: ListTerminalOperatorApprovalsInput;
     }
   | {
-      type: "operatorApprovals.pendingSnapshot";
-      input: { cursor?: string };
-    }
-  | {
       type: "operatorApprovals.pending";
       input: Parameters<
         typeof import("../gateway/operator-approval-store.kernel.worker.js").readPendingOperatorApprovalsInDatabase

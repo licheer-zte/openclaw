@@ -52,11 +52,14 @@ it("reads only admitted entry payloads while protecting normalized keys and ever
   expected.add("orphan-generation");
   // The lowercase Signal peer is a different conversation, not an alias.
   insert.run("agent:main:signal:group:abc=", "different-peer", json("different-peer"));
-  insert.run(
-    dashboardKey("unrelated"),
-    "unrelated",
-    json("unrelated", { skillsSnapshot: { prompt: "x".repeat(32_768), skills: [] } }),
-  );
+  for (let index = 0; index < 100; index++) {
+    const sessionId = `unrelated-${index}`;
+    insert.run(
+      dashboardKey(sessionId),
+      sessionId,
+      json(sessionId, { skillsSnapshot: { prompt: "x".repeat(32_768), skills: [] } }),
+    );
+  }
   using admission = await protect(db, "synthetic-admission-protection", identities);
   expect(admission.collect()).toEqual(expected);
   expect(payloadReads).toBe(entries.length);

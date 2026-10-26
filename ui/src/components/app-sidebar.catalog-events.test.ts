@@ -13,9 +13,8 @@ import {
   type GatewayRequestMock,
 } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
-import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import "../test-helpers/app-sidebar-suite.ts";
-import { mockDocumentVisibility as visibilityFixture } from "../test-helpers/mock-cleanup.ts";
+import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import "./app-sidebar.tsx";
 
 // Capture JSDOM's frame owner before the sidebar fixture installs its scheduler.
@@ -36,6 +35,15 @@ const busy = (retryAfterMs: number) =>
 async function advance(request: GatewayRequestMock, ms: number, calls: number) {
   await vi.advanceTimersByTimeAsync(ms);
   expect(request).toHaveBeenCalledTimes(calls);
+}
+
+function visibilityFixture() {
+  let visibility: DocumentVisibilityState = "visible";
+  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+  return (next: DocumentVisibilityState) => {
+    visibility = next;
+    document.dispatchEvent(new Event("visibilitychange"));
+  };
 }
 
 async function mountTab(

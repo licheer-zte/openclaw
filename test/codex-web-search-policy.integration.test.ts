@@ -1,3 +1,4 @@
+import path from "node:path";
 import { expect, it } from "vitest";
 import { loadCodexDynamicToolBuildTestFixture } from "../extensions/codex/test-api.js";
 import { preparePluginHarnessParams as prepareHarness } from "../src/agents/harness/plugin-attempt-params.js";
@@ -50,7 +51,7 @@ it.each(["before preparation", "during tool construction"])(
         ),
       });
       const workspaceDir = state.statePath("workspace");
-      const params = createParams(state.statePath("workspace", "session.jsonl"), workspaceDir);
+      const params = createParams(path.join(workspaceDir, "session.jsonl"), workspaceDir);
       params.sessionKey = sessionKey;
       params.config = {};
       params.sessionId = entry.sessionId;

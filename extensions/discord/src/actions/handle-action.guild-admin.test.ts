@@ -6,11 +6,10 @@ import { createDiscordLoopbackRest } from "../send.test-harness.js";
 import { handleDiscordMessageAction } from "./handle-action.js";
 
 const cfg = { channels: { discord: { token: "token", groupPolicy: "open" } } } as OpenClawConfig;
-const { ViewChannel, SendMessages, SendMessagesInThreads } = PermissionFlagsBits;
 
 const defaultScenario = {
   denyView: false,
-  guildPermissions: ViewChannel | SendMessages,
+  guildPermissions: PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendMessages,
   locked: false,
   privateMember: true,
   type: ChannelType.GuildPublicThread as
@@ -19,7 +18,28 @@ const defaultScenario = {
 };
 const scenario = { ...defaultScenario };
 
-let loopback: Awaited<ReturnType<typeof createDiscordLoopbackRest>>;
+let closeLoopback = async () => {};
+let requests: Awaited<ReturnType<typeof createDiscordLoopbackRest>>["requests"] = [];
+
+function isRoute(path: string | undefined, route: string) {
+  return path?.endsWith(route) === true;
+}
+
+function threadResponse() {
+  return {
+    id: "T1",
+    type: scenario.type,
+    name: "archived-thread",
+    guild_id: "G1",
+    parent_id: "P1",
+    thread_metadata: {
+      archived: true,
+      auto_archive_duration: 1440,
+      archive_timestamp: "2026-09-16T00:00:00.000Z",
+      locked: scenario.locked,
+    },
+  };
+}
 
 function runReopen(params: Record<string, unknown> = {}) {
   return handleDiscordMessageAction({
@@ -32,49 +52,52 @@ function runReopen(params: Record<string, unknown> = {}) {
 }
 
 function patchRequests() {
-  return loopback.requests.filter((request) => request.method === "PATCH");
+  return requests.filter((request) => request.method === "PATCH");
+}
+
+async function expectReopenDenied(params: Record<string, unknown> = {}) {
+  await expect(runReopen(params)).rejects.toThrow(/required permissions/);
+  expect(patchRequests()).toHaveLength(0);
 }
 
 beforeAll(async () => {
-  loopback = await createDiscordLoopbackRest({
+  const loopback = await createDiscordLoopbackRest({
     queueRequests: true,
     respond: (request) => {
-      const isGet = request.method === "GET";
-      if (isGet && request.path?.endsWith(Routes.channel("P1"))) {
+      if (request.method === "GET" && isRoute(request.path, Routes.channel("T1"))) {
+        return threadResponse();
+      }
+      if (request.method === "GET" && isRoute(request.path, Routes.channel("P1"))) {
         return {
           id: "P1",
           type: ChannelType.GuildText,
           guild_id: "G1",
           permission_overwrites: scenario.denyView
-            ? [{ id: "sender-1", type: 1, deny: ViewChannel.toString() }]
+            ? [{ id: "sender-1", type: 1, deny: PermissionFlagsBits.ViewChannel.toString() }]
             : [],
         };
       }
-      if (isGet && request.path?.endsWith(Routes.guild("G1"))) {
+      if (request.method === "GET" && isRoute(request.path, Routes.guild("G1"))) {
         return {
           id: "G1",
           owner_id: "owner-1",
           roles: [{ id: "G1", permissions: scenario.guildPermissions.toString() }],
         };
       }
-      if (isGet && request.path?.endsWith(Routes.guildMember("G1", "sender-1"))) {
+      if (request.method === "GET" && isRoute(request.path, Routes.guildMember("G1", "sender-1"))) {
         return { user: { id: "sender-1" }, roles: [] };
       }
-      return {
-        id: "T1",
-        type: scenario.type,
-        guild_id: "G1",
-        parent_id: "P1",
-        thread_metadata: { archived: true, locked: scenario.locked },
-      };
+      return threadResponse();
     },
     status: (request) =>
       request.method === "GET" &&
-      request.path?.endsWith(Routes.threadMembers("T1", "sender-1")) &&
+      isRoute(request.path, Routes.threadMembers("T1", "sender-1")) &&
       !scenario.privateMember
         ? 404
         : 200,
   });
+  requests = loopback.requests;
+  closeLoopback = loopback.close;
   vi.spyOn(discordRest, "RequestClient").mockImplementation(function () {
     return loopback.rest;
   });
@@ -82,11 +105,11 @@ beforeAll(async () => {
 
 afterAll(async () => {
   vi.restoreAllMocks();
-  await loopback.close();
+  await closeLoopback();
 });
 
 beforeEach(() => {
-  loopback.requests.length = 0;
+  requests.length = 0;
   Object.assign(scenario, defaultScenario);
 });
 
@@ -99,7 +122,14 @@ describe("registered Discord channel-edit thread permissions", () => {
   });
 
   it.each([
-    ["SendMessagesInThreads alone", { guildPermissions: ViewChannel | SendMessagesInThreads }, {}],
+    [
+      "SendMessagesInThreads alone",
+      {
+        guildPermissions:
+          PermissionFlagsBits.ViewChannel | PermissionFlagsBits.SendMessagesInThreads,
+      },
+      {},
+    ],
     [
       "private-thread nonmember",
       { type: ChannelType.GuildPrivateThread, privateMember: false },
@@ -110,7 +140,6 @@ describe("registered Discord channel-edit thread permissions", () => {
     ["locked thread without ManageThreads", { locked: true }, {}],
   ] as const)("rejects %s before PATCH", async (_name, overrides, params) => {
     Object.assign(scenario, overrides);
-    await expect(runReopen(params)).rejects.toThrow(/required permissions/);
-    expect(patchRequests()).toHaveLength(0);
+    await expectReopenDenied(params);
   });
 });

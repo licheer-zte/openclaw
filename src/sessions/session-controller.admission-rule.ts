@@ -1,6 +1,5 @@
 import {
   ReplyRunAlreadyActiveError,
-  ReplyRunLifecycleAdmissionBlockedError,
   ReplyRunFollowupAdmissionBlockedError,
   ReplyRunSuccessorAdmissionBlockedError,
   type SessionControllerInput,
@@ -170,9 +169,6 @@ export function assertTurnAdmission(
   }
   if (admission.reason === "successor-barrier") {
     throw new ReplyRunSuccessorAdmissionBlockedError(options.sessionKey);
-  }
-  if (admission.reason === "lifecycle-blocked") {
-    throw new ReplyRunLifecycleAdmissionBlockedError(options.sessionKey);
   }
   throw new ReplyRunAlreadyActiveError(options.sessionKey);
 }

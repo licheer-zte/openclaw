@@ -19,9 +19,14 @@ function sendResult(messageId: string, threadId = "thread") {
   };
 }
 
-function expectTextCall(index: number, text: unknown, options: Record<string, unknown>) {
+function expectTextCall(
+  index: number,
+  thread: string,
+  text: unknown,
+  options: Record<string, unknown>,
+) {
   expect(mockSendText.mock.calls[index]?.slice(0, 3)).toEqual([
-    "thread",
+    thread,
     text,
     expect.objectContaining(options),
   ]);
@@ -36,12 +41,22 @@ describe("zalouser send helpers", () => {
   });
 
   it.each([
-    ["_cap_", "cap", [{ start: 0, len: 3, st: TextStyle.Italic }]],
-    ["```\n```", "", undefined],
-  ] as const)("formats image caption %j", async (caption, text, styles) => {
-    mockSendText.mockResolvedValueOnce(sendResult("mid-2"));
-    await sendImageZalouser("thread", imageUrl, { ...imageOptions, caption });
-    expectTextCall(0, text, {
+    {
+      name: "formats image captions in markdown mode",
+      caption: "_cap_",
+      text: "cap",
+      styles: [{ start: 0, len: 3, st: TextStyle.Italic }],
+    },
+    {
+      name: "does not retain an empty raw markdown caption",
+      caption: "```\n```",
+      text: "",
+      styles: undefined,
+    },
+  ])("$name", async ({ caption, text, styles }) => {
+    mockSendText.mockResolvedValueOnce(sendResult("mid-2", "thread-2"));
+    await sendImageZalouser("thread-2", imageUrl, { ...imageOptions, caption });
+    expectTextCall(0, "thread-2", text, {
       ...imageOptions,
       caption: undefined,
       mediaUrl: imageUrl,
@@ -49,36 +64,49 @@ describe("zalouser send helpers", () => {
     });
   });
 
-  it.each(["send", "receipt"] as const)("retains acceptance on %s failure", async (failure) => {
-    const cause = new Error("delivery failed");
-    const fail = () => {
-      throw cause;
-    };
-    const nested = failure === "send";
-    const ids = nested ? ["first", "caption"] : ["first"];
-    mockSendText.mockResolvedValueOnce(sendResult("first"));
-    if (nested) {
-      mockSendText.mockImplementationOnce(async (_thread, _text, _options, report) => {
-        await report?.(sendResult("caption"));
-        return fail();
+  it("combines earlier chunks with a failed chunk's partial receipt without duplicate parts", async () => {
+    const cause = new Error("voice send failed");
+    mockSendText
+      .mockResolvedValueOnce(sendResult("mid-first"))
+      .mockImplementationOnce(async (_threadId, _text, _options, onDeliveryResult) => {
+        const accepted = sendResult("mid-caption");
+        await onDeliveryResult?.(accepted);
+        throw cause;
       });
-    }
-    const onDeliveryResult = nested ? undefined : fail;
-    await expect(
-      sendMessageZalouser("thread", "a".repeat(2001), { onDeliveryResult }),
-    ).rejects.toMatchObject({
+
+    await expect(sendMessageZalouser("thread", "a".repeat(2001))).rejects.toMatchObject({
       code: "CHANNEL_PARTIAL_DELIVERY",
-      message: cause.message,
+      message: "voice send failed",
       cause,
       deliveryResult: {
-        messageIds: ids,
+        messageIds: ["mid-first", "mid-caption"],
         receipt: {
-          parts: ids.map((platformMessageId) => expect.objectContaining({ platformMessageId })),
+          parts: [
+            expect.objectContaining({ platformMessageId: "mid-first" }),
+            expect.objectContaining({ platformMessageId: "mid-caption" }),
+          ],
         },
         visibleReplySent: true,
       },
     });
-    expect(mockSendText).toHaveBeenCalledTimes(ids.length);
+  });
+
+  it("retains provider acceptance when the delivery callback fails", async () => {
+    const cause = new Error("receipt persistence failed");
+    mockSendText.mockResolvedValueOnce(sendResult("mid-accepted"));
+
+    await expect(
+      sendMessageZalouser("thread", "a".repeat(2001), {
+        onDeliveryResult: () => {
+          throw cause;
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      cause,
+      deliveryResult: { messageIds: ["mid-accepted"], visibleReplySent: true },
+    });
+    expect(mockSendText).toHaveBeenCalledOnce();
   });
 
   it.each(["newline", "media caption"] as const)(
@@ -103,7 +131,7 @@ describe("zalouser send helpers", () => {
       expect(mockSendText.mock.calls.map((call) => call[1]).join("")).toBe(
         parseZalouserTextStyles(text).text,
       );
-      expectTextCall(0, newline ? `${"a".repeat(1995)}\n\n` : expect.any(String), {
+      expectTextCall(0, "thread", newline ? `${"a".repeat(1995)}\n\n` : expect.any(String), {
         ...options,
         ...(newline
           ? { textStyles: [{ start: 0, len: 1995, st: TextStyle.Bold }] }
@@ -111,6 +139,7 @@ describe("zalouser send helpers", () => {
       });
       expectTextCall(
         1,
+        "thread",
         newline ? "second paragraph" : expect.any(String),
         newline ? { ...options, textStyles: undefined } : { mediaUrl: undefined },
       );

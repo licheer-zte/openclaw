@@ -8,7 +8,12 @@ const { s3ModulePath, send } = await vi.hoisted(async () => {
   const require = createRequire(new URL("../extensions/cloudflare/package.json", import.meta.url));
   return {
     s3ModulePath: require.resolve("@aws-sdk/client-s3"),
-    send: vi.fn<(command: { constructor: { name: string } }) => Promise<unknown>>(),
+    send: vi.fn<
+      (command: {
+        constructor: { name: string };
+        input: { Key?: string; UploadId?: string };
+      }) => Promise<unknown>
+    >(),
   };
 });
 
@@ -27,7 +32,8 @@ it.for([false, true])(
     const marker = JSON.stringify({ version: 1, locationId, createdAt: 0, encryption: "none" });
     const markerBytes = Buffer.byteLength(marker);
     const commands: string[] = [];
-    send.mockImplementation(async ({ constructor: { name } }) => {
+    const activeUploads = new Set<string>();
+    send.mockImplementation(async ({ constructor: { name }, input }) => {
       commands.push(name);
       if (name === "HeadObjectCommand") {
         return { ETag: '"marker"', ContentLength: markerBytes };
@@ -42,6 +48,7 @@ it.for([false, true])(
         };
       }
       if (name === "CreateMultipartUploadCommand") {
+        activeUploads.add("staged-backup");
         return { UploadId: "staged-backup" };
       }
       if (name === "UploadPartCommand") {
@@ -51,6 +58,7 @@ it.for([false, true])(
         if (cleanupFails) {
           throw new Error("synthetic-private-cleanup-detail");
         }
+        activeUploads.delete(input.UploadId ?? "");
       }
       return {};
     });
@@ -101,5 +109,6 @@ it.for([false, true])(
     expect(commands).toContain("AbortMultipartUploadCommand");
     expect(commands).not.toContain("CompleteMultipartUploadCommand");
     expect(commands).not.toContain("PutObjectCommand");
+    expect(activeUploads.size).toBe(cleanupFails ? 1 : 0);
   },
 );

@@ -6,7 +6,6 @@ import {
   getRpcSourceIdentity,
   type RpcSourceRef,
 } from "../../sessions/session-controller.rpc-sources.js";
-import { createSessionGoalFixture } from "../session-goal.test-support.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
 import {
   buildExistingMainStoreEntry,
@@ -19,10 +18,7 @@ import {
   waitForAssertion,
 } from "./agent.test-harness.js";
 import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
-import {
-  completedSubagentFollowupRun,
-  expectSubagentFollowupReactivation,
-} from "./subagent-followup.test-helpers.js";
+import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
 
 const mocks = getAgentTestMocks();
 
@@ -30,7 +26,22 @@ export function registerAgentSendEventTests(): void {
   it("reactivates completed subagent sessions and broadcasts send updates", async () => {
     const childSessionKey = "agent:main:subagent:followup";
     const updatedAt = Date.now() - 1_000;
-    const completedRun = completedSubagentFollowupRun(childSessionKey);
+    const completedRun = {
+      runId: "run-old",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "initial task",
+      cleanup: "keep" as const,
+      createdAt: 1,
+      execution: {
+        status: "terminal" as const,
+        startedAt: 2,
+        endedAt: 3,
+        outcome: { status: "ok" as const },
+      },
+    };
 
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
@@ -202,10 +213,17 @@ export function registerAgentSendEventTests(): void {
 
 export function registerAgentGlobalGoalEventTest(): void {
   it("keeps selected-global goals on agent session change events", async () => {
-    const goal = createSessionGoalFixture("goal-work-global", "Finish work global task", {
+    const goal = {
+      schemaVersion: 1,
+      id: "goal-work-global",
+      objective: "Finish work global task",
+      status: "active",
+      createdAt: 1,
       updatedAt: 2,
+      tokenStart: 0,
       tokensUsed: 5,
-    }) satisfies NonNullable<GatewaySessionRow["goal"]>;
+      continuationTurns: 0,
+    } satisfies NonNullable<GatewaySessionRow["goal"]>;
     mocks.listAgentIds.mockReturnValue(["main", "work"]);
     mocks.resolveExplicitAgentSessionKey.mockReturnValue("global");
     mocks.loadSessionEntry.mockReturnValue({

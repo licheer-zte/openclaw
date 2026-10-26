@@ -347,8 +347,8 @@ export function seedSessionActorTranscriptContext(
   if (!prepared.residentRows && current.context) {
     return { ...current, anchors };
   }
-  // Select the retained shape before detaching it; row contexts discard snapshot navigation.
-  const snapshot = prepared.snapshot;
+  // Own one detached window; row views share it, and worker/cohort facts stay with the read.
+  const snapshot = cloneTranscriptView(prepared.snapshot);
   const rows = prepared.residentRows?.map((row, index) => ({
     ...row,
     event: snapshot.events[index],
@@ -373,12 +373,6 @@ export function seedSessionActorTranscriptContext(
   }
   const window =
     !complete && rows ? seedContextWindow(current, snapshot, rows, limits, admission) : undefined;
-  if (rows && (complete || window)) {
-    const events = cloneTranscriptView(snapshot.events);
-    for (let index = 0; index < rows.length; index++) {
-      rows[index]!.event = events[index];
-    }
-  }
   return {
     ...current,
     anchors,
@@ -392,7 +386,7 @@ export function seedSessionActorTranscriptContext(
         ? { limits: { ...limits }, window }
         : {
             limits: { ...limits },
-            exact: { kind: "bounded", snapshot: cloneTranscriptView(snapshot) },
+            exact: { kind: "bounded", snapshot },
             admission: admission && { ...admission },
           },
   };

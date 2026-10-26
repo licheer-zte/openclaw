@@ -1,5 +1,4 @@
 import { getPreparedModelRuntimeMocks } from "../agents/prepared-model-runtime.test-harness.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const mocks = getPreparedModelRuntimeMocks();
 
@@ -61,19 +60,6 @@ export function configureHarnessOwnedUnresolvedAuth() {
         provider: "openai",
         keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
       },
-    },
-  };
-}
-
-export function createMetadataConfig(): OpenClawConfig {
-  return {
-    agents: {
-      defaults: {
-        model: { primary: "openai/gpt-5.4" },
-        models: { "openai/gpt-5.4": {} },
-        modelPolicy: { allow: ["openai/gpt-5.4"] },
-      },
-      entries: { main: {} },
     },
   };
 }

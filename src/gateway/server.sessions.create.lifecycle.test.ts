@@ -22,7 +22,6 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   setupPersistentSessionCreateTestHarness,
   chatSendOwner,
-  sessionCreateRuntimeClient,
 } from "./server.sessions.create.test-support.js";
 import { readSessionGroupCatalog } from "./session-group-catalog.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
@@ -188,7 +187,16 @@ test("sessions.create registers a category only after the session commit succeed
       context: {
         validateAgentRuntimeApprovalAuthority: () => ++validations < 3,
       },
-      client: sessionCreateRuntimeClient(["operator.write"]) as never,
+      client: {
+        connect: { scopes: ["operator.write"] },
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey: "agent:main:main",
+          },
+        },
+      } as never,
     },
   );
   expect(failed.ok).toBe(false);

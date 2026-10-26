@@ -42,7 +42,6 @@ import {
   preserveCodexNativeSubagentSubmissions,
   readCurrentCodexAppServerBinding,
   prepareCurrentCodexAppServerBindingRead,
-  prepareCodexNativeSubagentBindingGuard,
   readCurrentCodexAppServerBindingAsync,
   readCurrentCodexAppServerBindings,
   readCurrentCodexNativeSubagentSubmissions,
@@ -161,10 +160,6 @@ export type CodexAppServerBindingStore = {
   prepareRead(
     identity: CodexAppServerBindingIdentity,
   ): ReturnType<typeof prepareCurrentCodexAppServerBindingRead>;
-  prepareNativeSubagentGuard(
-    identity: CodexAppServerBindingIdentity,
-    owner: CodexNativeSubagentHistoryOwner,
-  ): ReturnType<typeof prepareCodexNativeSubagentBindingGuard>;
   /** Fresh worker-backed acquisition with row-ordered binding validation. */
   readMany: (
     identities: readonly CodexAppServerBindingIdentity[],
@@ -416,8 +411,6 @@ export function createCodexAppServerBindingStore(
     read: (identity) => readCurrentCodexAppServerBinding(state, identity),
     readAsync: (identity) => readCurrentCodexAppServerBindingAsync(state.asyncReads, identity),
     prepareRead: (identity) => prepareCurrentCodexAppServerBindingRead(state, identity),
-    prepareNativeSubagentGuard: (identity, owner) =>
-      prepareCodexNativeSubagentBindingGuard(state, identity, owner),
     readMany: (identities) => readCurrentCodexAppServerBindings(state.asyncReads, identities),
     readNativeSubagentAssignments: (identity, owner) =>
       readCurrentNativePendingAssignments(state.asyncReads, identity, owner),

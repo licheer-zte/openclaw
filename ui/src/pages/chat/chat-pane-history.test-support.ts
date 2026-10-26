@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -27,7 +28,8 @@ export function createRefreshChatPane(client?: GatewayBrowserClient) {
   const pane = createRenderTestChatPane();
   const state = pane.initialize(context);
   if (client) {
-    Object.assign(state, { client, connected: true });
+    state.client = client;
+    state.connected = true;
   }
   return { pane, state, context };
 }
@@ -41,7 +43,10 @@ export type TestChatPane = Omit<BaseTestChatPane, "loadOlderMessages"> & {
   visuallyPresented: boolean;
 };
 
-export function createTestChatPane(params: Parameters<typeof createBaseTestChatPane>[0]) {
+export function createTestChatPane(params: {
+  client: GatewayBrowserClient;
+  sessions?: SessionCapability;
+}) {
   const sessions =
     params.sessions ?? createTestSessionCapability(createGatewayHarness(params.client).gateway);
   if (!params.sessions) {
@@ -56,7 +61,9 @@ export function createTestChatPane(params: Parameters<typeof createBaseTestChatP
 }
 
 export function nativeHistorySeq(message: unknown): number | undefined {
-  const metadata = (message as { __openclaw?: { seq?: unknown } })["__openclaw"];
+  const metadata = (message as Record<string, unknown>)["__openclaw"] as
+    | Record<string, unknown>
+    | undefined;
   return typeof metadata?.seq === "number" ? metadata.seq : undefined;
 }
 
@@ -78,7 +85,8 @@ export function appendChatThread(
 }
 
 function createPaginatedChatPane(request: ReturnType<typeof vi.fn>, firstSeq: number) {
-  const result = createTestChatPane({ client: { request } as unknown as GatewayBrowserClient });
+  const client = { request } as unknown as GatewayBrowserClient;
+  const result = createTestChatPane({ client });
   result.state.chatMessages = [firstSeq, firstSeq + 1].map((seq) => nativeHistoryMessage(seq));
   result.state.chatHistoryPagination = {
     hasMore: true,
@@ -115,5 +123,6 @@ export function stagedPagesRequest(overrides: Record<number, () => unknown> = {}
   });
 }
 
-export const createStagedPrefetchPane = (request: ReturnType<typeof vi.fn>) =>
-  createPaginatedChatPane(request, 7);
+export function createStagedPrefetchPane(request: ReturnType<typeof vi.fn>) {
+  return createPaginatedChatPane(request, 7);
+}

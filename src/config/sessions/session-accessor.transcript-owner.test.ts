@@ -3,7 +3,6 @@ import path from "node:path";
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { expect, it, vi } from "vitest";
-import { captureThrown } from "../../../test/helpers/capture-thrown.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -305,7 +304,12 @@ it.each(["writer", "lifecycle"] as const)(
             true,
           );
           const captureClaimError = (run: () => unknown): unknown => {
-            return captureThrown(run, "expected the writer claim to reject transcript persistence");
+            try {
+              run();
+            } catch (error) {
+              return error;
+            }
+            throw new Error("expected the writer claim to reject transcript persistence");
           };
           const [replacementError, eventError, messageError] = [
             () => replaceTranscriptEventsSync(scope, []),

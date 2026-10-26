@@ -1,6 +1,5 @@
 // Shared Node fallback for host Docker and in-container E2E command timeouts.
-import { realpathSync } from "node:fs";
-import { isDirectRunUrl } from "./direct-run.mjs";
+import { pathToFileURL } from "node:url";
 
 export async function runWatchdog(kind, timeoutValue, [command, ...args]) {
   const docker = kind === "docker";
@@ -112,22 +111,7 @@ export async function runWatchdog(kind, timeoutValue, [command, ...args]) {
   });
 }
 
-function isDirectInvocation(directPath) {
-  if (isDirectRunUrl(directPath, import.meta.url)) {
-    return true;
-  }
-  if (!directPath) {
-    return false;
-  }
-  try {
-    // Node resolves the entry module through path aliases while argv retains the caller's spelling.
-    return isDirectRunUrl(realpathSync(directPath), import.meta.url);
-  } catch {
-    return false;
-  }
-}
-
-if (isDirectInvocation(process.argv[1])) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [kind, timeoutValue, ...args] = process.argv.slice(2);
   await runWatchdog(kind, timeoutValue, args);
 }

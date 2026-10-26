@@ -14,11 +14,6 @@ import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.
 import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
 import { isSessionCostUsageRefreshRunning } from "./session-cost-usage-cache.sqlite.js";
 import { isSessionActorUsageRefreshRunning } from "./session-cost-usage-memory.js";
-import {
-  compactUsageOverviewFamilies,
-  foldUsageOverviewFamilies,
-  type UsageOverviewLoad,
-} from "./session-cost-usage-overview-load.js";
 import { resolveUsageCostPricingFingerprint } from "./session-cost-usage-pricing-context.js";
 import {
   prepareUsageCostWorker,
@@ -26,10 +21,7 @@ import {
   runUsageCostWorker,
   type PreparedUsageCostWorker,
 } from "./session-cost-usage-worker-runtime.js";
-import type {
-  UsageCostWorkerResult,
-  UsageCostWorkerSession,
-} from "./session-cost-usage-worker.types.js";
+import type { UsageCostWorkerResult } from "./session-cost-usage-worker.types.js";
 import type {
   CostUsageSummary,
   SessionCostSummary,
@@ -43,9 +35,6 @@ const USAGE_COST_PUBLICATION_QUIET_MS = 30_000;
 const USAGE_COST_PUBLICATION_MAX_WAIT_MS = 5 * 60_000;
 const USAGE_COST_REFRESH_BATCH_SIZE = 50;
 const USAGE_COST_REFRESH_RETRY_MAX_MS = 5_000;
-// Reports wait this long for the refreshes they request; it stays inside the 15-second
-// usage request budget so a slow refresh still returns the report.
-const USAGE_REPORT_REFRESH_WAIT_MS = 10_000;
 const logger = createSubsystemLogger("usage-cost-cache");
 
 type UsageCostRefreshState = {
@@ -178,52 +167,38 @@ async function loadAggregateCostUsageSummary(
 ): Promise<CostUsageSummary> {
   const prepared = prepareUsageCostWorker(params);
   const { databasePath, storePath } = prepared.location;
+  await flushPendingUsageCostRefresh(prepared);
+  const refresh = refreshFirst
+    ? await refreshCostUsageCacheForAgent({
+        config: params.config,
+        agentId: params.agentId,
+        agentDir: prepared.agentDir,
+        databasePath,
+        storePath,
+        sessionActor: prepared.sessionActor,
+      })
+    : undefined;
   const pricingFingerprint = await resolveUsageCostPricingFingerprint(
     prepared.config,
     prepared.agentDir,
   );
-  const run = async () => {
-    const result = await runUsageCostWorker(prepared, {
-      pricingFingerprint,
-      startMs: params.startMs,
-      endMs: params.endMs,
-      dayBucket: resolveUsageCostWorkerDayBucket(params.dayBucket),
-      kind: "summary",
-    });
-    if (result.kind !== "summary" || !result.summary.cacheStatus) {
-      throw new Error("Usage worker returned an invalid aggregate summary");
-    }
-    return result;
-  };
-  let refresh: Awaited<ReturnType<typeof refreshCostUsageCacheForAgent>> | undefined;
-  let result: Awaited<ReturnType<typeof run>>;
-  if (refreshFirst) {
-    await flushPendingUsageCostRefresh(prepared);
-    refresh = await refreshCostUsageCacheForAgent({
-      config: params.config,
-      agentId: params.agentId,
-      agentDir: prepared.agentDir,
-      databasePath,
-      storePath,
-      sessionActor: prepared.sessionActor,
-    });
-    result = await run();
-  } else if (params.requestRefresh === false) {
-    await flushPendingUsageCostRefresh(prepared);
-    result = await run();
-  } else {
-    result = await runUsageReportAfterRefresh(prepared, params, run);
+  const result = await runUsageCostWorker(prepared, {
+    pricingFingerprint,
+    startMs: params.startMs,
+    endMs: params.endMs,
+    dayBucket: resolveUsageCostWorkerDayBucket(params.dayBucket),
+    kind: "summary",
+  });
+  if (result.kind !== "summary" || !result.summary.cacheStatus) {
+    throw new Error("Usage worker returned an invalid aggregate summary");
   }
   const { summary, invalidRows } = result;
-  const cacheStatus = summary.cacheStatus!;
+  const cacheStatus = result.summary.cacheStatus;
   if (
     refreshFirst
       ? invalidRows.length > 0
-      : params.requestRefresh !== false &&
-        cacheStatus.staleFiles > 0 &&
-        result.staleSessionFiles.length === 0
+      : params.requestRefresh !== false && cacheStatus.staleFiles > 0
   ) {
-    // Private sessions report counts without files; refresh the whole actor.
     requestCostUsageCacheRefresh({
       config: params.config,
       agentId: params.agentId,
@@ -245,46 +220,6 @@ async function loadAggregateCostUsageSummary(
   return summary;
 }
 
-/**
- * Run a cache report so it covers current transcripts. Pending transcript publications
- * land first; sessions the report finds unsummarized, invalid or older than their
- * transcript are refreshed by the refresh owner, then the report runs once more. A
- * refresh that outlasts the wait leaves the second answer partial; it is not retried.
- */
-async function runUsageReportAfterRefresh<
-  T extends { staleSessionFiles: string[]; invalidRows: SessionCostUsageRollupRow[] },
->(
-  prepared: PreparedUsageCostWorker,
-  params: { config?: OpenClawConfig; agentId: string },
-  run: () => Promise<T>,
-): Promise<T> {
-  const deadline = Date.now() + USAGE_REPORT_REFRESH_WAIT_MS;
-  const remaining = () => Math.max(0, deadline - Date.now());
-  const request = (result: T) =>
-    requestCostUsageCacheRefresh({
-      config: params.config,
-      agentId: params.agentId,
-      storePath: prepared.location.storePath,
-      sessionFiles: result.staleSessionFiles,
-      rebuildRows: result.invalidRows,
-      databasePath: prepared.location.databasePath,
-      env: prepared.location.env,
-      sessionActor: prepared.sessionActor,
-    });
-  await flushPendingUsageCostRefresh(prepared, undefined, remaining());
-  const first = await run();
-  if (first.staleSessionFiles.length === 0 && first.invalidRows.length === 0) {
-    return first;
-  }
-  request(first);
-  await flushPendingUsageCostRefresh(prepared, first.staleSessionFiles, remaining());
-  const second = await run();
-  if (second.staleSessionFiles.length > 0 || second.invalidRows.length > 0) {
-    request(second);
-  }
-  return second;
-}
-
 type SessionCostReadParams = {
   sessions: Array<{
     sessionId?: string;
@@ -300,6 +235,7 @@ type SessionCostReadParams = {
   requestRefresh?: boolean;
   maxPublicationWaitMs?: number;
   reportBudgetBytes?: number;
+  committedOnly?: boolean;
 };
 
 export async function loadSessionCostSummariesFromCache(params: SessionCostReadParams): Promise<{
@@ -328,11 +264,13 @@ async function loadCapturedSessionCostSummariesFromCache(
   prepared: PreparedUsageCostWorker,
 ): Promise<Extract<UsageCostWorkerResult, { kind: "sessions" }>> {
   const { databasePath, storePath } = prepared.location;
-  await flushPendingUsageCostRefresh(
-    prepared,
-    params.sessions.map((session) => session.sessionFile),
-    params.maxPublicationWaitMs,
-  );
+  if (!params.committedOnly) {
+    await flushPendingUsageCostRefresh(
+      prepared,
+      params.sessions.map((session) => session.sessionFile),
+      params.maxPublicationWaitMs,
+    );
+  }
   const pricingFingerprint = await resolveUsageCostPricingFingerprint(
     prepared.config,
     prepared.agentDir,
@@ -345,6 +283,7 @@ async function loadCapturedSessionCostSummariesFromCache(
     endMs: params.endMs,
     includeUntimestamped: params.includeUntimestamped,
     reportBudgetBytes: params.reportBudgetBytes,
+    committedOnly: params.committedOnly,
     dayBucket: resolveUsageCostWorkerDayBucket(params.dayBucket),
   });
   if (result.kind !== "sessions") {
@@ -379,63 +318,6 @@ async function loadCapturedSessionCostSummariesFromCache(
     }
   }
   return result;
-}
-
-/**
- * Read the Usage overview from committed quarter rows: one worker pass per agent,
- * folded per family. Unsummarized or stale instances are refreshed (or backfilled
- * after an upgrade) before a second pass; see `runUsageReportAfterRefresh`.
- */
-export async function loadSessionUsageOverviewFromCache(params: {
-  families: UsageCostWorkerSession[][];
-  config?: OpenClawConfig;
-  agentId: string;
-  startMs: number;
-  endMs: number;
-  includeUntimestamped?: boolean;
-  dayBucket?: UsageDailyBucket;
-}): Promise<UsageOverviewLoad> {
-  const sessions = params.families.flat();
-  const prepared = prepareUsageCostWorker({
-    ...params,
-    sessionFiles: sessions.map((session) => session.sessionFile),
-  });
-  if (prepared.memory) {
-    // Private sessions keep whole rollups in process memory without month partitions.
-    return foldUsageOverviewFamilies(
-      params.families,
-      await loadCapturedSessionCostSummariesFromCache(
-        { ...params, sessions, maxPublicationWaitMs: USAGE_REPORT_REFRESH_WAIT_MS },
-        prepared,
-      ),
-    );
-  }
-  const pricingFingerprint = await resolveUsageCostPricingFingerprint(
-    prepared.config,
-    prepared.agentDir,
-  );
-  const families = compactUsageOverviewFamilies(params.families);
-  const result = await runUsageReportAfterRefresh(prepared, params, async () => {
-    const pass = await runUsageCostWorker(prepared, {
-      kind: "overview",
-      pricingFingerprint,
-      ...families,
-      startMs: params.startMs,
-      endMs: params.endMs,
-      includeUntimestamped: params.includeUntimestamped,
-      dayBucket: resolveUsageCostWorkerDayBucket(params.dayBucket),
-    });
-    if (pass.kind !== "overview") {
-      throw new Error("Usage worker returned an invalid overview");
-    }
-    return pass;
-  });
-  const { batch, ...status } = result;
-  const refreshing = status.staleSessionFiles.length > 0 || status.invalidRows.length > 0;
-  if (refreshing) {
-    status.cacheStatus.status = "refreshing";
-  }
-  return { ...status, usage: { kind: "packed", batch, refreshing } };
 }
 
 export function requestCostUsageCacheRefresh(params: UsageCostRefreshRequest): void {

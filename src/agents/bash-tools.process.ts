@@ -503,18 +503,19 @@ export function createProcessTool(
               window.effectiveLimit,
             );
             const runtime = scopedSession ? describeRunningSession(scopedSession) : undefined;
-            const ended = record.exited && record.endedAt !== undefined;
             const text =
               retentionCapNote(record) +
               (slice || (scopedSession ? "(no output yet)" : "(no output recorded)")) +
               defaultTailNote(totalLines, window.usingDefaultTail) +
-              (ended ? `\n\n${finishedSessionText(record)}` : "");
+              (isConfirmedRequestedStop(record)
+                ? `\n\nProcess stopped by request (${renderExecExitLabel(record)}).`
+                : "");
             const output = runtime
               ? text +
                 buildInputWaitHint(runtime.waitingForInput) +
                 (runtime.followUp ? `\n\n${runtime.followUp}` : "")
               : appendExecTimeoutRetryGuidance(text, record.exitReason);
-            const result = textResult(output, {
+            return textResult(output, {
               ...(runtime
                 ? {
                     status: record.exited ? "completed" : "running",
@@ -530,12 +531,6 @@ export function createProcessTool(
               totalChars,
               truncated: record.truncated,
             });
-            // Reading an ended process delivers its result, so retire its completion like poll.
-            return ended
-              ? attachInternalToolResultAcknowledgement(result, () =>
-                  acknowledgeNotifyOnExit(record),
-                )
-              : result;
           });
         }
 

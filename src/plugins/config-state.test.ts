@@ -22,6 +22,7 @@ import {
 
 type ActivationParams = Parameters<typeof resolveEffectivePluginActivationState>[0];
 type Activation = ReturnType<typeof resolveEffectivePluginActivationState>;
+type Provenance = Pick<Activation, "explicitlyEnabled" | "source" | "reason">;
 const activation = (
   enabled: boolean,
   explicitlyEnabled: boolean,
@@ -31,24 +32,47 @@ const activation = (
 const entry = (id: string, enabled = true) => ({ entries: { [id]: { enabled } } });
 const normalizeEntry = (value: Record<string, unknown>) =>
   normalizePluginsConfig({ entries: { "voice-call": value } }).entries["voice-call"];
-afterEach(() => vi.restoreAllMocks());
 function checkEnable(
   id: string,
   origin: "bundled" | "workspace",
   raw: Record<string, unknown>,
-  expected: Activation,
+  expected: ReturnType<typeof resolveEnableState>,
+  provenance?: Provenance,
+  enabledByDefault?: boolean,
 ) {
   const config = normalizePluginsConfig(raw);
-  expect(resolveEnableState(id, origin, config)).toEqual(
-    expected.enabled ? { enabled: true } : { enabled: false, reason: expected.reason },
-  );
-  expect(resolveEffectivePluginActivationState({ id, origin, config })).toEqual(expected);
+  expect(resolveEnableState(id, origin, config, enabledByDefault)).toEqual(expected);
+  if (provenance) {
+    expect(resolveEffectivePluginActivationState({ id, origin, config, enabledByDefault })).toEqual(
+      {
+        enabled: expected.enabled,
+        activated: expected.enabled,
+        ...provenance,
+      },
+    );
+  }
 }
 
 describe("normalizePluginsConfig", () => {
   afterEach(clearRuntimeConfigSnapshot);
-  it("replaces published policy and resumes mutable normalization after teardown", () => {
-    setRuntimeConfigSnapshot({ plugins: entry("initial") });
+  it("serves published policy without rereading entries and refreshes every publication", () => {
+    const entries = { "google-gemini-cli": { enabled: true } };
+    const readEntries = vi.fn(() => entries);
+    const config: OpenClawConfig = {
+      plugins: {
+        get entries() {
+          return readEntries();
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(config);
+    readEntries.mockClear();
+    expect(normalizePluginsConfig(config.plugins).entries.google?.enabled).toBe(true);
+    expect(normalizePluginsConfig(config.plugins).entries.google?.enabled).toBe(true);
+    expect(readEntries).not.toHaveBeenCalled();
+    entries["google-gemini-cli"].enabled = false;
+    setRuntimeConfigSnapshot(config);
+    expect(normalizePluginsConfig(config.plugins).entries.google?.enabled).toBe(false);
     const replacement = { plugins: { allow: ["replacement"] } };
     setRuntimeConfigSnapshot(replacement);
     expect(normalizePluginsConfig(replacement.plugins).allow).toEqual(["replacement"]);
@@ -140,13 +164,18 @@ describe("normalizePluginsConfig", () => {
       "trimmed model allowlist",
       {
         allowModelOverride: true,
-        allowedModels: [" anthropic/claude-sonnet-4-6 ", "", 42, null, "openai/gpt-5.5"],
+        allowedModels: [" anthropic/claude-sonnet-4-6 ", "", "openai/gpt-5.5"],
       },
       {
         allowModelOverride: true,
         hasAllowedModelsConfig: true,
         allowedModels: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
       },
+    ],
+    [
+      "mixed allowlist entries",
+      { allowModelOverride: true, allowedModels: [42, null, "anthropic"] },
+      { allowModelOverride: true, hasAllowedModelsConfig: true, allowedModels: ["anthropic"] },
     ],
     [
       "explicit invalid allowlist",
@@ -309,18 +338,22 @@ describe("resolveEffectivePluginActivationState", () => {
     ],
   ])("%s", (_name, params, rawConfig, expected, effectiveConfig = rawConfig) => {
     const catalog = vi.spyOn(bundledChannelCatalog, "listBundledChannelCatalogEntries");
-    expect(
-      resolveEffectivePluginActivationState({
-        ...params,
-        config: normalizePluginsConfig(effectiveConfig ? effectiveConfig.plugins : {}),
-        ...(effectiveConfig ? { rootConfig: effectiveConfig } : {}),
-        ...(rawConfig
-          ? { activationSource: createPluginActivationSource({ config: rawConfig }) }
-          : {}),
-      }),
-    ).toEqual(expected);
-    if (!rawConfig?.channels && !effectiveConfig?.channels) {
-      expect(catalog).not.toHaveBeenCalled();
+    try {
+      expect(
+        resolveEffectivePluginActivationState({
+          ...params,
+          config: normalizePluginsConfig(effectiveConfig ? effectiveConfig.plugins : {}),
+          ...(effectiveConfig ? { rootConfig: effectiveConfig } : {}),
+          ...(rawConfig
+            ? { activationSource: createPluginActivationSource({ config: rawConfig }) }
+            : {}),
+        }),
+      ).toEqual(expected);
+      if (!rawConfig?.channels && !effectiveConfig?.channels) {
+        expect(catalog).not.toHaveBeenCalled();
+      }
+    } finally {
+      catalog.mockRestore();
     }
   });
 });
@@ -332,39 +365,56 @@ describe("resolveEnableState", () => {
       plugins: { entries: { helper: { enabled: true }, telegram: { enabled: true } } },
     };
     const catalog = vi.spyOn(bundledChannelCatalog, "listBundledChannelCatalogEntries");
-    const activate = (id: string, channelIds?: string[]) =>
-      resolveEffectivePluginActivationState({
-        id,
-        origin: "bundled",
-        channelIds,
-        config: normalizePluginsConfig(rootConfig.plugins),
-        rootConfig,
-      });
-    expect(activate("helper", [])).toEqual(activation(true, true, "explicit", "enabled in config"));
-    expect(catalog).not.toHaveBeenCalled();
-    expect(activate("telegram", [])).toEqual(
-      activation(true, true, "explicit", "enabled in config"),
-    );
-    for (const channelIds of [undefined, ["telegram"]]) {
-      expect(activate("telegram", channelIds)).toMatchObject({
-        enabled: false,
-        reason: "channel disabled in config",
-      });
+    try {
+      expect(
+        resolveEffectivePluginActivationState({
+          id: "helper",
+          origin: "bundled",
+          channelIds: [],
+          config: normalizePluginsConfig(rootConfig.plugins),
+          rootConfig,
+        }),
+      ).toEqual(activation(true, true, "explicit", "enabled in config"));
+      expect(catalog).not.toHaveBeenCalled();
+
+      expect(
+        resolveEffectivePluginActivationState({
+          id: "telegram",
+          origin: "bundled",
+          channelIds: [],
+          config: normalizePluginsConfig(rootConfig.plugins),
+          rootConfig,
+        }),
+      ).toEqual(activation(true, true, "explicit", "enabled in config"));
+
+      for (const channelIds of [undefined, ["telegram"]]) {
+        expect(
+          resolveEffectivePluginActivationState({
+            id: "telegram",
+            origin: "bundled",
+            channelIds,
+            config: normalizePluginsConfig(rootConfig.plugins),
+            rootConfig,
+          }),
+        ).toMatchObject({ enabled: false, reason: "channel disabled in config" });
+      }
+    } finally {
+      catalog.mockRestore();
     }
   });
 
-  it("disables bundled plugins without explicit or default activation", () => {
+  it.each([undefined, true])("resolves bundled default=%s", (enabledByDefault) => {
+    const reason = "bundled (disabled by default)";
     checkEnable(
       "openai",
       "bundled",
       {},
-      activation(false, false, "disabled", "bundled (disabled by default)"),
+      enabledByDefault ? { enabled: true } : { enabled: false, reason },
+      enabledByDefault ? undefined : { explicitlyEnabled: false, source: "disabled", reason },
+      enabledByDefault,
     );
   });
-  it.each([
-    [true, "explicit", "selected memory slot"],
-    [false, "disabled", "disabled in config"],
-  ] as const)("resolves selected memory slot with enabled=%s", (enabled, source, reason) => {
+  it.each([true, false])("resolves selected memory slot with enabled=%s", (enabled) => {
     checkEnable(
       "memory-core",
       "bundled",
@@ -373,34 +423,43 @@ describe("resolveEnableState", () => {
         slots: { memory: "memory-core" },
         ...(enabled ? {} : entry("memory-core", false)),
       },
-      activation(enabled, true, source, reason),
+      enabled ? { enabled: true } : { enabled: false, reason: "disabled in config" },
+      {
+        explicitlyEnabled: true,
+        source: enabled ? "explicit" : "disabled",
+        reason: enabled ? "selected memory slot" : "disabled in config",
+      },
     );
   });
-  it.each<[string, OpenClawConfig["plugins"], boolean, Activation["source"], string]>([
-    [
+  it.each([
+    [{ allow: ["workspace-helper"] }, "selected in allowlist"],
+    [entry("workspace-helper"), "enabled in config"],
+  ] as const)("resolves workspace-helper enable state for %o", (config, reason) => {
+    checkEnable(
       "workspace-helper",
-      { allow: ["workspace-helper"] },
-      true,
-      "explicit",
-      "selected in allowlist",
-    ],
-    ["workspace-helper", entry("workspace-helper"), true, "explicit", "enabled in config"],
-    [
+      "workspace",
+      config,
+      { enabled: true },
+      { explicitlyEnabled: true, source: "explicit", reason },
+    );
+  });
+  it("does not let the default memory slot auto-enable an untrusted workspace plugin", () => {
+    const reason = "workspace plugin (disabled by default)";
+    checkEnable(
       "memory-core",
+      "workspace",
       { slots: { memory: "memory-core" } },
-      false,
-      "disabled",
-      "workspace plugin (disabled by default)",
-    ],
-    [
+      { enabled: false, reason },
+      { explicitlyEnabled: true, source: "disabled", reason },
+    );
+  });
+  it("keeps an explicitly selected workspace context engine enabled when omitted from plugins.allow", () => {
+    checkEnable(
       "lossless-claw",
+      "workspace",
       { allow: ["telegram"], slots: { contextEngine: "lossless-claw" } },
-      true,
-      "explicit",
-      "selected context engine slot",
-    ],
-  ])("resolves workspace %s policy %j", (id, config, enabled, source, reason) => {
-    checkEnable(id, "workspace", config ?? {}, activation(enabled, true, source, reason));
+      { enabled: true },
+    );
   });
 });
 
@@ -423,63 +482,70 @@ describe("resolveMemorySlotDecision", () => {
 });
 
 describe("context engine ownership", () => {
-  const engine = "Canonical-Engine";
-  const owner = "vendor-plugin";
-  const approved = { allow: [owner] };
   const records = [
-    { id: owner, contextEngineIds: [engine, "second-engine"] },
+    { id: "vendor-plugin", contextEngineIds: ["Canonical-Engine", "second-engine"] },
     { id: "legacy-plugin" },
   ];
-  const engineConfig = (contextEngine = engine, policy: OpenClawConfig["plugins"] = {}) => ({
-    plugins: { ...policy, slots: { contextEngine } },
-  });
-  const resolve = (policy: OpenClawConfig["plugins"] = {}, owners = records) =>
-    resolveSelectedContextEnginePluginId(engineConfig(engine, policy), owners);
-  const own = (contextEngine: string, policy: OpenClawConfig["plugins"], owners = records) =>
-    withContextEngineOwner(
-      normalizePluginsConfig(engineConfig(contextEngine, policy).plugins),
-      owners,
-    );
-  const activate = (id: string, config: NonNullable<ActivationParams["config"]>) =>
-    resolveEffectivePluginActivationState({ id, origin: "workspace", config });
   it("resolves exact declared engine IDs and preserves legacy equal-ID selection", () => {
-    const resolveEngine = (contextEngine: string) =>
+    const resolve = (contextEngine: string) =>
       resolveSelectedContextEnginePluginId(
-        engineConfig(contextEngine, contextEngine !== "legacy-plugin" ? approved : {}),
+        {
+          plugins: {
+            ...(contextEngine !== "legacy-plugin" ? { allow: ["vendor-plugin"] } : {}),
+            slots: { contextEngine },
+          },
+        },
         records,
       );
-    expect(resolveEngine(engine)).toBe(owner);
-    expect(resolveEngine("second-engine")).toBe(owner);
-    expect(resolveEngine("legacy-plugin")).toBe("legacy-plugin");
-    expect(resolveEngine(owner)).toBeUndefined();
+    expect(resolve("Canonical-Engine")).toBe("vendor-plugin");
+    expect(resolve("second-engine")).toBe("vendor-plugin");
+    expect(resolve("legacy-plugin")).toBe("legacy-plugin");
+    expect(resolve("vendor-plugin")).toBeUndefined();
   });
   it("carries ownership into activation without changing the engine slot", () => {
-    const config = own(engine, approved);
-    expect(config.slots.contextEngine).toBe(engine);
-    expect(activate(owner, config).explicitlyEnabled).toBe(true);
-    expect(activate(engine, config).enabled).toBe(false);
+    const config = withContextEngineOwner(
+      normalizePluginsConfig({
+        allow: ["vendor-plugin"],
+        slots: { contextEngine: "Canonical-Engine" },
+      }),
+      records,
+    );
+    expect(config.slots.contextEngine).toBe("Canonical-Engine");
+    expect(
+      resolveEffectivePluginActivationState({ id: "vendor-plugin", origin: "workspace", config })
+        .explicitlyEnabled,
+    ).toBe(true);
+    expect(
+      resolveEffectivePluginActivationState({ id: "Canonical-Engine", origin: "workspace", config })
+        .enabled,
+    ).toBe(false);
   });
   it("activates a mixed-case equal-ID owner from its canonical policy identity", () => {
-    const config = own("MiXeD-demo", { allow: ["unrelated"] }, [
-      { id: "MiXeD-demo", contextEngineIds: ["MiXeD-demo"] },
-    ]);
+    const config = withContextEngineOwner(
+      normalizePluginsConfig({
+        allow: ["unrelated"],
+        slots: { contextEngine: "MiXeD-demo" },
+      }),
+      [{ id: "MiXeD-demo", contextEngineIds: ["MiXeD-demo"] }],
+    );
     expect(config.contextEngineOwnerId).toBe("mixed-demo");
-    expect(activate("MiXeD-demo", config)).toMatchObject({
-      enabled: true,
-      source: "explicit",
-      reason: "selected context engine slot",
-    });
+    expect(
+      resolveEffectivePluginActivationState({ id: "MiXeD-demo", origin: "workspace", config }),
+    ).toMatchObject({ enabled: true, source: "explicit", reason: "selected context engine slot" });
   });
   it.each([
     { name: "default", normalizeId: undefined },
     { name: "exact supplied", normalizeId: (id: string) => id.trim() },
   ])("keeps exact selected owner with $name normalizer", ({ normalizeId }) => {
-    const plugins = normalizePluginsConfig(engineConfig(engine, { allow: ["mixed-demo"] }).plugins);
-    const mixedCaseRecords = [{ id: "MiXeD-demo", contextEngineIds: [engine] }];
+    const plugins = normalizePluginsConfig({
+      allow: ["mixed-demo"],
+      slots: { contextEngine: "canonical-engine" },
+    });
+    const mixedCaseRecords = [{ id: "MiXeD-demo", contextEngineIds: ["canonical-engine"] }];
     expect(
       resolveSelectedContextEnginePluginIdFromConfig(
         plugins,
-        engine,
+        "canonical-engine",
         mixedCaseRecords,
         normalizeId,
       ),
@@ -506,13 +572,32 @@ describe("context engine ownership", () => {
     },
   );
   it("does not choose a first owner or a same-named plugin over declared ownership", () => {
-    const collision = [...records, { id: "other", contextEngineIds: [engine] }];
-    expect(resolve(approved, [...records, { id: "canonical-engine" }])).toBe(owner);
-    expect(resolve(approved, collision)).toBe(owner);
-    expect(resolve({ allow: [owner, "other"] }, collision)).toBeUndefined();
+    const config = {
+      plugins: { allow: ["vendor-plugin"], slots: { contextEngine: "Canonical-Engine" } },
+    };
+    expect(
+      resolveSelectedContextEnginePluginId(config, [...records, { id: "canonical-engine" }]),
+    ).toBe("vendor-plugin");
+    expect(
+      resolveSelectedContextEnginePluginId(config, [
+        ...records,
+        { id: "other", contextEngineIds: ["Canonical-Engine"] },
+      ]),
+    ).toBe("vendor-plugin");
+    expect(
+      resolveSelectedContextEnginePluginId(
+        { plugins: { ...config.plugins, allow: ["vendor-plugin", "other"] } },
+        [...records, { id: "other", contextEngineIds: ["Canonical-Engine"] }],
+      ),
+    ).toBeUndefined();
   });
   it("does not fall back to an incidental equal-ID plugin when declared owners are ineligible", () => {
-    expect(resolve({}, [...records, { id: "canonical-engine" }])).toBeUndefined();
+    expect(
+      resolveSelectedContextEnginePluginId(
+        { plugins: { slots: { contextEngine: "Canonical-Engine" } } },
+        [...records, { id: "canonical-engine" }],
+      ),
+    ).toBeUndefined();
   });
   it.each(["enabled", "allowlisted", "denied", "disabled", "incidental"] as const)(
     "requires independent approval for legacy fallback among ineligible declarations: %s",
@@ -535,26 +620,46 @@ describe("context engine ownership", () => {
     },
   );
   it("requires independent trust for a differently named declared owner", () => {
-    expect(resolve()).toBeUndefined();
-    expect(resolve(entry(owner))).toBe(owner);
-    expect(resolve(approved)).toBe(owner);
+    const config = { plugins: { slots: { contextEngine: "Canonical-Engine" } } };
+    expect(resolveSelectedContextEnginePluginId(config, records)).toBeUndefined();
+    expect(
+      resolveSelectedContextEnginePluginId(
+        { plugins: { entries: { "vendor-plugin": { enabled: true } }, ...config.plugins } },
+        records,
+      ),
+    ).toBe("vendor-plugin");
+    expect(
+      resolveSelectedContextEnginePluginId(
+        { plugins: { allow: ["vendor-plugin"], ...config.plugins } },
+        records,
+      ),
+    ).toBe("vendor-plugin");
   });
   it.each([false, true])(
     "preserves equal-ID slot authorization outside an unrelated allowlist: declared=%s",
     (declared) => {
-      const config = own(
-        "legacy-plugin",
-        { allow: ["unrelated"] },
+      const config = withContextEngineOwner(
+        normalizePluginsConfig({ allow: ["unrelated"], slots: { contextEngine: "legacy-plugin" } }),
         declared ? [{ id: "legacy-plugin", contextEngineIds: ["legacy-plugin"] }] : records,
       );
       expect(config.contextEngineOwnerId).toBe("legacy-plugin");
-      expect(activate("legacy-plugin", config).enabled).toBe(true);
+      expect(
+        resolveEffectivePluginActivationState({ id: "legacy-plugin", origin: "workspace", config })
+          .enabled,
+      ).toBe(true);
     },
   );
-  it.each([{ enabled: false }, { deny: [owner] }, entry(owner, false), { allow: [engine] }])(
-    "applies owner policy %j",
-    (policy) => {
-      expect(resolve(policy)).toBeUndefined();
-    },
-  );
+  it.each([
+    { enabled: false },
+    { deny: ["vendor-plugin"] },
+    { entries: { "vendor-plugin": { enabled: false } } },
+    { allow: ["Canonical-Engine"] },
+  ])("applies owner policy %j", (policy) => {
+    expect(
+      resolveSelectedContextEnginePluginId(
+        { plugins: { ...policy, slots: { contextEngine: "Canonical-Engine" } } },
+        records,
+      ),
+    ).toBeUndefined();
+  });
 });

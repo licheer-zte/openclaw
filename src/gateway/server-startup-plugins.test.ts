@@ -63,9 +63,6 @@ const pluginManifestRegistry = vi.hoisted((): PluginManifestRegistry => ({
   ],
   diagnostics: [],
 }));
-const { makeEmptyPluginMetadataOwners } = await vi.hoisted(
-  () => import("../plugins/plugin-metadata-empty.test-support.js"),
-);
 const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
   const index: PluginMetadataSnapshot["index"] = {
     version: 1,
@@ -90,7 +87,18 @@ const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
     byPluginId: new Map(),
     normalizePluginId: (pluginId) => pluginId,
     declaredProviderOwners: new Map(),
-    owners: makeEmptyPluginMetadataOwners(),
+    owners: {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+      providerAuthContributions: [],
+      modelIdNormalizationPolicies: new Map(),
+    },
     metrics: {
       registrySnapshotMs: 0,
       manifestRegistryMs: 0,

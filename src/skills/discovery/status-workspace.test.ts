@@ -5,7 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { withEnv, withEnvAsync } from "../../test-utils/env.js";
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
-import { createFixtureSkillEntry } from "../test-support/test-helpers.js";
+import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import type { SkillEntry } from "../types.js";
 import { buildWorkspaceSkillStatus } from "./status.js";
 
@@ -17,11 +17,26 @@ function makeEntry(
   metadata?: SkillEntry["metadata"],
   source = "openclaw-workspace",
 ): SkillEntry {
-  return { ...createFixtureSkillEntry(name, { source }), metadata };
+  const baseDir = `/tmp/${name}`;
+  return {
+    skill: createCanonicalFixtureSkill({
+      name,
+      description: `desc:${name}`,
+      filePath: `${baseDir}/SKILL.md`,
+      baseDir,
+      source,
+    }),
+    frontmatter: {},
+    metadata,
+  };
 }
 
 function requireReportedSkill(report: ReturnType<typeof buildWorkspaceSkillStatus>, name: string) {
-  return report.skills.find((entry) => entry.name === name);
+  const skill = report.skills.find((entry) => entry.name === name);
+  if (!skill) {
+    throw new Error(`reported skill ${name} missing`);
+  }
+  return skill;
 }
 
 describe("buildWorkspaceSkillStatus", () => {
@@ -45,9 +60,9 @@ describe("buildWorkspaceSkillStatus", () => {
           config: { skills: { install: { preferBrew } } },
         }),
       );
-      expect(report.skills.map((skill) => skill.install.map((option) => option.id))).toEqual([
-        [expectedId],
-      ]);
+      expect(
+        requireReportedSkill(report, entry.skill.name).install.map((option) => option.id),
+      ).toEqual([expectedId]);
     },
   );
 
@@ -65,7 +80,9 @@ describe("buildWorkspaceSkillStatus", () => {
       config: { skills: { entries: { "hot-reload-probe": { enabled: false } } } },
       eligibility: { nodeSkills: { canExec: false } },
     });
-    expect(requireReportedSkill(report, "hot-reload-probe")).toMatchObject({ disabled: true });
+    const skill = requireReportedSkill(report, "hot-reload-probe");
+
+    expect(skill.disabled).toBe(true);
   });
 
   it("requires explicit enablement before exposing bundled coding-agent", async () => {
@@ -108,38 +125,47 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(read(true)).toMatchObject({ eligible: true, missing: { config: [] } });
   });
 
-  it("does not mark an unknown-source skill as bundled by bundled name alone", async () => {
-    const bundledDir = tempDirs.make("openclaw-bundled-");
-    await writeSkill({
-      dir: path.join(bundledDir, "peekaboo"),
-      name: "peekaboo",
-      description: "Bundled peekaboo",
-    });
-
-    await withEnvAsync({ OPENCLAW_BUNDLED_SKILLS_DIR: bundledDir }, async () => {
-      const report = buildWorkspaceSkillStatus("/tmp/ws", {
-        entries: [makeEntry("peekaboo", undefined, "unknown")],
-        config: { skills: { allowBundled: ["other-skill"] } },
+  it.each(["unknown"])(
+    "does not mark a %s skill as bundled by bundled name alone",
+    async (source) => {
+      const bundledDir = tempDirs.make("openclaw-bundled-");
+      await writeSkill({
+        dir: path.join(bundledDir, "peekaboo"),
+        name: "peekaboo",
+        description: "Bundled peekaboo",
       });
-      const skill = requireReportedSkill(report, "peekaboo");
 
-      expect(skill).toMatchObject({
-        source: "unknown",
-        bundled: false,
-        blockedByAllowlist: false,
-        eligible: true,
+      await withEnvAsync({ OPENCLAW_BUNDLED_SKILLS_DIR: bundledDir }, async () => {
+        const report = buildWorkspaceSkillStatus("/tmp/ws", {
+          entries: [makeEntry("peekaboo", undefined, source)],
+          config: { skills: { allowBundled: ["other-skill"] } },
+        });
+        const skill = requireReportedSkill(report, "peekaboo");
+
+        expect(skill).toMatchObject({
+          source,
+          bundled: false,
+          blockedByAllowlist: false,
+          eligible: true,
+        });
       });
-    });
-  });
+    },
+  );
 
   it("filters install options by OS", () => {
     const entry = makeEntry("install-skill", {
       requires: { bins: ["missing-bin"] },
-      install: ["darwin", "linux", "win32"].map((os) => ({
-        id: os,
+      install: (
+        [
+          ["mac", "darwin"],
+          ["linux", "linux"],
+          ["win", "win32"],
+        ] as const
+      ).map(([id, os]) => ({
+        id,
         kind: "download",
         os: [os],
-        url: `https://example.com/${os}.tar.bz2`,
+        url: `https://example.com/${id}.tar.bz2`,
       })),
     });
 
@@ -148,8 +174,16 @@ describe("buildWorkspaceSkillStatus", () => {
         entries: [entry],
       }),
     );
-    expect(report.skills.map((skill) => skill.install.map((option) => option.id))).toEqual([
-      ["darwin", "linux", "win32"].includes(process.platform) ? [process.platform] : [],
-    ]);
+    const skill = requireReportedSkill(report, "install-skill");
+
+    if (process.platform === "darwin") {
+      expect(skill.install.map((opt) => opt.id)).toEqual(["mac"]);
+    } else if (process.platform === "linux") {
+      expect(skill.install.map((opt) => opt.id)).toEqual(["linux"]);
+    } else if (process.platform === "win32") {
+      expect(skill.install.map((opt) => opt.id)).toEqual(["win"]);
+    } else {
+      expect(skill.install).toStrictEqual([]);
+    }
   });
 });

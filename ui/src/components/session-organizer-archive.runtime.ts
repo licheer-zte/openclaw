@@ -14,10 +14,6 @@ import type {
   SidebarSessionMutationScope,
 } from "./app-sidebar-session-types.ts";
 import { showConfirmChoiceDialog, showConfirmDialog } from "./confirm-dialog.ts";
-import {
-  confirmWithBoundAutomations,
-  withBoundAutomationNotice,
-} from "./session-automation-confirm.ts";
 import { isSessionMutationScopeCurrent } from "./session-mutation-scope.ts";
 import {
   patchSessionRows,
@@ -79,19 +75,14 @@ export async function confirmSessionArchive(
   if (session.hasArchiveDescendants && scope.gateway.snapshot.phase !== "connected") {
     // Complete subtree discovery requires live reads. Offline intent targets
     // only the selected row, with the same explicit nested-session warning.
-    const options = {
+    const confirmed = await showConfirmDialog({
       title: t("sessionsView.archiveSessionTitle"),
       message:
         t("sessionsView.archiveSessionNestedOffline", { session: session.label }) +
         (hasActiveArchiveWork(session) ? "\n\n" + t("sessionsView.archiveRunningSessions") : ""),
       confirmLabel: t("sessionsView.archiveThisSession"),
       signal: scope.signal,
-    };
-    const confirmed = await confirmWithBoundAutomations(
-      archiveAutomationRequest([session], scope),
-      (notice) => showConfirmDialog(notice ? withBoundAutomationNotice(options, notice) : options),
-      Boolean,
-    );
+    });
     return confirmed && isCurrent() ? { kind: "single" } : null;
   }
   if (session.hasArchiveDescendants) {
@@ -186,7 +177,7 @@ export async function confirmSessionArchive(
       const directChildCount = rows.filter(
         (row) => ancestorsByKey.get(row.key)?.length === 1,
       ).length;
-      const options = {
+      const choice = await showConfirmChoiceDialog({
         title: t("sessionsView.archiveSessionTitle"),
         message:
           t(
@@ -202,34 +193,14 @@ export async function confirmSessionArchive(
         alternativeLabel: t("sessionsView.archiveThisSession"),
         groupChoicesOnMobile: true,
         signal: scope.signal,
-      };
-      // The tree choice keeps its own labels; only bound conversations that end up archived pause.
-      const automationTargets = rows.map((row) => ({
-        key: row.key,
-        agentId: resolveUiSessionRowAgentId(row, scope.selectedAgentId),
-        label: resolveSessionDisplayName(row.key, row),
-        hasAutomation: row.hasAutomation,
-      }));
-      const choice = await confirmWithBoundAutomations(
-        archiveAutomationRequest(automationTargets, scope),
-        (notice) =>
-          showConfirmChoiceDialog(
-            notice
-              ? {
-                  ...withBoundAutomationNotice(options, notice),
-                  confirmLabel: options.confirmLabel,
-                }
-              : options,
-          ),
-        (result) => result !== null,
-      );
+      });
       if (!isCurrent() || choice === null) {
         return null;
       }
       return choice === "confirm" ? { kind: "tree", rows: guardedRows } : { kind: "single" };
     }
   }
-  return (await confirmRunningSessionsArchive([session], scope)) && isCurrent()
+  return (await confirmRunningSessionsArchive([session], scope.signal)) && isCurrent()
     ? { kind: "single" }
     : null;
 }
@@ -245,53 +216,23 @@ function hasActiveArchiveWork(session: SessionArchiveActivity): boolean {
   );
 }
 
-type SessionArchiveConfirmScope = Pick<
-  SidebarSessionMutationScope,
-  "gateway" | "selectedAgentId" | "signal"
->;
-
-function archiveAutomationRequest(
-  sessions: readonly Pick<SessionActionRow, "key" | "agentId" | "label" | "hasAutomation">[],
-  scope: SessionArchiveConfirmScope,
-) {
-  return {
-    action: "archive" as const,
-    sessions,
-    gateway: scope.gateway,
-    selectedAgentId: scope.selectedAgentId,
-    signal: scope.signal,
-  };
-}
-
 export async function confirmRunningSessionsArchive(
-  sessions: readonly (SessionArchiveActivity &
-    Pick<SessionActionRow, "key" | "agentId" | "label" | "hasAutomation">)[],
-  scope: SessionArchiveConfirmScope,
+  sessions: readonly (SessionArchiveActivity & Pick<SessionActionRow, "label">)[],
+  signal?: AbortSignal,
 ): Promise<boolean> {
-  const running = sessions.some(hasActiveArchiveWork);
+  if (!sessions.some(hasActiveArchiveWork)) {
+    return true;
+  }
   const single = sessions.length === 1 ? sessions[0] : undefined;
-  const options = {
-    message: !running
-      ? ""
-      : single
-        ? t("sessionsView.archiveRunningSessionConfirm", { session: single.label })
-        : t("sessionsView.archiveRunningSessions"),
+  return showConfirmDialog({
+    message: single
+      ? t("sessionsView.archiveRunningSessionConfirm", { session: single.label })
+      : t("sessionsView.archiveRunningSessions"),
     confirmLabel: single
       ? t("sessionsView.archiveSession")
       : t("sessionsView.archiveSessionCount", { count: String(sessions.length) }),
-    signal: scope.signal,
-  };
-  // Leaf and batch archives confirm only for active work or bound automations.
-  return confirmWithBoundAutomations(
-    archiveAutomationRequest(sessions, scope),
-    (notice) =>
-      notice
-        ? showConfirmDialog(withBoundAutomationNotice(options, notice))
-        : running
-          ? showConfirmDialog(options)
-          : Promise.resolve(true),
-    Boolean,
-  );
+    signal,
+  });
 }
 
 export async function archiveSessionWithUndo(
@@ -361,7 +302,7 @@ export async function archiveSessionsWithUndo(
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
     return;
   }
-  if (await confirmRunningSessionsArchive(rows, scope)) {
+  if (await confirmRunningSessionsArchive(rows, scope.signal)) {
     await archiveConfirmedSessionsWithUndo(host, rows, scope);
   }
 }

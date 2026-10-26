@@ -24,10 +24,7 @@ import {
   SessionsGoalClearParamsSchema,
   SessionsGoalUpdateParamsSchema,
 } from "../packages/gateway-protocol/src/schema/sessions-goal.js";
-import {
-  MessageReactionSummarySchema,
-  SessionReactionEventSchema,
-} from "../packages/gateway-protocol/src/schema/sessions-reactions.js";
+import { SessionReactionEventSchema } from "../packages/gateway-protocol/src/schema/sessions-reactions.js";
 import {
   SessionPermissionModeSchema,
   SessionRowSchema,
@@ -172,12 +169,6 @@ const validators: Array<[name: string, schema: TSchema, type: string, group: Gro
     "ProgressCard",
     ProgressCardSchema,
     'import("' + schemaRoot + 'progress-card.js").ProgressCard',
-    "transcript",
-  ],
-  [
-    "MessageReactionSummary",
-    MessageReactionSummarySchema,
-    'import("' + schemaRoot + 'sessions-reactions.js").MessageReactionSummary',
     "transcript",
   ],
   [

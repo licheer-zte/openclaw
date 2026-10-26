@@ -3,7 +3,6 @@ export {
   loadCostUsageSummary,
   loadCostUsageSummaryFromCache,
   loadSessionCostSummariesFromCache,
-  loadSessionUsageOverviewFromCache,
 } from "./session-cost-usage-cache-runtime.js";
 export {
   resolveUsageSessionSource,

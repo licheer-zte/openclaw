@@ -19,7 +19,6 @@ import * as processIdentity from "../../shared/pid-alive.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { mockProcessPlatform, withMockedPlatform } from "../../test-utils/vitest-spies.js";
-import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import { UpdatePreMutationError } from "./shared.js";
 import { inspectUpdateManagedServices } from "./update-command-database-context.js";
 import * as databaseContext from "./update-command-database-context.js";
@@ -128,7 +127,10 @@ it.each([
     const other = path.join(home, "other");
     await writePackageRoot(other, "1.0.0");
     if (owner === "foreign") {
-      writeFixtureJsonSync(path.join(other, "package.json"), { name: "other", version: "1.0.0" });
+      fs.writeFileSync(
+        path.join(other, "package.json"),
+        JSON.stringify({ name: "other", version: "1.0.0" }),
+      );
     }
     vi.stubEnv("HOME", home);
     serviceHome(home);

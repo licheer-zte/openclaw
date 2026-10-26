@@ -22,73 +22,50 @@ export function formatEmbeddingTaskText(text: string, taskType: string): string 
   return `${EMBEDDING_TASK_PREFIXES[taskType]} ${text}`;
 }
 
-type EmbeddingInputFormat = { query: string; document: string };
-
-const MODEL_INPUT_FORMATS = [
-  {
-    pattern: /(?:^|[/\\])(?:text-embedding-)?embeddinggemma(?:[-:._]|$)/iu,
-    query: formatEmbeddingTaskText("", "RETRIEVAL_QUERY"),
-    document: formatEmbeddingTaskText("", "RETRIEVAL_DOCUMENT"),
-    version: 1,
-  },
-  {
-    pattern: /(?:^|[/\\])nemotron-3(?:\.5)?-embed(?:[-:._]|$)/iu,
-    query: "query: ",
-    document: "passage: ",
-    version: 1,
-  },
-];
-
-function resolveModelInputFormat(model: string) {
-  return MODEL_INPUT_FORMATS.find(({ pattern }) => pattern.test(model.trim()));
-}
-
 /** Advance the model's revision when its input format changes, for index and cache upgrades. */
 export function resolveEmbeddingInputFormatVersion(model: string): number {
-  return resolveModelInputFormat(model)?.version ?? 0;
+  return /(?:^|[/\\])(?:text-embedding-)?embeddinggemma(?:[-:._]|$)/iu.test(model.trim()) ? 1 : 0;
 }
 
 export function formatEmbeddingModelInput(
   input: string,
   model: string,
   role: "query" | "document",
-  inputFormat?: EmbeddingInputFormat,
 ): string;
 export function formatEmbeddingModelInput(
   input: EmbeddingInput,
   model: string,
   role: "query" | "document",
-  inputFormat?: EmbeddingInputFormat,
 ): EmbeddingInput;
 export function formatEmbeddingModelInput(
   input: string | EmbeddingInput,
   model: string,
   role: "query" | "document",
-  inputFormat?: EmbeddingInputFormat,
 ): string | EmbeddingInput;
 export function formatEmbeddingModelInput(
   input: string | EmbeddingInput,
   model: string,
   role: "query" | "document",
-  inputFormat?: EmbeddingInputFormat,
 ): string | EmbeddingInput {
-  const prefix = (inputFormat ?? resolveModelInputFormat(model))?.[role];
-  if (prefix === undefined) {
+  if (!resolveEmbeddingInputFormatVersion(model)) {
     return input;
   }
+  const taskType = role === "query" ? "RETRIEVAL_QUERY" : "RETRIEVAL_DOCUMENT";
   if (typeof input === "string") {
-    return `${prefix}${input}`;
+    return formatEmbeddingTaskText(input, taskType);
   }
   if (hasNonTextEmbeddingParts(input)) {
     return input;
   }
   return {
     ...input,
-    text: `${prefix}${input.text}`,
+    text: formatEmbeddingTaskText(input.text, taskType),
     ...(input.parts
       ? {
           parts: input.parts.map((part, index) =>
-            part.type === "text" && index === 0 ? { ...part, text: `${prefix}${part.text}` } : part,
+            part.type === "text" && index === 0
+              ? { ...part, text: formatEmbeddingTaskText(part.text, taskType) }
+              : part,
           ),
         }
       : {}),

@@ -13,7 +13,6 @@ import {
   expectTerminalOpen,
   makeFakePty,
 } from "../terminal/session-manager.test-helpers.js";
-import { callAgentHandler } from "./agents-mutate.test-support.js";
 import { terminalUploadHandlers } from "./terminal-upload.js";
 
 vi.mock("node:fs/promises", async (original) => {
@@ -61,7 +60,17 @@ it.each(["queued", "before-write"])("rechecks upload policy at %s", async (phase
     terminalSessions: manager,
     isTerminalEnabled: () => true,
   });
+  const respond = vi.fn();
   const params = { sessionId: opened.sessionId, name: "client.bin", contentBase64: "AQID" };
+  const invoke = () =>
+    upload({
+      req: { type: "req", id: "upload", method: "terminal.upload", params },
+      params,
+      context,
+      respond,
+      isWebchatConnect: () => false,
+      client: { connId: "conn-1", connect },
+    });
   const agent =
     phase === "queued"
       ? stageTerminalUpload({ name: "agent.bin", contentBase64: "BAUG" }, { tempRoot: root })
@@ -69,10 +78,7 @@ it.each(["queued", "before-write"])("rechecks upload policy at %s", async (phase
   if (agent) {
     await entered.promise;
   }
-  const pending = callAgentHandler(upload, "terminal.upload", params, {
-    context,
-    client: { connId: "conn-1", connect },
-  });
+  const pending = Promise.resolve(invoke());
   try {
     if (!agent) {
       await Promise.race([
@@ -84,7 +90,7 @@ it.each(["queued", "before-write"])("rechecks upload policy at %s", async (phase
     }
     config = { gateway: { uploads: { enabled: false } } };
     release.resolve();
-    const respond = await pending;
+    await pending;
     const disabled = { code: "FORBIDDEN", details: { code: "UPLOADS_DISABLED" } };
     expect.soft(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(disabled));
     const writes = vi.mocked(fs.writeFile).mock.calls;

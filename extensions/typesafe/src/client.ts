@@ -23,15 +23,7 @@ import {
   type RuntimeConfig,
 } from "./config.js";
 import { EvaluationError, evaluationError } from "./errors.js";
-import {
-  MAX_IMAGE_REQUEST_BYTES,
-  MAX_JSON_BYTES,
-  parseInput,
-  parseResult,
-  type ImageAssets,
-} from "./schema.js";
-
-const IMAGE_OPT_IN_HEADER = "TypeSafe-Danger-Zone-Images";
+import { MAX_JSON_BYTES, parseInput, parseResult } from "./schema.js";
 
 const API_BASE_URL = `${HOSTED_ORIGIN}/v1`;
 
@@ -73,7 +65,6 @@ export async function evaluate(
   abortSignal?: AbortSignal,
   deadlineMonotonicMs?: number,
   isAdmissible?: () => boolean,
-  assets?: ImageAssets,
 ) {
   if (abortSignal?.aborted) {
     throw evaluationError(undefined, true);
@@ -95,7 +86,7 @@ export async function evaluate(
   }
   try {
     let wireInput = parsed;
-    if (!assets && !hosted) {
+    if (!hosted) {
       const questions: typeof parsed.questions = {};
       for (const [id, question] of Object.entries(parsed.questions)) {
         const instructions = question.instructions ?? null;
@@ -118,9 +109,6 @@ export async function evaluate(
       ? providerBaseUrl(config.providerConfig.baseUrl)
       : localBaseUrl(config.baseUrl);
     const apiBaseUrl = config.providerConfig ? baseUrl : baseUrl ? `${baseUrl}/v1` : API_BASE_URL;
-    if (assets && apiBaseUrl !== API_BASE_URL) {
-      throw new EvaluationError("TypeSafe images require hosted Jev at /v1.", "unsupported-input");
-    }
     let resolved: ReturnType<typeof resolveProviderHttpRequestConfigWithOriginTrust>;
     let configuredRequest: ReturnType<typeof sanitizeConfiguredModelProviderRequest>;
     try {
@@ -160,8 +148,6 @@ export async function evaluate(
         "credentials-unavailable",
       );
     }
-    // The opt-in describes this request body, not a persistent provider setting.
-    resolved.headers.delete(IMAGE_OPT_IN_HEADER);
     const reflectsCredential = createProviderCredentialMatcher({
       headers: resolved.headers,
       request: configuredRequest,
@@ -169,9 +155,6 @@ export async function evaluate(
       defaultAuthHeader: "Authorization",
       defaultAuthPrefix: "Bearer ",
     });
-    if (assets) {
-      resolved.headers.set(IMAGE_OPT_IN_HEADER, "true");
-    }
     const endpoint = `${resolved.baseUrl}/systemone`;
     const policy = baseUrl
       ? resolveProviderTransportSsrFPolicy({
@@ -181,8 +164,8 @@ export async function evaluate(
           trustConfiguredBaseUrlOrigin: resolved.trustConfiguredBaseUrlOrigin,
         })
       : undefined;
-    const body = JSON.stringify({ ...wireInput, model, ...(assets ? { assets } : {}) });
-    if (Buffer.byteLength(body) > (assets ? MAX_IMAGE_REQUEST_BYTES : MAX_JSON_BYTES)) {
+    const body = JSON.stringify({ ...wireInput, model });
+    if (Buffer.byteLength(body) > MAX_JSON_BYTES) {
       throw new EvaluationError("TypeSafe request exceeds its limit.", "unsupported-input");
     }
     const timeoutMs =
@@ -290,7 +273,7 @@ export async function evaluate(
       cleanup();
     }
     abortSignal?.throwIfAborted();
-    if (!assets && !hosted) {
+    if (!hosted) {
       if (
         !responsePayload ||
         typeof responsePayload !== "object" ||
@@ -307,7 +290,7 @@ export async function evaluate(
       }
     }
     const evaluation = parseResult(responsePayload, wireInput);
-    if (!assets && !hosted) {
+    if (!hosted) {
       for (const [id, question] of Object.entries(parsed.questions)) {
         const answer = evaluation.answers[id];
         if (question.type === "score" && answer?.type === "score") {

@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { pluginCredentialHandlers } from "./plugins.credentials.js";
-import { expectRpcError, expectRpcResult } from "./rpc-response.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({ snapshot: vi.fn(), metadata: vi.fn(), descriptors: vi.fn() }));
@@ -15,7 +14,7 @@ const path = ["plugins", "entries", "example", "config", "key"];
 const ref = { source: "file", provider: "vault", id: "/private/key" };
 const inspectParams = { pluginId: "example", path, baseHash: "public:revision" };
 const revealParams = { ...inspectParams, reveal: true };
-const invalidRequest = { code: "INVALID_REQUEST" };
+const invalidRequest = expect.objectContaining({ code: "INVALID_REQUEST" });
 
 function request(overrides: Partial<GatewayRequestHandlerOptions> = {}) {
   return {
@@ -40,10 +39,9 @@ function snapshot(key: unknown, other: string) {
   };
 }
 async function expectCredential(credential: unknown, reveal = false) {
-  expectRpcResult(await invoke(request({ params: reveal ? revealParams : inspectParams })), {
-    baseHash: "public:revision",
-    credential,
-  });
+  expect(
+    await invoke(request({ params: reveal ? revealParams : inspectParams })),
+  ).toHaveBeenCalledWith(true, { baseHash: "public:revision", credential }, undefined);
 }
 beforeEach(() => {
   vi.clearAllMocks();
@@ -63,7 +61,7 @@ describe("plugin credential inspection authorization", () => {
   it("rejects read-only reveal access before reading config", async () => {
     const options = request({ params: revealParams });
     options.client!.connect.scopes = ["operator.read"];
-    expectRpcError(await invoke(options), invalidRequest);
+    expect(await invoke(options)).toHaveBeenCalledWith(false, undefined, invalidRequest);
     expect(mocks.snapshot).not.toHaveBeenCalled();
   });
   it("rejects a connection retired while the snapshot read is pending", async () => {
@@ -72,7 +70,7 @@ describe("plugin credential inspection authorization", () => {
       options.client!.invalidated = true;
       return { hash: "revision" };
     });
-    expectRpcError(await invoke(options), invalidRequest);
+    expect(await invoke(options)).toHaveBeenCalledWith(false, undefined, invalidRequest);
     expect(mocks.metadata).not.toHaveBeenCalled();
   });
   it.each([
@@ -84,13 +82,21 @@ describe("plugin credential inspection authorization", () => {
   ])(
     "rejects stale revisions, cross-plugin or arbitrary paths, and extra parameters",
     async (params) => {
-      expectRpcError(await invoke(request({ params })), invalidRequest);
+      expect(await invoke(request({ params }))).toHaveBeenCalledWith(
+        false,
+        undefined,
+        invalidRequest,
+      );
     },
   );
   it("does not echo authored text from loader errors", async () => {
     mocks.snapshot.mockRejectedValue(new Error("private-secret-from-invalid-config"));
     const respond = await invoke(request());
     expect(JSON.stringify(vi.mocked(respond).mock.calls)).not.toContain("private-secret");
-    expectRpcError(respond, { code: "UNAVAILABLE" });
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "UNAVAILABLE" }),
+    );
   });
 });

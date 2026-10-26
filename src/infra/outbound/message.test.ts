@@ -109,6 +109,7 @@ describe("sendMessage", () => {
       conversationType: "channel",
       requesterAccountId: "work",
       requesterSenderId: "attacker",
+      mirror: { sessionKey: "agent:main:forum:dm:123456" },
     });
 
     const deliveryParams = expectDeliveryCallFields();
@@ -119,9 +120,10 @@ describe("sendMessage", () => {
       requesterAccountId: "work",
       requesterSenderId: "attacker",
     });
+    expectFields(deliveryParams.mirror, { sessionKey: "agent:main:forum:dm:123456" });
   });
 
-  it("keeps a location-only delivery payload unchanged", async () => {
+  it("prepares safe mirror text without changing a location-only delivery payload", async () => {
     const location = {
       latitude: 48.858844,
       longitude: 2.294351,
@@ -130,10 +132,12 @@ describe("sendMessage", () => {
     await send({
       content: "",
       payloads: [{ location }],
+      mirror: { sessionKey: "agent:main:forum:dm:123456" },
     });
 
     const deliveryParams = expectDeliveryCallFields();
     expectFields(deliveryParams.payloads[0], { text: "", location });
+    expectFields(deliveryParams.mirror, { text: "📍 48.858844, 2.294351" });
   });
 
   it("forwards prepared payloads and required queue policy into outbound delivery", async () => {
@@ -218,7 +222,7 @@ describe("sendMessage", () => {
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
-  it("normalizes MEDIA and silent token variants before durable delivery", async () => {
+  it("applies mirror matrix semantics for MEDIA and silent token variants", async () => {
     const a = "https://example.com/a.png";
     const b = "https://example.com/b.png";
     const extracted = [a, b];
@@ -243,7 +247,10 @@ describe("sendMessage", () => {
     ];
     for (const [params, text, mediaUrl, mediaUrls] of matrix) {
       mocks.deliverOutboundPayloads.mockClear();
-      await send(params);
+      await send({
+        ...params,
+        mirror: { sessionKey: "agent:main:forum:dm:123456" },
+      });
 
       expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
       const deliveryCall = expectDeliveryCallFields();
@@ -253,6 +260,11 @@ describe("sendMessage", () => {
         mediaUrls: payload.mediaUrls ?? [],
       }));
       expect(payloadSummary, params.content).toEqual([{ text, mediaUrl, mediaUrls }]);
+      expectFields(deliveryCall.mirror, {
+        sessionKey: "agent:main:forum:dm:123456",
+        text,
+        mediaUrls: mediaUrls.length ? mediaUrls : undefined,
+      });
     }
   });
 

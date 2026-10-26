@@ -3,6 +3,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { createMatrixClient } from "./create-client.js";
 
 const mocks = vi.hoisted(() => ({
+  ensureMatrixSdkLoggingConfigured: vi.fn(),
   resolveValidatedMatrixHomeserverUrl: vi.fn(),
   maybeMigrateLegacyStorage: vi.fn(async () => undefined),
   resolveMatrixStoragePaths: vi.fn(),
@@ -12,11 +13,11 @@ const mocks = vi.hoisted(() => ({
   state: { resolveStateDir: vi.fn() },
 }));
 const preparedSyncStore = {};
-// mock-isolation: Keep construction, logging, network validation, and storage synthetic.
+// mock-isolation: Client construction uses a synthetic runtime rather than shared Gateway state.
 vi.mock("../../runtime.js", () => ({ getMatrixRuntime: () => ({ state: mocks.state }) }));
 // mock-isolation: Constructor wiring must not reconfigure the process-wide SDK logger.
 vi.mock("./logging.js", () => ({
-  ensureMatrixSdkLoggingConfigured: vi.fn(),
+  ensureMatrixSdkLoggingConfigured: mocks.ensureMatrixSdkLoggingConfigured,
 }));
 // mock-isolation: Homeserver validation is controlled without resolving external hosts.
 vi.mock("./config.js", () => ({
@@ -43,19 +44,41 @@ const storagePaths = {
   tokenHash: "token-hash",
 };
 
-const auth = { homeserver: "https://matrix.test", userId: "@bot:matrix.test", accessToken: "tok" };
-const expectClient = (options: Record<string, unknown>) =>
-  expect(mocks.MatrixClient).toHaveBeenCalledWith(
-    auth.homeserver,
-    auth.accessToken,
-    expect.objectContaining({ userId: auth.userId, stateRuntime: mocks.state, ...options }),
-  );
+const auth = {
+  homeserver: "https://matrix.example.org",
+  userId: "@bot:example.org",
+  accessToken: "tok",
+};
+const clientOptions = {
+  userId: auth.userId,
+  password: undefined,
+  deviceId: undefined,
+  encryption: undefined,
+  localTimeoutMs: undefined,
+  initialSyncLimit: undefined,
+  syncStore: undefined,
+  recoveryKeyPath: undefined,
+  idbSnapshotPath: undefined,
+  cryptoDatabasePrefix: undefined,
+  autoBootstrapCrypto: undefined,
+  ssrfPolicy: undefined,
+  dispatcherPolicy: undefined,
+  stateRuntime: mocks.state,
+};
+const expectClient = (options: { [K in keyof typeof clientOptions]?: unknown } = {}) =>
+  expect(mocks.MatrixClient).toHaveBeenCalledWith(auth.homeserver, auth.accessToken, {
+    ...clientOptions,
+    ...options,
+  });
 
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.createSyncStore.mockResolvedValue(preparedSyncStore);
   mocks.resolveValidatedMatrixHomeserverUrl.mockResolvedValue(auth.homeserver);
   mocks.resolveMatrixStoragePaths.mockReturnValue(storagePaths);
+  mocks.MatrixClient.mockImplementation(function MockMatrixClient() {
+    return { stop: vi.fn() };
+  });
 });
 
 it("persists metadata and hydrates sync state before constructing the client", async () => {
@@ -64,7 +87,14 @@ it("persists metadata and hydrates sync state before constructing the client", a
   const pending = createMatrixClient(auth);
   await vi.waitFor(() => expect(mocks.createSyncStore).toHaveBeenCalled());
   expect(mocks.MatrixClient).not.toHaveBeenCalled();
-  expect(mocks.writeStorageMeta).toHaveBeenCalledBefore(mocks.createSyncStore);
+  expect(mocks.writeStorageMeta).toHaveBeenCalledWith({
+    storagePaths,
+    homeserver: "https://matrix.example.org",
+    userId: "@bot:example.org",
+    accountId: undefined,
+    deviceId: undefined,
+  });
+  expect(mocks.resolveMatrixStoragePaths).toHaveBeenCalledTimes(1);
   hydration.resolve(preparedSyncStore);
   await pending;
   expectClient({
@@ -75,20 +105,18 @@ it("persists metadata and hydrates sync state before constructing the client", a
   });
 });
 
-const policy = { allowPrivateNetwork: true, customField: "test" };
+const explicitPolicy = { allowPrivateNetwork: true, customField: "test" };
 it.each([
   ["derives private-network policy", { allowPrivateNetwork: true }, { allowPrivateNetwork: true }],
-  ["prefers explicit policy", { allowPrivateNetwork: false, ssrfPolicy: policy }, policy],
+  [
+    "prefers explicit policy",
+    { allowPrivateNetwork: false, ssrfPolicy: explicitPolicy },
+    explicitPolicy,
+  ],
   ["leaves policy unset", {}, undefined],
 ] as const)("skips persistent storage and %s", async (_name, options, ssrfPolicy) => {
   await createMatrixClient({ ...auth, persistStorage: false, ...options });
   expect(mocks.resolveMatrixStoragePaths).not.toHaveBeenCalled();
   expect(mocks.writeStorageMeta).not.toHaveBeenCalled();
-  expectClient({
-    ssrfPolicy,
-    syncStore: undefined,
-    recoveryKeyPath: undefined,
-    idbSnapshotPath: undefined,
-    cryptoDatabasePrefix: undefined,
-  });
+  expectClient({ ssrfPolicy });
 });

@@ -37,7 +37,6 @@ export async function downloadSessionFile(
   const result = await client.request<SessionsFilesDownloadResult>(
     "sessions.files.download",
     params,
-    { signal },
   );
   if (!current()) {
     return null;

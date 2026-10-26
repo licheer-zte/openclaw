@@ -1,7 +1,6 @@
 import { afterEach, expect, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
-import type { McpAppViewProps } from "../components/mcp-app-view-types.ts";
 import { mountView } from "../components/mcp-app-view.test-support.ts";
 import { i18n } from "../i18n/index.ts";
 import { createApplicationGateway } from "./application-context-fixtures.ts";
@@ -50,7 +49,6 @@ export function createMcpBridgeFixture(bridgeMocks: {
     messageSupported = true,
     updateModelContextSupported = messageSupported,
     payload: Record<string, unknown> = {},
-    properties: Partial<McpAppViewProps> = {},
   ) {
     vi.spyOn(HTMLIFrameElement.prototype, "contentWindow", "get").mockReturnValue(window);
     const frameReady = deferred<HTMLIFrameElement>();
@@ -101,7 +99,7 @@ export function createMcpBridgeFixture(bridgeMocks: {
       },
     });
     const { view, unmount } = mountView(
-      { sessionKey: "agent:main:main", viewId, title: "Parts library", ...properties },
+      { sessionKey: "agent:main:main", viewId, title: "Parts library" },
       {
         gateway,
         theme: {

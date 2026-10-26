@@ -115,9 +115,15 @@ it.each([
       const foreignChild = { ...child, requesterStorePath: physicalStore + ".other" };
       try {
         expect(io.emitAcceptance).not.toHaveBeenCalled();
-        await withSessionTurn({ ...turn, controllerInput: source.input }, async () => {
+        await withSessionTurn({ ...turn, controllerInput: source.input }, async (operation) => {
+          const requester = expectDefined(operation, "native requester operation");
           expect(isClaimedByLiveRequesterTurn(child)).toBe(true);
-          expect(isClaimedByLiveRequesterTurn(foreignChild)).toBe(false);
+          await withSessionTurn({ ...turn, replyOperation: requester }, async () => {
+            expect(isClaimedByLiveRequesterTurn(child)).toBe(true);
+            expect(isClaimedByLiveRequesterTurn(foreignChild)).toBe(false);
+            requester.yield();
+            expect(isClaimedByLiveRequesterTurn(child)).toBe(true);
+          });
         });
         expect(isClaimedByLiveRequesterTurn(child)).toBe(false);
       } finally {

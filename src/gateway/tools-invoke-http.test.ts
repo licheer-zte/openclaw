@@ -1,3 +1,5 @@
+// Tool invoke HTTP tests cover request auth, tool context construction, hook
+// filtering, plugin metadata, payload validation, and response shaping.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -29,6 +31,10 @@ import {
   registerToolsInvokeErrorTests,
 } from "./tools-invoke.policy.test-support.js";
 
+type RunBeforeToolCallHook = typeof runBeforeToolCallHookType;
+type RunBeforeToolCallHookArgs = Parameters<RunBeforeToolCallHook>[0];
+type RunBeforeToolCallHookResult = Awaited<ReturnType<RunBeforeToolCallHook>>;
+
 const hookMocks = vi.hoisted(() => ({
   gatewayPolicyExecute: vi.fn<AnyAgentTool["execute"]>(async () => ({
     content: [],
@@ -40,10 +46,12 @@ const hookMocks = vi.hoisted(() => ({
     details: {},
   })),
   resolveToolLoopDetectionConfig: vi.fn(() => ({ warnAt: 3 })),
-  runBeforeToolCallHook: vi.fn<typeof runBeforeToolCallHookType>(async (args) => ({
-    blocked: false,
-    params: args.params,
-  })),
+  runBeforeToolCallHook: vi.fn(
+    async (args: RunBeforeToolCallHookArgs): Promise<RunBeforeToolCallHookResult> => ({
+      blocked: false,
+      params: args.params,
+    }),
+  ),
 }));
 
 const sessionEntries = vi.hoisted(() => new Map<string, Record<string, unknown>>());
@@ -184,7 +192,9 @@ vi.mock("../agents/openclaw-tools.js", async () => {
       name: "tools_invoke_test",
       parameters: {
         type: "object",
-        properties: { mode: { type: "string" } },
+        properties: {
+          mode: { type: "string" },
+        },
         required: ["mode"],
         additionalProperties: false,
       },
@@ -296,7 +306,11 @@ const invokeTool = async (params: {
 const invokeToolAuthed = invokeTool;
 
 const invokeAgentsListAuthed = async (params: { sessionKey?: string } = {}) =>
-  invokeTool({ tool: "agents_list", action: "json", ...params });
+  invokeTool({
+    tool: "agents_list",
+    action: "json",
+    sessionKey: params.sessionKey,
+  });
 
 const firstHookCallArg = () =>
   expectDefined(hookMocks.runBeforeToolCallHook.mock.calls[0], "before-tool-call hook")[0];
@@ -344,7 +358,11 @@ const setMainAllowedTools = (params: { allow: string[]; gatewayAllow?: string[] 
   cfg = {
     ...cfg,
     agents: { entries: { main: { tools: { allow: params.allow } } } },
-    ...(params.gatewayAllow ? { gateway: { tools: { allow: params.gatewayAllow } } } : {}),
+    ...(params.gatewayAllow
+      ? {
+          gateway: { tools: { allow: params.gatewayAllow } },
+        }
+      : {}),
   };
 };
 const allowAgentsListForMain = () => setMainAllowedTools({ allow: ["agents_list"] });
@@ -404,7 +422,11 @@ describe("POST /tools/invoke", () => {
       tools: { gatewayPolicy: { allow: ["policy_action"], actions: { policy_action: ["read"] } } },
     };
     const invoke = (action: string) =>
-      invokeTool({ headers: gatewayAdminHeaders(), tool: "policy_action", action });
+      invokeTool({
+        headers: gatewayAdminHeaders(),
+        tool: "policy_action",
+        action,
+      });
     const allowed = await invoke("read");
     expect(allowed.status).toBe(200);
     expect(hookMocks.gatewayPolicyExecute).toHaveBeenCalledTimes(1);
@@ -621,7 +643,9 @@ describe("POST /tools/invoke", () => {
     authenticateOnce("trusted-proxy");
 
     const res = await invokeTool({
-      headers: { "x-openclaw-scopes": "" },
+      headers: {
+        "x-openclaw-scopes": "",
+      },
       tool: "agents_list",
       sessionKey: "main",
     });
@@ -668,7 +692,12 @@ describe("POST /tools/invoke", () => {
       const owner = ensureProfileForEmail("role-owner@example.test");
       const sessionKey = "agent:main:shared-secret-owner-session";
       await sharedSession(sessionKey, "shared-secret-owner-session", owner.id);
-      cfg = { ...cfg, gateway: { roles: guestRole(["guest-agent"], "none") } };
+      cfg = {
+        ...cfg,
+        gateway: {
+          roles: guestRole(["guest-agent"], "none"),
+        },
+      };
       authenticateOnce("token");
 
       const roleConfiguredOwnerResponse = await invokeTool({

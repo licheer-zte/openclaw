@@ -428,9 +428,7 @@ export class ShellChromeOwner {
     // A replaced workspace can retain its palette ref after the DOM is detached.
     if (!host.elements.commandPalette?.isConnected && isCommandPaletteShortcut(event)) {
       event.preventDefault();
-      if (!event.repeat) {
-        this.togglePalette();
-      }
+      this.togglePalette();
       return;
     }
     if (

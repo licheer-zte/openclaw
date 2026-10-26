@@ -28,7 +28,6 @@ import {
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { nextBooleanToolOverrides } from "../../lib/sessions/tool-overrides.ts";
-import { showToast } from "../../lib/toast.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -503,6 +502,7 @@ export class ChatComposerCapabilityHost {
         loading: this.library.loading,
         busy: this.library.busy,
         error: this.library.error,
+        notice: this.library.notice,
         canWrite: canWriteLibrary,
         onReload: () => {
           if (current()) {
@@ -516,11 +516,7 @@ export class ChatComposerCapabilityHost {
         },
         onActivate: (action, skillId, revision) => {
           if (current() && canWriteLibrary) {
-            void this.library.activate(action, skillId, revision).then((message) => {
-              if (message && current()) {
-                showToast({ message });
-              }
-            });
+            void this.library.activate(action, skillId, revision);
           }
         },
       },
@@ -548,14 +544,14 @@ export class ChatComposerCapabilityHost {
           return;
         }
         if (
-          (view === "skills" || view === "libraries" || view.startsWith("library:")) &&
+          (view === "skills" || view.startsWith("library:")) &&
           !this.library.result &&
           !this.library.loading &&
           !this.library.error
         ) {
           void this.library.load();
         }
-        if (effectiveToolsAvailable && view === "connectors") {
+        if (effectiveToolsAvailable && view.startsWith("tools:")) {
           this.loadEffectiveTools(context, state, agentId);
         }
       },

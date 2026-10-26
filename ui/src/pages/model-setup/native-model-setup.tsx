@@ -236,7 +236,7 @@ export function NativeModelSetupView(props: { owner: NativeModelSetup }) {
       value: `${model.provider}/${model.id}`,
       label: model.name,
       provider: model.provider,
-      description:
+      detail:
         model.available === true
           ? providerDisplayLabel(model.provider)
           : (chatModelUnavailableMessage(model.unavailableReason) ??

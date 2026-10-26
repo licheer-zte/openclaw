@@ -74,7 +74,6 @@ async function expectSize(file: string, size: number) {
 }
 const readConfig = async (file: string): Promise<OpenClawConfig> =>
   JSON.parse(await fs.readFile(file, "utf8"));
-const readFiles = (files: string[]) => Promise.all(files.map((file) => fs.readFile(file)));
 function readDatabase(file: string, query: string) {
   using db = openNodeSqliteDatabase(file, { readOnly: true });
   return db.prepare(query).get();
@@ -180,7 +179,6 @@ it("reaps an expired snapshot worker before removing its database and WAL scratc
   const now = Date.now.bind(Date);
   let elapsed = 0;
   vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
-  vi.spyOn(performance, "now").mockImplementation(() => now() + elapsed);
   const ready = createDeferred();
   const run = exec.runUtf8CommandWithTimeout;
   vi.spyOn(exec, "runUtf8CommandWithTimeout").mockImplementation((argv, options) => {
@@ -382,13 +380,23 @@ const capacityFailure = { capacity: { reason: "snapshot-capacity-insufficient" }
 async function capacityFixture(mebibytes: number | null, worker = false) {
   const f = await fixture(8, ["main", "second"], worker);
   capacity(() => (mebibytes === null ? null : mebibytes * 1024 ** 2));
-  const hashes = async () =>
-    (await readFiles(f.files)).map((bytes) => createHash("sha256").update(bytes).digest("hex"));
+  const hashes = () =>
+    Promise.all(
+      f.files.map(async (file) =>
+        createHash("sha256")
+          .update(await fs.readFile(file))
+          .digest("hex"),
+      ),
+    );
   const before = await hashes();
   return {
     ...f,
     assess: () =>
-      assessInitialUpdateSnapshotCapacity({ config: {}, stateDir: f.stateDir, env: {} }),
+      assessInitialUpdateSnapshotCapacity({
+        config: {},
+        stateDir: f.stateDir,
+        env: {},
+      }),
     prepare: (options: Partial<Parameters<typeof prepareUpdateCandidateRehearsal>[0]> = {}) =>
       prepare(f, options),
     unchanged: async () => expect(await hashes()).toEqual(before),
@@ -423,7 +431,7 @@ it("preflights activation backup separately from candidate copy capacity", async
   capacity((target) =>
     target === backupDirectory ? (freeMiB === null ? null : freeMiB * 1024 ** 2) : 140 * 1024 ** 2,
   );
-  const before = await readFiles(f.files);
+  const before = await Promise.all(f.files.map((file) => fs.readFile(file)));
   for (freeMiB of [100, 140, null]) {
     const result = await assessInitialUpdateSnapshotCapacity({
       config: {},
@@ -442,7 +450,9 @@ it("preflights activation backup separately from candidate copy capacity", async
     }
   }
   await expect(fs.stat(backupDirectory)).rejects.toMatchObject({ code: "ENOENT" });
-  expect(await readFiles(f.files)).toEqual(before);
+  for (const [index, file] of f.files.entries()) {
+    expect((await fs.readFile(file)).equals(before[index]!)).toBe(true);
+  }
 });
 
 it("copies and verifies both databases within capacity despite a sub-floor caller timeout", async () => {
@@ -594,28 +604,33 @@ it.each(["token", "password"] as const)(
       );
     expect((await lint(config, path.join(root, "openclaw.json"))).findings).toEqual([]);
 
-    const rehearsal = await prepare(
-      { root, stateDir: source },
-      {
-        config,
-        env: {
-          ...process.env,
-          OPENCLAW_GATEWAY_TOKEN: "synthetic-environment-token",
-          OPENCLAW_GATEWAY_PASSWORD: "synthetic-environment-password",
-        },
+    const rehearsal = await prepareUpdateCandidateRehearsal({
+      config,
+      stateDir: source,
+      candidateRoot: root,
+      env: {
+        ...process.env,
+        OPENCLAW_GATEWAY_TOKEN: "synthetic-environment-token",
+        OPENCLAW_GATEWAY_PASSWORD: "synthetic-environment-password",
       },
-    );
+    });
     try {
       const copied = await readConfig(rehearsal.configPath);
       const result = await lint(copied, rehearsal.configPath);
       expect(result.findings).toEqual([]);
       expect(exitCodeFromFindings(result.findings)).toBe(0);
+      expect(copied.gateway).toEqual({
+        ...config.gateway,
+        auth: { ...config.gateway?.auth, token: expect.any(String) },
+      });
       expect(copied.gateway?.auth?.token).not.toBe(config.gateway?.auth?.token);
-      const expected = structuredClone(config);
-      expected.gateway!.auth!.token = expect.any(String);
-      expected.diagnostics!.otel!.headers!.Authorization = expect.any(String);
-      expect(copied.gateway).toEqual(expected.gateway);
-      expect(copied.diagnostics).toEqual(expected.diagnostics);
+      expect(copied.diagnostics).toEqual({
+        ...config.diagnostics,
+        otel: {
+          ...config.diagnostics?.otel,
+          headers: { Authorization: expect.any(String), "X-Reference": "${OTEL_SECRET}" },
+        },
+      });
       expect(copied.diagnostics?.otel?.headers?.Authorization).not.toBe("synthetic-otel-secret");
       const copiedDatabase = path.join(rehearsal.stateDir, path.relative(source, database));
       expect(readDatabase(copiedDatabase, "PRAGMA user_version")).toEqual({ user_version: 25 });

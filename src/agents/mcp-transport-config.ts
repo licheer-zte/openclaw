@@ -7,7 +7,7 @@ import {
   resolvePositiveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveConfiguredMcpTransport } from "../config/mcp-config-normalize.js";
 import { createDedupeCache } from "../infra/dedupe.js";
@@ -163,8 +163,8 @@ export function resolveMcpTransportConfig(
     return null;
   }
   const oauth = record?.oauth;
-  const clientCert = readNonBlankString(record?.clientCert);
-  const clientKey = readNonBlankString(record?.clientKey);
+  const clientCert = normalizeOptionalString(record?.clientCert);
+  const clientKey = normalizeOptionalString(record?.clientKey);
   return {
     kind: "http",
     transportType: launch.config.transportType,

@@ -116,7 +116,7 @@ export async function markRetainedManagedNpmInstall(params: {
   packageDir: string;
   pluginId: string;
   reason: string;
-  assertCurrent?: () => void | Promise<void>;
+  assertCurrent?: () => void;
 }): Promise<boolean> {
   const info = resolveRetainedManagedNpmInstallPackageInfo(params.packageDir);
   if (!info) {
@@ -126,9 +126,9 @@ export async function markRetainedManagedNpmInstall(params: {
   if (!stat?.isDirectory()) {
     return false;
   }
-  await params.assertCurrent?.();
+  params.assertCurrent?.();
   await fs.promises.mkdir(path.dirname(info.markerPath), { recursive: true });
-  await params.assertCurrent?.();
+  params.assertCurrent?.();
   await fs.promises.writeFile(
     info.markerPath,
     `${JSON.stringify(
@@ -150,16 +150,16 @@ export async function markRetainedManagedNpmInstall(params: {
 export async function restoreRetainedManagedNpmInstallMarkers(params: {
   clearedMarkerSnapshots: Array<{ markerPath: string; contents: string }>;
   createdMarkerPaths: string[];
-  assertCurrent: () => void | Promise<void>;
+  assertCurrent: () => void;
 }): Promise<void> {
   for (const snapshot of params.clearedMarkerSnapshots) {
-    await params.assertCurrent();
+    params.assertCurrent();
     await fs.promises.mkdir(path.dirname(snapshot.markerPath), { recursive: true });
-    await params.assertCurrent();
+    params.assertCurrent();
     await fs.promises.writeFile(snapshot.markerPath, snapshot.contents, "utf8");
   }
   for (const markerPath of params.createdMarkerPaths) {
-    await params.assertCurrent();
+    params.assertCurrent();
     await fs.promises.rm(markerPath, { force: true });
   }
 }

@@ -93,7 +93,9 @@ export async function withQueue<T>(
     async ({ stateDir }) => {
       const queueOptions = { channelId: "line", accountId: "default", stateDir };
       const queue = createChannelIngressQueue<SpoolPayload>(queueOptions);
-      return await fn(queue, createChannelIngressQueue<LegacySpoolPayload>(queueOptions));
+      // Upgrade tests seed the pre-drain row shape through the same store.
+      const legacySeed = createChannelIngressQueue<LegacySpoolPayload>(queueOptions);
+      return await fn(queue, legacySeed);
     },
   );
 }
@@ -105,7 +107,11 @@ export async function waitForVerdict(
 ): Promise<void> {
   await vi.waitFor(
     async () => {
-      const verdict = await queue.enqueue(eventId, { version: 1, rawEvent: "{}", destination: "" });
+      const verdict = await queue.enqueue(eventId, {
+        version: 1,
+        rawEvent: "{}",
+        destination: "",
+      });
       expect(verdict.kind).toBe(expected);
     },
     { timeout: 4_000 },

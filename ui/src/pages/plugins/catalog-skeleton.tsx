@@ -28,13 +28,11 @@ export function renderCatalogGridSkeleton(params: {
               <div class="installed-plugins-card__head">
                 <span class="skeleton plugin-catalog-card__skeleton-art" />
                 <div class="installed-plugins-card__identity">
-                  <div class="plugin-card-title-row">
-                    <span class="skeleton plugin-catalog-card__skeleton-title" />
-                    <div class="plugin-catalog-card__action">
-                      <span class="skeleton plugin-catalog-card__skeleton-action" />
-                    </div>
-                  </div>
+                  <span class="skeleton plugin-catalog-card__skeleton-title" />
                 </div>
+              </div>
+              <div class="plugin-catalog-card__action">
+                <span class="skeleton plugin-catalog-card__skeleton-action" />
               </div>
             </div>
             <span class="plugin-catalog-card__skeleton-summary">

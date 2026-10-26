@@ -251,7 +251,9 @@ export class WorkerTaskPoolCore<Input, Output> {
     }
     task.admitted = true;
     task.observation = this.observeTask?.(task.options.diagnosticOperation);
-    armWorkerTaskTimeout(task, options.timeoutMs, this.timeout, "enqueue");
+    if (options.timeoutMs !== undefined) {
+      armWorkerTaskTimeout(task, options.timeoutMs, () => this.timeout(task));
+    }
     options.signal?.addEventListener("abort", task.abort, { once: true });
     this.queue.push(task);
     if (options.signal?.aborted) {
@@ -396,7 +398,6 @@ export class WorkerTaskPoolCore<Input, Output> {
       this.activeTasks++;
       task.slot = slot;
       task.startedAt = performance.now();
-      armWorkerTaskTimeout(task, task.options.timeoutMs, this.timeout, "dispatch");
       task.observation?.started();
       task.runInContext(() => {
         try {
@@ -587,7 +588,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       this.finishHostWait(task);
       exchange.onConsumed = response.onConsumed;
       exchange.sent = true;
-      armWorkerTaskTimeout(task, response.timeoutMs, this.timeout);
+      armWorkerTaskTimeout(task, response.timeoutMs, () => this.timeout(task));
       try {
         slot.worker!.postMessage(
           {
@@ -612,12 +613,12 @@ export class WorkerTaskPoolCore<Input, Output> {
     });
   }
 
-  private readonly timeout = (task: Task<Input, Output>): void => {
+  private timeout(task: Task<Input, Output>): void {
     if (task.done) {
       return;
     }
     this.cancel(task, workerTaskTimeoutError(task.exchange, this.options.workerUrl));
-  };
+  }
 
   private cancel(task: Task<Input, Output>, error: Error): void {
     if (task.done) {

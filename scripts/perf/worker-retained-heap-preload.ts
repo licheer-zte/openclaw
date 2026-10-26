@@ -125,7 +125,7 @@ const script = path.basename(process.argv[1] ?? "");
 if (
   output &&
   !isMainThread &&
-  /^(?:(sqlite-store|prepared-model-catalog|git-operation|session-accessor\.sqlite-archive|openclaw-state-read|openclaw-state-lease-heartbeat|gateway-state-owner-heartbeat|worker-native-lifecycle|control-ui-file|identity-avatar-file|provider-prompt-state|client-credential)\.worker(?:\.baseline)?|storage-worker)\.[cm]?[jt]s$/.test(
+  /^(sqlite-store|prepared-model-catalog|session-accessor\.sqlite-archive|openclaw-state-read|openclaw-state-lease-heartbeat|gateway-state-owner-heartbeat|worker-native-lifecycle|control-ui-file|identity-avatar-file|provider-prompt-state|client-credential)\.worker(?:\.baseline)?\.[cm]?[jt]s$/.test(
     script,
   )
 ) {
@@ -146,7 +146,6 @@ if (
   };
   const memory = () => ({
     ...process.memoryUsage(),
-    allocatedBytes: Reflect.get(getHeapStatistics(), "total_allocated_bytes"),
     heapSizeLimitBytes: getHeapStatistics().heap_size_limit,
     heapSpaces: getHeapSpaceStatistics(),
     code: getHeapCodeStatistics(),
@@ -179,7 +178,6 @@ if (
         complete: boolean;
         peakHeapUsedBytes: number;
         heapSamples: number;
-        reclaimedBytes: number;
       }
     | undefined;
   const drainGc = (restart: boolean) => {
@@ -191,10 +189,6 @@ if (
       profiler.start();
     }
     for (const entry of profile?.statistics ?? []) {
-      measured.reclaimedBytes += Math.max(
-        0,
-        entry.beforeGC.heapStatistics.usedHeapSize - entry.afterGC.heapStatistics.usedHeapSize,
-      );
       measured.peakHeapUsedBytes = Math.max(
         measured.peakHeapUsedBytes,
         entry.beforeGC.heapStatistics.usedHeapSize,
@@ -285,7 +279,6 @@ if (
         complete: true,
         peakHeapUsedBytes: process.memoryUsage().heapUsed,
         heapSamples: 0,
-        reclaimedBytes: 0,
       };
       loop.reset();
       loop.enable();
@@ -324,7 +317,6 @@ if (
         operation: command.operation,
         complete: result.complete,
         peakHeapUsedBytes: result.peakHeapUsedBytes,
-        reclaimedBytes: result.reclaimedBytes,
         heapSamples: result.heapSamples,
         startedAtEpochMs: result.startedAtEpochMs,
         endedAtEpochMs,

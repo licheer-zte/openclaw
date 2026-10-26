@@ -33,8 +33,8 @@ function diagnostic(kind: string, addon = false) {
   return message ? `echo "${message}" >&2` : "";
 }
 
-const session = () =>
-  createSqliteReadOnlyWorkerSession({
+function session() {
+  return createSqliteReadOnlyWorkerSession({
     env: {},
     cwd: process.cwd(),
     transport: { kind: "native" },
@@ -46,15 +46,19 @@ const session = () =>
     timeoutError: () => new Error("unexpected timeout"),
     closeTimeoutMs: 5_000,
   });
+}
 
 async function runWorker() {
   const worker = session();
-  await using _ = { [Symbol.asyncDispose]: () => worker.close() };
-  return await worker.run("fixture", { mode: "staging-create" });
+  try {
+    return await worker.run("fixture", { mode: "staging-create" });
+  } finally {
+    await worker.close();
+  }
 }
 
-const readinessChecker = () =>
-  createReadinessChecker({
+function readinessChecker() {
+  return createReadinessChecker({
     startedAt: Date.now(),
     channelManager: {
       getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
@@ -62,6 +66,7 @@ const readinessChecker = () =>
       isAmbientAutostartSuppressed: () => false,
     },
   });
+}
 
 it
   .skipIf(process.platform === "win32")
@@ -107,6 +112,7 @@ it("publishes a removed runtime observed by readiness before another worker spaw
   expect(readiness().ready).toBe(true);
   await fs.unlink(executable);
   expect(readiness()).toMatchObject({ ready: false, failing: ["child-runtime"] });
+  expect(readiness().ready).toBe(false);
   await Promise.resolve();
   expect(recover).toHaveBeenCalledTimes(1);
   expect(() => session()).toThrow("Restart the Gateway.");

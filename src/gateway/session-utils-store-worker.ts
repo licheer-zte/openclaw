@@ -36,10 +36,7 @@ import {
   resolveNativeGatewaySessionStoreTargetWithStore,
   type GatewaySessionStoreLookupParams,
 } from "./session-utils-store-lookup.js";
-import {
-  createGatewaySessionStore,
-  type GatewaySessionStoreRead,
-} from "./session-utils-store-read.js";
+import type { GatewaySessionStoreRead } from "./session-utils-store-read.js";
 import {
   findCanonicalStoreMatch,
   omitInternalSessionEffectsEntries,
@@ -259,7 +256,9 @@ async function prepareGatewaySessionStoreReadInWorker(
                   continuation,
                 );
                 assertSourceCurrent();
-                read.result = createGatewaySessionStore(result.entries);
+                read.result = Object.fromEntries(
+                  result.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+                );
                 read.readSource = { agentId: database.agentId, path: database.path };
                 read.capturedReadSource = result.source;
                 return readNext(index + 1);
@@ -283,7 +282,9 @@ async function prepareGatewaySessionStoreReadInWorker(
             assertCurrent();
             for (const [index, read] of pending.entries()) {
               const preparedRead = loaded[index]!;
-              read.result = createGatewaySessionStore(preparedRead.result.entries);
+              read.result = Object.fromEntries(
+                preparedRead.result.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+              );
               read.readSource = {
                 agentId: preparedRead.database.agentId,
                 path: preparedRead.database.path,
@@ -380,7 +381,9 @@ async function prepareGatewaySessionStoreReadInWorker(
         ) {
           throw new Error("Prepared session lookup source changed");
         }
-        read.result = createGatewaySessionStore(current.entries);
+        read.result = Object.fromEntries(
+          current.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+        );
         read.readSource = current.source;
         read.capturedReadSource = current.capturedReadSource;
       }

@@ -5,7 +5,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
 import { automaticallyCleanUpdateRecovery } from "../cli/update-cli/automatic-cleanup.js";
 import { prepareUpdateCommandTerminalResult } from "../cli/update-cli/update-command-terminal.js";
 import { finalizeRestartUpdateRun } from "../gateway/server-restart-update-run.js";
@@ -81,17 +80,19 @@ function capture(runId: string, doctor = false, age = 0) {
     UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
   );
   fs.writeFileSync(path.join(directory, "payload"), "preserved rollback bytes");
-  writeFixtureJsonSync(
+  fs.writeFileSync(
     path.join(directory, "manifest.json"),
-    doctor
-      ? createMissingConfigRecoveryManifest({
-          runId,
-          installRoot: stateDir,
-          stateDir,
-          configPath: env.OPENCLAW_CONFIG_PATH,
-          createdAt: new Date(now - age * 86_400_000).toISOString(),
-        })
-      : {},
+    JSON.stringify(
+      doctor
+        ? createMissingConfigRecoveryManifest({
+            runId,
+            installRoot: stateDir,
+            stateDir,
+            configPath: env.OPENCLAW_CONFIG_PATH,
+            createdAt: new Date(now - age * 86_400_000).toISOString(),
+          })
+        : {},
+    ),
   );
   return directory;
 }
@@ -242,30 +243,19 @@ it("runs retirement in the owning Gateway worker while retaining pending recover
   await closeOpenClawStateDatabaseAsync();
   const lock = await acquireGatewayLock({ env, role: "gateway", allowInTests: true });
   expect(lock).toBeTruthy();
-  const lstat = fs.lstatSync;
-  let hostOwnerReads = 0;
-  using hostProbe = vi.spyOn(fs, "lstatSync").mockImplementation((pathname, options) => {
-    if (String(pathname) === lock!.stateLockPath) {
-      hostOwnerReads++;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
-    }
-    return lstat(pathname, options);
-  });
   try {
-    const result = await cleanupGatewayUpdateRecovery(second, env);
+    const result = await cleanupGatewayUpdateRecovery(second, env, () => lock!.assertCurrent());
     expect(result?.advisory).toBeUndefined();
-    expect(hostOwnerReads).toBe(0);
     expect(fs.existsSync(original)).toBe(false);
     expect(fs.existsSync(current)).toBe(true);
     expect(fs.existsSync(pendingCapture)).toBe(true);
     expect(getUpdateRun(second, { env })?.status).toBe("succeeded");
   } finally {
-    hostProbe.mockRestore();
     await lock?.release();
   }
 });
 
-it.each(["before-first-effect", "claim-publication", "first-unlink"] as const)(
+it.each(["claim-publication", "first-unlink"] as const)(
   "stops migration-original retirement when its physical owner is replaced after %s",
   async (phase) => {
     const fixture = await recoveryFixture();
@@ -309,14 +299,13 @@ it.each(["before-first-effect", "claim-publication", "first-unlink"] as const)(
         // Observe real worker effects, then replace the real physical owner.
         // Production host admission still decides whether the next effect is allowed.
         const reached =
-          phase === "before-first-effect" ||
-          (phase === "claim-publication"
+          phase === "claim-publication"
             ? moves().some(
                 (move) =>
                   move.artifact?.disposal.state === "pending-disposal" &&
                   fs.existsSync(move.artifact.disposal.claimPath),
               )
-            : remaining().length < originals.size);
+            : remaining().length < originals.size;
         if (!successor && reached) {
           originalOwner.release();
           successor = acquire();
@@ -327,11 +316,11 @@ it.each(["before-first-effect", "claim-publication", "first-unlink"] as const)(
       expect(() => originalOwner.assertCurrent()).toThrow();
       successor!.assertCurrent();
       const retained = remaining();
-      expect(retained).toHaveLength(phase === "first-unlink" ? 1 : 2);
+      expect(retained).toHaveLength(phase === "claim-publication" ? 2 : 1);
       for (const { original, retained: file } of retained) {
         expect(fs.readFileSync(file)).toEqual(originals.get(original));
       }
-      if (phase !== "first-unlink") {
+      if (phase === "claim-publication") {
         expectOriginals(originals);
       }
       expect(fs.existsSync(current)).toBe(true);

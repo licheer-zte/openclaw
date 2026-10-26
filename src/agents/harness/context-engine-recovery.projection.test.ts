@@ -4,10 +4,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as reconciliation from "../../config/sessions/session-transcript-reconcile.js";
-import {
-  holdReconcileAck,
-  useReconcileWorkerObserver,
-} from "../../config/sessions/session-transcript-reconcile.test-support.js";
+import { useReconcileWorkerObserver } from "../../config/sessions/session-transcript-reconcile.test-support.js";
+import type { SessionTranscriptReconcileWorkerMessage } from "../../config/sessions/session-transcript-reconcile.worker.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { removeTrailingMidTurnPrecheckAssistantError } from "../embedded-agent-runner/run/attempt-transcript-helpers.js";
@@ -75,8 +73,30 @@ it.each([false, true])(
           errorMessage: "Context overflow: prompt too large for the model (mid-turn precheck).",
         }),
       );
-      const held = holdReconcileAck(observer, "plan-start", target.sessionId, admission.storePath);
-      let releaseAcknowledgement: (() => void) | undefined = held.release;
+      const held = createDeferred();
+      let releaseAcknowledgement: (() => void) | undefined;
+      let released = false;
+      observer.onTask = ({ input, port, observeMessage }) => {
+        if (input.mode !== "disk" || input.path !== admission.storePath) {
+          return;
+        }
+        const postMessage = port.postMessage.bind(port);
+        let startingTarget = false;
+        observeMessage((message: SessionTranscriptReconcileWorkerMessage) => {
+          startingTarget =
+            message.type === "plan-start" && message.plan.sessionId === target.sessionId;
+        });
+        port.postMessage = (message: unknown, transferList) => {
+          const options = Array.isArray(transferList) ? { transfer: transferList } : transferList;
+          if (startingTarget && !released) {
+            startingTarget = false;
+            releaseAcknowledgement = () => postMessage(message, options);
+            held.resolve();
+            return;
+          }
+          postMessage(message, options);
+        };
+      };
       let outcome: ReturnType<typeof finalizeTurn> | undefined;
       try {
         const result = await truncateOversizedToolResultsInSessionManager({
@@ -93,7 +113,7 @@ it.each([false, true])(
           agentId: target.agentId,
           path: admission.storePath,
         });
-        await awaitGateBeforeSettlement(held.paused, joined, "projection rebuilt early");
+        await awaitGateBeforeSettlement(held.promise, joined, "projection rebuilt early");
         const terminalEntryId = sessionManager.getLeafId();
         assert(terminalEntryId, "recovery must retain a terminal entry");
         const record = vi.fn();
@@ -131,6 +151,7 @@ it.each([false, true])(
           await expect(outcome).rejects.toMatchObject({ name: "AbortError" });
           expect(record).not.toHaveBeenCalled();
         } else {
+          released = true;
           releaseAcknowledgement?.();
           releaseAcknowledgement = undefined;
           await outcome;
@@ -144,6 +165,7 @@ it.each([false, true])(
           );
         }
       } finally {
+        released = true;
         releaseAcknowledgement?.();
         await outcome?.catch(() => {});
         await reconciliation.waitForSessionTranscriptIndexReconcile({

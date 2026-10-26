@@ -7,14 +7,12 @@ import {
   resolveSessionTranscriptDatabasePath,
 } from "../../config/sessions/session-accessor.js";
 import {
+  holdReconcileAck,
   markRebuild,
   rebuildState,
 } from "../../config/sessions/session-transcript-reconcile.fixtures.test-support.js";
 import * as reconcile from "../../config/sessions/session-transcript-reconcile.js";
-import {
-  holdReconcileAck,
-  useReconcileWorkerObserver,
-} from "../../config/sessions/session-transcript-reconcile.test-support.js";
+import { useReconcileWorkerObserver } from "../../config/sessions/session-transcript-reconcile.test-support.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import {
   attachSessionTranscriptRunId,

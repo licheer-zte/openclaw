@@ -53,17 +53,36 @@ describe("settings save indicator", () => {
     expect(indicator.textContent?.trim()).toBe("");
   });
 
-  it("stays quiet through autosave and offers pending Apply changes immediately", async () => {
+  it("renders the shared working claw while saving", async () => {
     await update({ status: "saving" });
-    expect(indicator.textContent?.trim()).toBe("");
-    expect(indicator.querySelector('[role="status"]')).toBeNull();
-    await update({ status: "saved" });
-    expect(indicator.textContent?.trim()).toBe("");
-    expect(indicator.querySelector('[role="status"]')).toBeNull();
-    await update({ status: "saving", needsApply: true });
-    expect(button("Apply changes")).toBeUndefined();
-    await update({ status: "saved", needsApply: true });
-    expect(button("Apply changes")?.disabled).toBe(false);
+    expect(indicator.textContent?.trim()).toBe("Saving…");
+    expect(part("claw--saving svg .claw-icon__jaw")).not.toBeNull();
+    expect(part("claw")).toMatchObject({ ariaHidden: "true" });
+  });
+
+  it.each(["elapsed", "unmounted"] as const)("retires the saved timer when %s", async (end) => {
+    vi.useFakeTimers();
+    const needsApply = end === "elapsed";
+    await update({ status: "saving" });
+    expect(vi.getTimerCount()).toBe(0);
+    await update({ status: "saved", needsApply });
+    expect(indicator.textContent).toContain("Saved");
+    expect(part("claw--saved")).not.toBeNull();
+    expect(part("check")).not.toBeNull();
+    // Shell refreshes replace props without restarting the saved window.
+    await update({ status: "saved", needsApply });
+    expect(vi.getTimerCount()).toBe(1);
+    if (end === "unmounted") {
+      view.unmount();
+      await Promise.resolve();
+      expect(vi.getTimerCount()).toBe(0);
+    } else {
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(indicator.textContent).toContain("Saved");
+      await vi.advanceTimersByTimeAsync(1);
+      flush();
+      expect(indicator.textContent?.trim()).toBe("Apply changes");
+    }
   });
 
   it.each([
@@ -103,8 +122,8 @@ describe("settings save indicator", () => {
     await update({ status: "error", lastError });
     expect(indicator.textContent).toContain("Save failed");
     await update({ status: "error", saving: true, lastError: null });
-    expect(indicator.textContent?.trim()).toBe("");
-    expect(indicator.querySelector('[role="status"]')).toBeNull();
+    expect(indicator.textContent?.trim()).toBe("Saving…");
+    expect(indicator.querySelector('[role="status"]')).toMatchObject({ title: "" });
     await update({ status: "error", lastError });
     expect(indicator.textContent).toContain("Save failed");
     expect(indicator.querySelector('[role="status"]')).toMatchObject({ title: lastError });
@@ -127,7 +146,8 @@ describe("settings save indicator", () => {
     const onSave = vi.fn(() => held.promise);
     await update({ status: "paused", onSave });
     button("Save")!.click();
-    await waitForSolid(() => expect(indicator.textContent?.trim()).toBe(""));
+    await waitForSolid(() => expect(indicator.textContent).toContain("Saving…"));
+    expect(indicator.querySelector('[aria-busy="true"]')).not.toBeNull();
     expect(onSave).toHaveBeenCalledOnce();
     held.resolve(false);
     await waitForSolid(() => expect(button("Save")?.disabled).toBe(false));
@@ -140,7 +160,7 @@ describe("settings save indicator", () => {
     const onRetry = vi.fn(() => held.promise);
     await update({ status: "error", onRetry });
     button("Retry")!.click();
-    await waitForSolid(() => expect(indicator.textContent?.trim()).toBe(""));
+    await waitForSolid(() => expect(indicator.textContent).toContain("Saving…"));
     held.reject(new Error("Synthetic retry transport failed"));
     await waitForSolid(() =>
       expect(indicator.querySelector('[role="alert"]')?.textContent).toContain(

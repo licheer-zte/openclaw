@@ -550,7 +550,7 @@ describe("ChatSessionRailElement", () => {
   });
 
   it.each([false, true])(
-    "submits attachments without a written question (image: %s)",
+    "uses an empty-question fallback only for images (image: %s)",
     async (image) => {
       const onSubmit = vi.fn();
       const element = await mount({
@@ -576,15 +576,16 @@ describe("ChatSessionRailElement", () => {
           ],
         },
       });
-      expect(element.querySelector<HTMLButtonElement>("button[type=submit]")?.disabled).toBe(false);
+      expect(element.querySelector<HTMLButtonElement>("button[type=submit]")?.disabled).toBe(
+        !image,
+      );
       element.querySelector("form")!.dispatchEvent(new SubmitEvent("submit", { bubbles: true }));
       element
         .querySelector("textarea")!
         .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      const question = image
-        ? "What does this image show?"
-        : "Respond to the selected text and comments.";
-      expect(onSubmit.mock.calls).toEqual([[question], [question]]);
+      expect(onSubmit.mock.calls).toEqual(
+        image ? [["What does this image show?"], ["What does this image show?"]] : [],
+      );
     },
   );
 

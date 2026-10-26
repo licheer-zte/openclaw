@@ -196,7 +196,7 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     } else if (identity === "source path" || identity === "legacy implicit host") {
       replacement.fileHost = "gateway";
     }
-    buildWorkspaceSkillSnapshotMock.mockImplementation((_workspace, options) => ({
+    buildWorkspaceSkillSnapshotMock.mockReturnValue({
       ...original,
       prompt: strippedSnapshot().prompt.replace("/skills/test/SKILL.md", replacement.filePath),
       skills: [
@@ -205,11 +205,8 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
           source: { filePath: replacement.filePath, fileHost: replacement.fileHost },
         },
       ],
-      resolvedSkills:
-        !options.matchesSnapshotSkill || options.matchesSnapshotSkill(replacement)
-          ? [replacement]
-          : [],
-    }));
+      resolvedSkills: [replacement],
+    });
     const params = { workspaceDir, config: {}, watch: false };
     await resolveReusableWorkspaceSkillSnapshot(params);
     for (const existingSnapshot of [original, { ...original }]) {

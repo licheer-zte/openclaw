@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -532,9 +531,11 @@ it.each(["metadata", "context loading"] as const)(
       const replacement = sessionTarget(state, "sdk-replacement");
       await seedTarget(original);
       await seedTarget(replacement);
-      SessionManager.open(replacement, state.workspaceDir).appendMessage(
-        makeUserMessage("Preserve replacement history", 1),
-      );
+      SessionManager.open(replacement, state.workspaceDir).appendMessage({
+        role: "user",
+        content: "Preserve replacement history",
+        timestamp: 1,
+      });
       const replacementBefore = await loadTranscriptEvents(replacement);
       const originalBefore = await loadTranscriptEvents(original);
       const manager = SessionManager.open(original, state.workspaceDir);
@@ -867,9 +868,11 @@ it.each(["SDK initialization", "model transition"] as const)(
       };
       await seedTarget(first);
       await seedTarget(second);
-      SessionManager.open(second, secondDir).appendMessage(
-        makeUserMessage("Leave the other physical database unchanged", 1),
-      );
+      SessionManager.open(second, secondDir).appendMessage({
+        role: "user",
+        content: "Leave the other physical database unchanged",
+        timestamp: 1,
+      });
       const secondBefore = await loadTranscriptEvents(second);
       let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
       let restoreAppend: (() => void) | undefined;

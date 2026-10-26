@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { expect, it, vi } from "vitest";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import * as registryRead from "../../agents/subagents/registry/subagent-registry-read.js";
 import {
   persistRegistryFixture,
   saveSubagentRegistryToSqlite,
@@ -14,9 +15,13 @@ import {
   reserveSwarmRun,
 } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
-import { resolveSessionStorePathCore } from "../../config/sessions.js";
+import {
+  resolveSessionStorePathCore,
+  SESSION_TOTAL_TOKENS_VERSION,
+} from "../../config/sessions.js";
 import {
   deleteSessionEntryLifecycle,
+  loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -43,6 +48,7 @@ import {
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const targetKey = "agent:main:controller";
+const targetScope = { agentId: "main", sessionKey: targetKey };
 const expectSession = (response: unknown, session: unknown) =>
   expect(response).toMatchObject({ session });
 const putSession = (key: string, entry: Parameters<typeof upsertSessionEntryCore>[1]) =>
@@ -80,20 +86,6 @@ function retainedRun(runId: string, overrides: Partial<SubagentRunRecord> = {}):
     delivery: { status: "not_required" },
     ...overrides,
   };
-}
-
-function collectorRun(runId: string, groupId: string) {
-  return retainedRun(runId, {
-    collect: true,
-    groupId,
-    swarmRequesterSessionKey: targetKey,
-    collectorCompletion: { status: "done" },
-  });
-}
-
-function registerRun(run: SubagentRunRecord) {
-  subagentRuns.set(run.runId, run);
-  return { [Symbol.dispose]: () => subagentRuns.delete(run.runId) };
 }
 
 async function describeSession(
@@ -140,7 +132,14 @@ async function withFixture(
           controllerSessionKey: i === 0 ? targetKey : `agent:main:other-${i}`,
         }),
       );
-      records.push(collectorRun("deleted-collector", "retained-group"));
+      records.push(
+        retainedRun("deleted-collector", {
+          collect: true,
+          groupId: "retained-group",
+          swarmRequesterSessionKey: targetKey,
+          collectorCompletion: { status: "done" },
+        }),
+      );
       saveSubagentRegistryToSqlite(new Map(records.map((entry) => [entry.runId, entry])));
       clearSubagentRunsReadCacheForTest();
       const context = requestContext(cfg);
@@ -267,7 +266,12 @@ it("captures current registry facts after list owner publications", () =>
             session: result.sessions.find((row) => row.key === targetKey),
           })),
         () => {
-          const published = collectorRun("current-persisted", "current-group");
+          const published = retainedRun("current-persisted", {
+            collect: true,
+            groupId: "current-group",
+            swarmRequesterSessionKey: targetKey,
+            collectorCompletion: { status: "done" },
+          });
           persistRegistryFixture(new Map([[published.runId, published]]), [
             ...retainedRunIds,
             published.runId,
@@ -303,7 +307,7 @@ it("projects current target, lineage, children and placement after committed cha
     const placements = createWorkerSessionPlacementStore();
     context.workerSessionPlacementService = placements;
     const response = await afterChange(async () => {
-      await putSession(targetKey, {
+      await upsertSessionEntryCore(targetScope, {
         sessionId: "replacement",
         label: "Current conversation",
         parentSessionKey: "agent:main:current-parent",
@@ -356,7 +360,7 @@ it.each(["role", "creator alias"] as const)(
           setRuntimeConfigSnapshot(next);
         } else {
           linkEmail("owner@example.com", viewer.authenticatedUserProfile!.profileId);
-          await putSession(targetKey, { visibility: "draft" });
+          await upsertSessionEntryCore(targetScope, { visibility: "draft" });
         }
       });
       expect(response).toMatchObject(
@@ -418,14 +422,17 @@ it.each(["agent", "main alias"] as const)(
         entries: [{ id: "gpt-5.6-sol", provider: "openai", name: "Fixture", reasoning: true }],
         pluginRegistry,
       };
-      context.readPreparedGatewayModelCatalog = async (options?: { agentId?: string }) =>
-        options?.agentId === "main" ? catalog : undefined;
+      const catalogs = vi.fn(async (options?: { agentId?: string }) =>
+        options?.agentId === "main" ? catalog : undefined,
+      );
+      context.readPreparedGatewayModelCatalog = catalogs;
       setRuntimeConfigSnapshot(initial);
       const key = route === "agent" ? "global" : "agent:main:main";
       expectSession(await describe(key), {
         agentId: "main",
         thinkingLevels: [],
       });
+      catalogs.mockClear();
       const response = await afterChange(async () => {
         if (route === "main alias") {
           await deleteSession("agent:main:main");
@@ -442,10 +449,74 @@ it.each(["agent", "main alias"] as const)(
     }),
 );
 
+it("projects elapsed runtime, status expiry and budget time after committed changes", () =>
+  withFixture(async ({ describe, afterChange }) => {
+    const startedAt = Date.now() - 1000;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt + 1000);
+    const running = retainedRun("clock-running", {
+      childSessionKey: targetKey,
+      controllerSessionKey: "agent:main:parent",
+      requesterSessionKey: "agent:main:parent",
+      createdAt: startedAt,
+      execution: { status: "running", startedAt },
+    });
+    let claim: string | undefined;
+    try {
+      await upsertSessionEntryCore(targetScope, {
+        agentStatus: { note: "Working", expiresAt: startedAt + 2000 },
+        totalTokens: 100,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+        goal: {
+          schemaVersion: 1,
+          id: "clock-goal",
+          objective: "Synthetic clock proof",
+          status: "active",
+          createdAt: startedAt,
+          updatedAt: startedAt,
+          tokenStart: 0,
+          tokensUsed: 0,
+          tokenBudget: 50,
+          continuationTurns: 0,
+        },
+      });
+      subagentRuns.set(running.runId, running);
+      claim = claimAgentRunContext(
+        running.runId,
+        { sessionKey: targetKey },
+        { trackOwner: true, ownsContext: true },
+      );
+      expect(registryRead.isSubagentRunLive(running)).toBe(true);
+      expectSession(await describe(), {
+        status: "running",
+        runtimeMs: 1000,
+        agentStatus: { note: "Working" },
+      });
+      const response = await afterChange(() => {
+        clock.mockReturnValue(startedAt + 6000);
+      });
+      expectSession(response, {
+        status: "running",
+        runtimeMs: 6000,
+        agentStatus: undefined,
+        goal: {
+          status: "budget_limited",
+          budgetLimitedAt: startedAt + 6000,
+          updatedAt: startedAt + 6000,
+        },
+      });
+      expect(loadSessionEntry(targetScope)?.goal?.status).toBe("active");
+    } finally {
+      releaseAgentRunContext(running.runId, claim);
+      subagentRuns.delete(running.runId);
+      clock.mockRestore();
+    }
+  }));
+
 it("does not promote historical control after the current executor retires", () =>
   withFixture(async ({ describe, afterChange }) => {
     const now = Date.now();
-    using clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
     const older = retainedRun("current-executor", {
       childSessionKey: targetKey,
       controllerSessionKey: "agent:main:older-controller",
@@ -460,18 +531,23 @@ it("does not promote historical control after the current executor retires", () 
       createdAt: now - 1000,
       execution: { status: "terminal", startedAt: now - 1000, endedAt: now - 10 },
     });
-    using _ = registerRun(older);
+    subagentRuns.set(older.runId, older);
     using execution = holdSubagentExecution(older.runId, targetKey);
-    saveSubagentRegistryToSqlite(new Map([older, newer].map((run) => [run.runId, run])));
-    clearSubagentRunsReadCacheForTest();
-    expectSession(await describe(), {
-      controlOwnerSessionKey: older.controllerSessionKey,
-    });
-    const response = await afterChange(() => {
-      execution[Symbol.dispose]();
-      clock.mockReturnValue(now + 1);
-    });
-    expectSession(response, { controlOwnerSessionKey: undefined });
+    try {
+      saveSubagentRegistryToSqlite(new Map([older, newer].map((run) => [run.runId, run])));
+      clearSubagentRunsReadCacheForTest();
+      expectSession(await describe(), {
+        controlOwnerSessionKey: older.controllerSessionKey,
+      });
+      const response = await afterChange(() => {
+        execution[Symbol.dispose]();
+        clock.mockReturnValue(now + 1);
+      });
+      expectSession(response, { controlOwnerSessionKey: undefined });
+    } finally {
+      subagentRuns.delete(older.runId);
+      clock.mockRestore();
+    }
   }));
 
 it.each(["executor", "reservation"] as const)(
@@ -509,6 +585,8 @@ it.each(["executor", "reservation"] as const)(
         bindSwarmRunReservation(run.runId, getSubagentRunRuntimeKey(run));
       }
       try {
+        expect(registryRead.isSubagentRunLive(run)).toBe(owner === "executor");
+        expect(registryRead.isSubagentRunQueued(run)).toBe(owner === "reservation");
         expectSession(await describe(), { hasActiveSubagentRun: true });
         const response = await afterChange(() => {
           if (owner === "executor") {
@@ -553,7 +631,7 @@ it("returns no row for missing or hidden targets without provisioning missing st
     }
   });
   await withFixture(async ({ describe }) => {
-    await putSession(targetKey, { visibility: "draft" });
+    await upsertSessionEntryCore(targetScope, { visibility: "draft" });
     expect(await describe()).toEqual({ session: null });
   });
 });

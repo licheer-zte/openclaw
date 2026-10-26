@@ -151,14 +151,18 @@ function nodeSession(
   };
 }
 
-async function startCatalogLookup() {
+function pendingCatalog() {
   const plan = createDeferred<ReturnType<typeof localPlan>>();
   const openTerminal = vi.fn(() => plan.promise);
   installTerminalCatalog(openTerminal);
-  const fixture = makeOpts(catalogParams());
+  return { plan, openTerminal, ...makeOpts(catalogParams()) };
+}
+
+async function startCatalogLookup() {
+  const fixture = pendingCatalog();
   const opening = runTerminal("terminal.open", fixture.opts);
-  await waitForFast(() => expect(openTerminal).toHaveBeenCalledOnce());
-  return { ...fixture, plan, opening };
+  await waitForFast(() => expect(fixture.openTerminal).toHaveBeenCalledOnce());
+  return { ...fixture, opening };
 }
 
 function openOwnedTerminal(opts: ReturnType<typeof makeOpts>["opts"], sessionKey: string) {
@@ -409,6 +413,26 @@ describe("terminal gateway policy", () => {
       true,
       expect.objectContaining({ sessionId: "terminal-1", title: "codex resume thread" }),
     );
+  });
+
+  it.each(["rewind", "forward"])("uses a monotonic deadline despite clock %s", async (jump) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    installTerminalCatalog(async () => {
+      vi.setSystemTime(jump === "rewind" ? -90_000 : 90_000);
+      if (jump === "rewind") {
+        vi.advanceTimersByTime(TERMINAL_OPEN_DEADLINE_MS);
+      }
+      return localPlan();
+    });
+    const fixture = makeOpts(catalogParams());
+    if (jump === "rewind") {
+      await expectOpenFailure(fixture, { message: "terminal open timed out" });
+    } else {
+      await runTerminal("terminal.open", fixture.opts);
+      expect(fixture.sessions.open).toHaveBeenCalled();
+      expect(fixture.respond).toHaveBeenCalledWith(true, expect.any(Object));
+    }
   });
 
   it.each([

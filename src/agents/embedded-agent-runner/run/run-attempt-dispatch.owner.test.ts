@@ -2,11 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  createPluginRegistryFixture,
-  registerVirtualTestPlugin,
-} from "openclaw/plugin-sdk/plugin-test-contracts";
-import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
@@ -14,7 +10,6 @@ import {
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { CODEX_APP_SERVER_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
-import { resolvePreparedGatewayOperatorAccessAuthority } from "../../../gateway/operator-access-policy.js";
 import { readLocalWorkspaceProjection } from "../../../gateway/worker-environments/local-workspace-store.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
@@ -29,7 +24,6 @@ import {
 } from "../../admitted-run-context.js";
 import { resolveSessionGitCoauthorPrompt } from "../../git-coauthor-prompt.js";
 import { createContextEngine } from "../../harness/context-engine-lifecycle.test-support.js";
-import * as harnessHost from "../../harness/host-capability.js";
 import { registerAgentHarness } from "../../harness/registry.js";
 import type { AgentHarness, AgentHarnessAttemptParamsV2 } from "../../harness/types.js";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "../../model-auth-markers.js";
@@ -47,13 +41,9 @@ import { insertRegistryWorktree } from "../../worktrees/registry.js";
 import { initializeManagedWorktreeTestRepository } from "../../worktrees/service.test-support.js";
 import type { ManagedWorktreeRecord } from "../../worktrees/types.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
-import {
-  assertDurableTranscriptRevocation,
-  dispatchCases,
-} from "./run-attempt-dispatch.cases.test-support.js";
+import { dispatchCases } from "./run-attempt-dispatch.cases.test-support.js";
 import { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
 import { createSourceTurnDispatchAssertions } from "./run-attempt-dispatch.source-turn.test-support.js";
-import { claimAgentSessionWriter } from "./session-bootstrap.js";
 
 vi.mock("../../git-coauthor-prompt.js", () => ({
   resolveSessionGitCoauthorPrompt: vi.fn(),
@@ -175,7 +165,7 @@ it.each(["settled", "failed", "revoked", "unsandboxed"] as const)(
 );
 
 it.each(dispatchCases)(
-  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, $skillCatalog skills, remote skills $remoteSkills, one-shot $oneShotCliRun, real managed workspace $realManagedWorkspace, explicit cwd $explicitCwd, host media $hostMedia, retired placement $retirePlacement, baseline $diffBaseline, cancelled trajectory $cancelTrajectory, prepared auth $preparedAuth, access $cyberAccessProgram, transcript target $transcriptTargetInvalidation",
+  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, $skillCatalog skills, remote skills $remoteSkills, one-shot $oneShotCliRun, real managed workspace $realManagedWorkspace, explicit cwd $explicitCwd, host media $hostMedia, retired placement $retirePlacement, baseline $diffBaseline, cancelled trajectory $cancelTrajectory, prepared auth $preparedAuth, access $cyberAccessProgram",
   async ({
     cyberAccessProgram,
     agentId = "work",
@@ -196,7 +186,6 @@ it.each(dispatchCases)(
     retryPreparation,
     cancelTrajectory,
     preparedAuth,
-    transcriptTargetInvalidation,
   }) => {
     const gitCoauthorPrompt =
       "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
@@ -316,53 +305,16 @@ it.each(dispatchCases)(
       const runId = `dispatch-${agentId}`;
       const harnessId = cancelTrajectory ? "codex" : "owner-fixture";
       const cancellation = new AbortController();
-      const policyGrant = new AbortController();
       const cancellationError = new Error("session aborted");
       const storePath = state.path("agents", agentId, "sessions", "sessions.json");
-      if (
-        cancelTrajectory ||
-        transcriptTargetInvalidation === "target" ||
-        transcriptTargetInvalidation === "policy"
-      ) {
+      if (cancelTrajectory) {
         await replaceSessionEntry(
           { sessionKey: "global", storePath },
           { sessionId: `${agentId}-global`, updatedAt: 1 },
         );
       }
-      let onValidateSource: (() => void) | undefined;
-      const assertSourceCurrent = vi.fn(() => onValidateSource?.());
-      setActivePluginRegistry(createEmptyPluginRegistry());
-      let policyAccess: ReturnType<typeof resolvePreparedGatewayOperatorAccessAuthority> = null;
-      if (transcriptTargetInvalidation === "policy") {
-        const { registry } = createPluginRegistryFixture(config);
-        registerVirtualTestPlugin({
-          registry,
-          config,
-          id: "transcript-access",
-          name: "Transcript access",
-          register(api) {
-            api.registerGatewayAccessPolicy({
-              authorize: () => ({
-                grantId: randomUUID(),
-                signal: policyGrant.signal,
-                assertCurrent: () => policyGrant.signal.throwIfAborted(),
-              }),
-            });
-          },
-        });
-        setActivePluginRegistry(registry.registry);
-        policyAccess = resolvePreparedGatewayOperatorAccessAuthority(
-          { profileId: "transcript-operator", emails: [], role: null, isCurrent: () => true },
-          config,
-          { requireLivePolicySet: true },
-        );
-        assert(policyAccess?.gatewayAccessGrant);
-      }
       const admission = prepareAgentRunAdmission({
         cfg: config,
-        assertSourceCurrent:
-          policyAccess?.assertCurrent ??
-          (transcriptTargetInvalidation ? assertSourceCurrent : undefined),
         facts: {
           runId,
           agentId,
@@ -371,57 +323,16 @@ it.each(dispatchCases)(
         operationalRunInstance: createOperationalRunInstanceRef(runId),
       });
       const admittedRunContext = await admission.admit("plugin-harness", "owner-test");
+      setActivePluginRegistry(createEmptyPluginRegistry());
       let retainedRetryPreparer:
         | NonNullable<
             AgentHarnessAttemptParamsV2["hostCapabilities"]
           >["prepareContinuationRetryCount"]
         | undefined;
       const sourceTurn = createSourceTurnDispatchAssertions();
-      let assertPreparedTarget: (() => void) | undefined;
-      let capturedAttempt:
-        | Parameters<typeof harnessHost.createAgentHarnessHostCapabilities>[0]["attempt"]
-        | undefined;
-      let activeControls: ReturnType<typeof laneController.createAttemptControls> | undefined;
-      const targetChecked = new Error("prepared transcript target checked");
       const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (params) => {
         expect(params.cyberAccessProgram).toBe(cyberAccessProgram);
         sourceTurn.expectBinding(params);
-        if (transcriptTargetInvalidation) {
-          if (
-            transcriptTargetInvalidation === "target" ||
-            transcriptTargetInvalidation === "policy"
-          ) {
-            assert(capturedAttempt);
-            await assertDurableTranscriptRevocation(capturedAttempt, workspaceDir, () => {
-              if (transcriptTargetInvalidation === "policy") {
-                policyGrant.abort(new Error("plugin access revoked"));
-              } else {
-                onValidateSource = () => {
-                  onValidateSource = undefined;
-                  input.sessionPromptState.sessionTarget = {
-                    ...input.sessionPromptState.sessionTarget!,
-                    sessionId: "rebound-target",
-                  };
-                };
-              }
-            });
-            throw targetChecked;
-          }
-          expect(assertPreparedTarget).toBeTypeOf("function");
-          assertSourceCurrent.mockClear();
-          assertPreparedTarget!();
-          expect(assertSourceCurrent).toHaveBeenCalledOnce();
-          onValidateSource = () => {
-            onValidateSource = undefined;
-            if (transcriptTargetInvalidation === "closed") {
-              activeControls!.close();
-            } else if (transcriptTargetInvalidation === "replaced") {
-              laneController.createAttemptControls({ admittedRunContext });
-            }
-          };
-          expect(assertPreparedTarget).toThrow("Session target preparation outlived its attempt");
-          throw targetChecked;
-        }
         retainedRetryPreparer = params.hostCapabilities?.prepareContinuationRetryCount;
         expect(params).not.toHaveProperty("prepareContinuationRetryCount");
         if (!remoteSkills && retryPreparation !== "omit") {
@@ -529,21 +440,6 @@ it.each(dispatchCases)(
         runtimePluginToolGrant,
       };
       sourceTurn.stamp(params);
-      const writerClaim =
-        transcriptTargetInvalidation === "target" || transcriptTargetInvalidation === "policy"
-          ? await claimAgentSessionWriter({
-              ...params,
-              sessionTarget: {
-                agentId,
-                sessionId: params.sessionId,
-                sessionKey: "global",
-                storePath,
-              },
-            })
-          : undefined;
-      if (writerClaim) {
-        expect(writerClaim.expectedWriterRunId).toBe(runId);
-      }
       let lifecycleGeneration = getAgentEventLifecycleGeneration();
       const laneController = createEmbeddedRunLaneController({
         getLifecycleGeneration: () => lifecycleGeneration,
@@ -555,13 +451,6 @@ it.each(dispatchCases)(
         },
         setParams: () => {},
       });
-      if (transcriptTargetInvalidation) {
-        const createControls = laneController.createAttemptControls;
-        vi.spyOn(laneController, "createAttemptControls").mockImplementation((options) => {
-          activeControls = createControls(options);
-          return activeControls;
-        });
-      }
       const authProfileStore = { version: 1, profiles: {} };
       const sourceApiKey =
         preparedAuth === "explicit-header" ? CUSTOM_LOCAL_AUTH_MARKER : "source-api-key";
@@ -634,19 +523,13 @@ it.each(dispatchCases)(
           }),
         },
         sessionPromptState: {
-          sessionWriterFence: writerClaim
-            ? {
-                expectedLifecycleRevision: writerClaim.expectedLifecycleRevision,
-                expectedWriterRunId: writerClaim.expectedWriterRunId,
-              }
-            : undefined,
           sessionId: `${agentId}-global`,
           sessionFile: "global",
           sessionTarget: {
             agentId,
             sessionId: `${agentId}-global`,
             sessionKey: "global",
-            ...(cancelTrajectory || transcriptTargetInvalidation ? { storePath } : {}),
+            ...(cancelTrajectory ? { storePath } : {}),
           },
           activePrompt: { persisted: false, internal: false },
           onUserMessagePersisted: vi.fn(),
@@ -748,16 +631,6 @@ it.each(dispatchCases)(
           await writeRetrySettings(path.join(workspaceDir, ".openclaw"), 7);
         }
       }
-      const createHost = harnessHost.createAgentHarnessHostCapabilities;
-      const hostObserver = transcriptTargetInvalidation
-        ? vi
-            .spyOn(harnessHost, "createAgentHarnessHostCapabilities")
-            .mockImplementation((...args) => {
-              capturedAttempt = args[0].attempt;
-              assertPreparedTarget = args[0].attempt.preparedSessionTarget?.assertCurrent;
-              return createHost(...args);
-            })
-        : undefined;
       const pending = prepareAndDispatchEmbeddedRunAttempt(input);
       void pending.catch(() => {});
       const expectNoDispatch = () => {
@@ -766,11 +639,6 @@ it.each(dispatchCases)(
         }
       };
       try {
-        if (transcriptTargetInvalidation) {
-          await expect(pending).rejects.toBe(targetChecked);
-          expect(runAttempt).toHaveBeenCalledOnce();
-          return;
-        }
         if (retryPreparation === "change-cwd") {
           await expect(pending).rejects.toThrow(
             "Native execution cwd changed after continuation retry preparation",
@@ -967,12 +835,10 @@ it.each(dispatchCases)(
       } finally {
         baseline.resolve();
         await pending.catch(() => undefined);
-        hostObserver?.mockRestore();
         preparation?.mockRestore();
         remoteImageRead?.mockRestore();
         restorePlacement();
         admission.close();
-        policyGrant.abort();
         restoreSandbox();
       }
     });

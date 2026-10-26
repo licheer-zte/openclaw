@@ -49,7 +49,7 @@ export type DescribeImageFileWithModelParams = Omit<
   maxTokens?: number;
 };
 
-type PreparedImageDescriptionInput = ImagesDescriptionInput;
+export type PreparedImageDescriptionInput = ImagesDescriptionInput;
 
 export type PrepareImageDescriptionInputParams = Pick<
   DescribeImageFileWithModelParams,

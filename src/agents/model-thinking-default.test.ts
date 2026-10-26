@@ -11,17 +11,6 @@ const config = (
   defaults: Agents["defaults"],
   alpha?: NonNullable<Agents["entries"]>[string],
 ): OpenClawConfig => ({ agents: { defaults, ...(alpha ? { entries: { alpha } } : {}) } });
-const modelThinking = (key: string, thinking?: string | boolean) => ({
-  [key]: { params: { thinking } },
-});
-const resolveFor =
-  (
-    provider: string,
-    model: string,
-    options: Partial<Parameters<typeof resolveThinkingDefault>[0]> = {},
-  ) =>
-  (cfg: OpenClawConfig) =>
-    resolveThinkingDefault({ ...options, cfg, provider, model });
 
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
@@ -35,12 +24,16 @@ function policyResolver(provider: string, model: string, agentId?: string, agent
   if (!resolveThinkingProfile) {
     throw new Error(`Missing thinking policy for ${provider}`);
   }
-  return resolveFor(provider, model, {
-    agentId,
-    agentRuntime,
-    catalog: [{ provider, id: model, name: model, reasoning: true }],
-    providerPolicySource: { providers: [{ provider: { id: provider, resolveThinkingProfile } }] },
-  });
+  return (cfg: OpenClawConfig) =>
+    resolveThinkingDefault({
+      cfg,
+      provider,
+      model,
+      agentId,
+      agentRuntime,
+      catalog: [{ provider, id: model, name: model, reasoning: true }],
+      providerPolicySource: { providers: [{ provider: { id: provider, resolveThinkingProfile } }] },
+    });
 }
 
 describe("resolveThinkingDefault", () => {
@@ -50,16 +43,34 @@ describe("resolveThinkingDefault", () => {
   ] as const)("agent precedence (%s, %s)", (thinking, agentDefault, expected) => {
     const key = "fixture/reasoning-model";
     const cfg = config(
-      { thinkingDefault: "low", models: modelThinking(key, "high") },
-      { thinkingDefault: agentDefault, models: modelThinking(key, thinking) },
+      {
+        thinkingDefault: "low",
+        models: { [key]: { params: { thinking: "high" } } },
+      },
+      {
+        thinkingDefault: agentDefault,
+        models: { [key]: { params: { thinking } } },
+      },
     );
-    expect(resolveFor("fixture", "reasoning-model", { agentId: "alpha" })(cfg)).toBe(expected);
+    expect(
+      resolveThinkingDefault({
+        cfg,
+        provider: "fixture",
+        model: "reasoning-model",
+        agentId: "alpha",
+      }),
+    ).toBe(expected);
   });
 
   it("accepts legacy duplicated OpenRouter keys for per-model thinking", () => {
     const model = "openrouter/hunter-alpha";
-    const cfg = config({ models: modelThinking(`openrouter/${model}`, "high") });
-    expect(resolveFor("openrouter", model)(cfg)).toBe("high");
+    expect(
+      resolveThinkingDefault({
+        cfg: config({ models: { [`openrouter/${model}`]: { params: { thinking: "high" } } } }),
+        provider: "openrouter",
+        model,
+      }),
+    ).toBe("high");
   });
 
   it("honors configured anthropic/claude-opus-5 policy with reasoning=true", () => {
@@ -82,13 +93,17 @@ describe("resolveThinkingDefault", () => {
       const fresh = config(
         {
           model: { primary: `kimi/${model}` },
-          models: modelThinking(`kimi/${model}`, thinking),
+          models: { [`kimi/${model}`]: { params: { thinking } } },
         },
         { thinkingDefault: agentDefault },
       );
-      expect(resolve(fresh), "fresh").toBe(expected);
-      // oxlint-disable-next-line unicorn/prefer-structured-clone -- Persisted JSON omits undefined preferences.
-      expect(resolve(JSON.parse(JSON.stringify(fresh))), "serialized existing").toBe(expected);
+      for (const [state, cfg] of [
+        ["fresh", fresh],
+        // oxlint-disable-next-line unicorn/prefer-structured-clone -- Persisted JSON omits undefined preferences.
+        ["serialized existing", JSON.parse(JSON.stringify(fresh))],
+      ] as const) {
+        expect(resolve(cfg), state).toBe(expected);
+      }
     },
   );
 
@@ -97,6 +112,8 @@ describe("resolveThinkingDefault", () => {
       api: "google-generative-ai",
       models: [modelDefinition("gemma-4-26b-a4b-it", { reasoning: false })],
     });
-    expect(resolveFor("google", "gemma-4-26b-a4b-it")(cfg)).toBe("off");
+    expect(resolveThinkingDefault({ cfg, provider: "google", model: "gemma-4-26b-a4b-it" })).toBe(
+      "off",
+    );
   });
 });

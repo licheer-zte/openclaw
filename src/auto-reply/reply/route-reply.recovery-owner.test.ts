@@ -10,7 +10,6 @@ import { loadPendingDeliveries } from "../../infra/outbound/delivery-queue.test-
 import { buildCaptionedFinalTextFallback } from "../../tts/captioned-final.js";
 import { dispatchInboundMessageWithRoutedChannelDispatcher } from "../dispatch.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
-import { pendingFinalSessionEntry } from "./dispatch-from-config.session-fixtures.test-support.js";
 import { createReplyTurnLedger } from "./dispatch-from-config.turn-ledger.js";
 import { attachReplyDispatchUndeliveredFallback } from "./reply-dispatcher.js";
 import { installRouteReplyFixture } from "./route-reply.fixture.test-support.js";
@@ -37,10 +36,17 @@ describe("caption fallback recovery ownership", () => {
         }
       };
       if (withCustody) {
-        await replaceSessionEntry(
-          custody,
-          pendingFinalSessionEntry(custody, "The completed answer"),
-        );
+        await replaceSessionEntry(custody, {
+          sessionId: custody.sessionId,
+          updatedAt: Date.now(),
+          pendingFinalDelivery: {
+            kind: "replayable",
+            text: "The completed answer",
+            createdAt: Date.now(),
+            intentId: custody.intentId,
+            deliveries: [{ id: custody.deliveryId, state: "prepared" }],
+          },
+        });
       }
       let ledger: ReturnType<typeof createReplyTurnLedger> | undefined;
       let settled = false;

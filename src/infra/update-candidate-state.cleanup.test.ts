@@ -316,7 +316,6 @@ it.each([false, true].flatMap((legacy) => [false, true].map((expires) => ({ lega
     const now = Date.now.bind(Date);
     let elapsed = 0;
     vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
-    vi.spyOn(performance, "now").mockImplementation(() => now() + elapsed);
     const expireDeadline = captureUpdateCandidateDeadline();
     const operation = readUpdateStateSchemaVersions({ stateDir, config: {} });
     const outcome = capture(operation);
@@ -528,7 +527,6 @@ it.for(["cancel", "deadline", "disk-full", "cooperative-cancel"] as const)(
     const now = Date.now.bind(Date);
     let elapsed = 0;
     vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
-    vi.spyOn(performance, "now").mockImplementation(() => now() + elapsed);
     const expireDeadline = captureUpdateCandidateDeadline();
     const controller = new AbortController();
     const operation = prepareUpdateCandidateStateSnapshot({

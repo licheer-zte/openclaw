@@ -10,10 +10,6 @@ import { DEFAULT_SIDEBAR_ENTRIES, normalizeSidebarEntries } from "../app-navigat
 import { configuredUiDevGateway } from "../dev-gateway.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
 import { normalizeBoardSessionViews } from "../lib/board/settings.ts";
-import {
-  normalizePersonalSessionGroups,
-  type PersonalSessionGroup,
-} from "../lib/sessions/personal-groups.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
 import { normalizeChatBubbleSessionKeys } from "../pages/chat/chat-bubble-mode.ts";
 import {
@@ -71,10 +67,7 @@ type ScopedSessionSelection = {
   selectedAgentId?: string;
 };
 
-type ProfileNavigation = {
-  railShortcuts?: string[];
-  personalSessionGroups?: PersonalSessionGroup[];
-};
+type ProfileNavigation = { railShortcuts: string[] };
 type PersistedUiSettings = Omit<
   UiSettings,
   | "token"
@@ -83,7 +76,6 @@ type PersistedUiSettings = Omit<
   | "selectedAgentId"
   | "navCollapsed"
   | "sidebarEntries"
-  | "personalSessionGroups"
   | "background"
 > &
   Partial<ProfileNavigation> & {
@@ -202,15 +194,7 @@ export function readSettingsForGateway(
     scoped = {
       ...scoped,
       ...cached.record,
-      navigationByProfile: {
-        ...scoped?.navigationByProfile,
-        ...Object.fromEntries(
-          Object.entries(cached.pendingNavigation).map(([id, pending]) => [
-            id,
-            { ...scoped?.navigationByProfile?.[id], ...pending },
-          ]),
-        ),
-      },
+      navigationByProfile: { ...scoped?.navigationByProfile, ...cached.pendingNavigation },
     };
   }
   if (!scoped) {
@@ -236,13 +220,7 @@ export function profileNavigation(
 ): ProfileNavigation | null {
   const entry = asOptionalRecord(parsed?.navigationByProfile?.[profileId]);
   const railShortcuts = normalizeSidebarEntries(entry?.railShortcuts);
-  const personalSessionGroups = normalizePersonalSessionGroups(entry?.personalSessionGroups);
-  return railShortcuts || personalSessionGroups
-    ? {
-        ...(railShortcuts ? { railShortcuts } : {}),
-        ...(personalSessionGroups ? { personalSessionGroups } : {}),
-      }
-    : null;
+  return railShortcuts ? { railShortcuts } : null;
 }
 
 function tokenSessionKeyForGateway(gatewayUrl: string): string {
@@ -388,7 +366,6 @@ export function loadUiPreferences(
     navWidth: NAV_WIDTH_DEFAULT,
     sidebarAgentsMode: "chip",
     sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES],
-    personalSessionGroups: [],
     sidebarLiveActivity: UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
     showAdvancedSettings: false,
     pinnedAgentIds: [],
@@ -478,9 +455,6 @@ export function loadUiPreferences(
       sidebarEntries: profileId
         ? (personalNavigation?.railShortcuts ?? defaults.sidebarEntries)
         : (normalizeSidebarEntries(parsedRecord.railShortcuts) ?? defaults.sidebarEntries),
-      personalSessionGroups: profileId
-        ? (personalNavigation?.personalSessionGroups ?? [])
-        : (normalizePersonalSessionGroups(parsed.personalSessionGroups) ?? []),
       sidebarLiveActivity: booleanSetting("sidebarLiveActivity"),
       chatMessageMaxWidth: normalizeChatMessageMaxWidth(parsed.chatMessageMaxWidth),
       showAdvancedSettings: booleanSetting("showAdvancedSettings"),
@@ -517,15 +491,9 @@ export function patchSettings(
 ): UiSettings {
   const previous = loadSettings(patch.gatewayUrl);
   const next = { ...previous, ...patch };
-  if (Object.hasOwn(patch, "personalSessionGroups")) {
-    next.personalSessionGroups = normalizePersonalSessionGroups(patch.personalSessionGroups) ?? [];
-  }
   saveSettings(next, {
     selectGateway: options.selectGateway ?? patch.gatewayUrl !== undefined,
-    writeNavigation: {
-      railShortcuts: Object.hasOwn(patch, "sidebarEntries"),
-      personalSessionGroups: Object.hasOwn(patch, "personalSessionGroups"),
-    },
+    writeNavigation: Object.hasOwn(patch, "sidebarEntries"),
   });
   settingsChangeListener?.(previous, next);
   return next;
@@ -546,10 +514,7 @@ export function loadLocalUserIdentity(): LocalUserIdentity {
 
 export function saveSettings(
   next: UiSettings,
-  options: {
-    selectGateway?: boolean;
-    writeNavigation?: Partial<Record<keyof ProfileNavigation, boolean>>;
-  } = {},
+  options: { selectGateway?: boolean; writeNavigation?: boolean } = {},
 ) {
   const storage = getSafeLocalStorage();
   const scope = gatewayOriginScope(next.gatewayUrl);
@@ -570,37 +535,16 @@ export function saveSettings(
     available = false;
   }
   const profileId = resolveProfileAppearanceProfileId(next.gatewayUrl);
-  // Each action owns only its fields; group edits cannot replay stale pins, or vice versa.
-  const writesShortcuts =
-    !options.writeNavigation || options.writeNavigation.railShortcuts === true;
-  const writesGroups =
-    !options.writeNavigation || options.writeNavigation.personalSessionGroups === true;
-  const navigation: ProfileNavigation = {
-    ...(writesShortcuts ? { railShortcuts: next.sidebarEntries } : {}),
-    ...(writesGroups
-      ? { personalSessionGroups: normalizePersonalSessionGroups(next.personalSessionGroups) ?? [] }
-      : {}),
-  };
+  const authoredNavigation = options.writeNavigation !== false;
+  const navigation = { railShortcuts: next.sidebarEntries };
   const pendingNavigation = {
     ...(settingsFallback?.key === scopedKey ? settingsFallback.pendingNavigation : null),
+    ...(profileId &&
+    authoredNavigation &&
+    JSON.stringify(navigation) !== JSON.stringify(profileNavigation(source?.parsed, profileId))
+      ? { [profileId]: { ...source?.parsed.navigationByProfile?.[profileId], ...navigation } }
+      : {}),
   };
-  if (profileId) {
-    // A profile reapplication is not an authored edit. Retain only changed fields
-    // through storage failure so recovery cannot replay an unchanged sibling layout.
-    const storedNavigation = profileNavigation(source?.parsed, profileId);
-    const changed: ProfileNavigation = {};
-    for (const key of ["railShortcuts", "personalSessionGroups"] as const) {
-      if (
-        Object.hasOwn(navigation, key) &&
-        JSON.stringify(navigation[key]) !== JSON.stringify(storedNavigation?.[key])
-      ) {
-        Object.assign(changed, { [key]: navigation[key] });
-      }
-    }
-    if (Object.keys(changed).length > 0) {
-      pendingNavigation[profileId] = { ...pendingNavigation[profileId], ...changed };
-    }
-  }
   const sessionsByGateway = Object.fromEntries(
     [
       ...Object.entries(existingSessionsByGateway).filter(([key]) => key !== scope),
@@ -663,11 +607,7 @@ export function saveSettings(
       ? normalizeUniqueTrimmedStringList(next.sidebarCollapsedAgentIds)
       : undefined,
     railShortcuts:
-      !profileId && writesShortcuts ? next.sidebarEntries : source?.parsed.railShortcuts,
-    personalSessionGroups:
-      !profileId && writesGroups
-        ? navigation.personalSessionGroups
-        : source?.parsed.personalSessionGroups,
+      !profileId && authoredNavigation ? next.sidebarEntries : source?.parsed.railShortcuts,
     sidebarEntries: source?.parsed.sidebarEntries,
     sidebarPinnedRoutes: source?.parsed.sidebarPinnedRoutes,
     navigationByProfile: {

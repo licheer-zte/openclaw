@@ -148,7 +148,6 @@ async function runProof(options: ProducerOptions): Promise<string> {
   try {
     gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
-      initializeCurrentRuntimeState: true,
       useRepoCli: true,
       command: {
         executablePath: process.execPath,

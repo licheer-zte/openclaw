@@ -99,15 +99,6 @@ function fixture() {
   });
   const command = (operation: NodeWorkerWorkspaceQuiescenceInput, signal?: AbortSignal) =>
     runtime.exec(parseNodeWorkerWorkspaceExecInput(JSON.stringify(input(operation))), signal);
-  const nodeCommand = (
-    source: string,
-    options: Partial<Parameters<NodeWorkerWorkspaceRuntime["exec"]>[0]> = {},
-  ) =>
-    runtime.exec({
-      ...identity,
-      argv: [path.basename(process.execPath), "-e", source],
-      ...options,
-    });
   const leasePath = path.join(
     home,
     ".openclaw-worker",
@@ -122,8 +113,8 @@ function fixture() {
       watchdog: { pid: number; start: string };
       expiresAtMs: number;
     };
-  const collectAndExpect = async (sequence: number, exists: boolean) => {
-    await runtime.applyRetainSnapshot(
+  const collect = (sequence: number) =>
+    runtime.applyRetainSnapshot(
       {
         version: 1,
         gatewayNamespace: identity.gatewayNamespace,
@@ -133,11 +124,13 @@ function fixture() {
       },
       async () => [],
     );
-    expect(fs.existsSync(workspaceDir)).toBe(exists);
-  };
   const expectCustody = (active: boolean, leaseExists = active) => {
     expect(runtime.quiescence.hasActiveWork()).toBe(active);
     expect(fs.existsSync(leasePath)).toBe(leaseExists);
+  };
+  const collectAndExpect = async (sequence: number, exists: boolean) => {
+    await collect(sequence);
+    expect(fs.existsSync(workspaceDir)).toBe(exists);
   };
   const cancelledCommand = async (operation: NodeWorkerWorkspaceQuiescenceInput) => {
     const caller = new AbortController();
@@ -156,7 +149,6 @@ function fixture() {
     runtime,
     input,
     command,
-    nodeCommand,
     workspaceDir,
     leasePath,
     readLease,
@@ -200,9 +192,19 @@ describe.runIf(process.platform === "linux")("native watchdog lifecycle", () => 
     expect(fs.readFileSync("/proc/" + helper.pid + "/status", "utf8")).toContain(
       "PPid:\t" + process.pid,
     );
-    await f.nodeCommand("process.stdout.write('command-cleanup')", { nativeProcessOwner: true });
+    await f.runtime.exec({
+      ...identity,
+      argv: [path.basename(process.execPath), "-e", "process.stdout.write('command-cleanup')"],
+      nativeProcessOwner: true,
+    });
     expect(processIdentity.requireNodeWorkerProcessIdentity(lease.watchdog.pid)).toEqual(exact);
-    await f.nodeCommand('require("node:net").createServer().listen(0, "127.0.0.1")', {
+    await f.runtime.exec({
+      ...identity,
+      argv: [
+        path.basename(process.execPath),
+        "-e",
+        'require("node:net").createServer().listen(0, "127.0.0.1")',
+      ],
       process: { action: "start", processId: "owned-app" },
     });
     await f.runtime.processes.stopEnvironment({
@@ -521,10 +523,12 @@ it.runIf(process.platform === "linux" && process.getuid?.() !== 0)(
     });
     const lease = await quiesce(f.workspaceDir);
     try {
-      await expect(f.nodeCommand("process.stdout.write('legacy-command')")).resolves.toMatchObject({
-        code: 0,
-        stdout: "legacy-command",
-      });
+      await expect(
+        f.runtime.exec({
+          ...identity,
+          argv: [path.basename(process.execPath), "-e", "process.stdout.write('legacy-command')"],
+        }),
+      ).resolves.toMatchObject({ code: 0, stdout: "legacy-command" });
       await lease.assertActive();
       expect(managedSpawn).not.toHaveBeenCalled();
       expect(f.runtime.quiescence.hasActiveWork()).toBe(false);

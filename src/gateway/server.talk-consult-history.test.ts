@@ -72,8 +72,6 @@ import {
 } from "./test-helpers.js";
 
 const runEmbeddedAgent = vi.spyOn(embeddedAgent, "runEmbeddedAgent");
-const heldModel = () =>
-  expectDefined(runEmbeddedAgent.getMockImplementation(), "held model implementation");
 installGatewayTestHooks({ scope: "suite" });
 let agentId = "main";
 let sessionKey = "agent:main:main";
@@ -497,7 +495,10 @@ it("preserves an actual human stop command", async () => {
 
 it("keeps read-only Talk operator consult scaffolding out of chat and later context but in the raw archive", async () => {
   client.connect.scopes = ["operator.read", "operator.talk"];
-  const completeModel = heldModel();
+  const completeModel = expectDefined(
+    runEmbeddedAgent.getMockImplementation(),
+    "held model implementation",
+  );
   let modelReply = consultAnswer;
   let modelMessages: Parameters<SessionManager["appendMessage"]>[0][] = [
     Object.assign(assistantMessage(consultCommentary), {
@@ -526,6 +527,7 @@ it("keeps read-only Talk operator consult scaffolding out of chat and later cont
   runEmbeddedAgent.mockImplementation(async (params) => {
     const recorder = expectDefined(params.userTurnTranscriptRecorder, "consult input recorder");
     await recorder.persistApproved();
+    expect(recorder.hasPersisted()).toBe(true);
     await params.onAgentEvent?.({
       stream: "lifecycle",
       data: { phase: "start" },
@@ -551,6 +553,7 @@ it("keeps read-only Talk operator consult scaffolding out of chat and later cont
     modelStarted.promise,
     captureSessionControllerSettlement({ scope: storePath, identities: [sessionKey, sessionId] }),
   ]);
+  expect(context.logGateway.error).not.toHaveBeenCalled();
   expect(runEmbeddedAgent).toHaveBeenCalledOnce();
   const run = expectDefined(runEmbeddedAgent.mock.calls[0]?.[0], "consult model invocation");
   expect(run.toolsAllow).toEqual([
@@ -655,10 +658,14 @@ it.each(["before-final", "after-final"] as const)(
     const directAnswer = "DIRECT_FINAL_134003: The requested note contains both labels.";
     const finalCommitted = createDeferred();
     const releaseResult = createDeferred();
-    const completeModel = heldModel();
+    const completeModel = expectDefined(
+      runEmbeddedAgent.getMockImplementation(),
+      "held model implementation",
+    );
     runEmbeddedAgent.mockImplementation(async (params) => {
       const recorder = expectDefined(params.userTurnTranscriptRecorder, "direct input recorder");
       await recorder.persistApproved();
+      expect(recorder.hasPersisted()).toBe(true);
       const result = await completeModel(params);
       params.abortSignal?.throwIfAborted();
       transcriptManager(params).appendMessage(assistantMessage(directAnswer));

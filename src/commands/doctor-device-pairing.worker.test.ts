@@ -1,10 +1,9 @@
 import fs from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  loadDeviceAuthTokens,
-  storeDeviceAuthToken as seedDeviceAuthToken,
-} from "../infra/device-auth-store.js";
+import { withClientCredentialStore } from "../infra/client-credential-store.test-support.js";
+import { loadDeviceAuthTokens } from "../infra/device-auth-store.js";
+import { seedDeviceAuthToken } from "../infra/device-auth-store.test-support.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -18,43 +17,63 @@ import { collectDevicePairingHealthFindings } from "./doctor-device-pairing.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-async function offHost(run: () => Promise<void>) {
-  const sql = observeMainThreadSql({ includeClose: true });
-  try {
-    await run();
-    sql.expectIdle();
-  } finally {
-    sql.restore();
-  }
-}
-
-it("reads token inventories off-host without creating storage or retaining mutable selectors", async () => {
+it("creates and reads the token inventory off the host, preserving role order and valid rows", async () => {
   await withOpenClawTestState({ label: "doctor-token-inventory" }, async (state) => {
-    await offHost(async () => {
+    const coldSql = observeMainThreadSql({ includeClose: true });
+    try {
       expect(await loadDeviceAuthTokens({ deviceId: "synthetic-device", env: state.env })).toEqual(
         [],
       );
-    });
-    await closeOpenClawStateDatabaseAsync();
+      coldSql.expectIdle();
+    } finally {
+      coldSql.restore();
+      await closeOpenClawStateDatabaseAsync();
+    }
     await expect(fs.stat(state.statePath("client", "credentials.sqlite"))).rejects.toMatchObject({
       code: "ENOENT",
     });
-    const operator = await seedDeviceAuthToken({
+    const operator = seedDeviceAuthToken({
       deviceId: "synthetic-device",
-      role: "operator",
+      role: " operator ",
       token: "synthetic-operator-token",
+      scopes: ["operator.write", " operator.read ", "operator.read"],
+      updatedAtMs: 20,
       env: state.env,
     });
+    const node = seedDeviceAuthToken({
+      deviceId: "synthetic-device",
+      role: "node",
+      token: "synthetic-node-token",
+      updatedAtMs: 10,
+      env: state.env,
+    });
+    seedDeviceAuthToken({
+      deviceId: "another-device",
+      role: "operator",
+      token: "synthetic-other-token",
+      env: state.env,
+    });
+    withClientCredentialStore(state.env, false, (db) =>
+      db
+        .prepare(
+          "INSERT INTO device_auth_tokens (device_id, role, token, scopes_json, updated_at_ms) VALUES (?, ?, ?, ?, ?)",
+        )
+        .run("synthetic-device", "malformed", "synthetic-malformed-token", "not-json", 1),
+    );
     await closeOpenClawStateDatabaseAsync();
-    await offHost(async () => {
+    const reopenedSql = observeMainThreadSql({ includeClose: true });
+    try {
       const input = { deviceId: "synthetic-device", env: { ...state.env } };
       const inventory = loadDeviceAuthTokens(input);
       input.deviceId = "another-device";
       input.env.OPENCLAW_STATE_DIR = state.path("changed-target");
-      expect(await inventory).toEqual([operator]);
+      expect(await inventory).toEqual([node, operator]);
       await closeOpenClawStateDatabaseAsync();
+      reopenedSql.expectIdle();
       await expect(fs.stat(state.path("changed-target"))).rejects.toMatchObject({ code: "ENOENT" });
-    });
+    } finally {
+      reopenedSql.restore();
+    }
   });
 });
 
@@ -68,15 +87,13 @@ it("detects stale local tokens from the active state view while checking legacy 
       scopes: ["operator.read"],
     });
     await approveDevicePairing(pairing.request.requestId, { callerScopes: ["operator.read"] });
-    const staleTokenClock = vi.spyOn(Date, "now").mockReturnValueOnce(1);
-    const staleTokenWrite = seedDeviceAuthToken({
+    seedDeviceAuthToken({
       deviceId: identity.deviceId,
       role: "operator",
       token: "synthetic-stale-token",
       scopes: ["operator.read"],
+      updatedAtMs: 1,
     });
-    staleTokenClock.mockRestore();
-    await staleTokenWrite;
     const sourceDir = state.path("source-state");
     await fs.mkdir(`${sourceDir}/identity`, { recursive: true });
     await fs.writeFile(`${sourceDir}/identity/device-auth.json`, '{"version":1}');

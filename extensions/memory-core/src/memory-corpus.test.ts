@@ -12,19 +12,21 @@ const search = <T>(
   run: Parameters<typeof runMemoryCorpusDeadline<T>>[0]["run"],
   parentSignal?: AbortSignal,
 ) => runMemoryCorpusDeadline({ operation: "memory_search", parentSignal, run });
-const partial = ["keyword match"];
-const attempt = (signal: AbortSignal, run: () => Promise<string[]>) =>
-  attemptMemoryCorpus({ signal, getPartialValue: () => partial, run });
 
 it.each(["timer", "event-loop"] as const)(
   "retains completed results when the %s reaches the corpus deadline",
   async (clock) => {
     const pending = createDeferred<string[]>();
+    const partial = ["permitted keyword match"];
     const startedAt = performance.now();
     let signal: AbortSignal | undefined;
     const result = search((current) => {
       signal = current;
-      return attempt(current, () => pending.promise);
+      return attemptMemoryCorpus({
+        signal: current,
+        getPartialValue: () => partial,
+        run: () => pending.promise,
+      });
     });
     if (clock === "timer") {
       await vi.advanceTimersByTimeAsync(30_000);
@@ -48,32 +50,41 @@ it("does not replace a caller failure with partial results", async () => {
   const failure = new Error("memory_search timed out after 30s");
   const result = search(
     (signal) =>
-      attempt(signal, async () => {
-        parent.abort(failure);
-        throw failure;
+      attemptMemoryCorpus({
+        signal,
+        getPartialValue: () => ["keyword match"],
+        run: async () => {
+          parent.abort(failure);
+          throw failure;
+        },
       }),
     parent.signal,
   );
   await expect(result).rejects.toBe(failure);
 });
 
-it.each(["banked", "consumed"])("preserves the %s budget across a pause", async (budget) => {
+it("re-arms the banked budget when an owned phase completes", async () => {
+  const result = search(async (signal, control) => {
+    await vi.advanceTimersByTimeAsync(5_000);
+    control.report("pause");
+    await vi.advanceTimersByTimeAsync(60_000);
+    control.report("resume");
+    // Only the 25s banked before the pause remains for post-readiness work.
+    await vi.advanceTimersByTimeAsync(24_999);
+    expect(signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(2);
+    expect(signal.aborted).toBe(true);
+    signal.throwIfAborted();
+  });
+  await expect(result).rejects.toThrow("memory_search timed out after 30s");
+});
+
+it("expires immediately when the budget is already consumed at pause time", async () => {
   const startedAt = performance.now();
   const result = search(async (signal, control) => {
-    if (budget === "consumed") {
-      // The overdue timer has not been serviced when the owned phase starts.
-      vi.spyOn(performance, "now").mockReturnValue(startedAt + 30_000);
-    } else {
-      await vi.advanceTimersByTimeAsync(5_000);
-    }
+    // The overdue timer may not be serviced yet when the owned phase starts.
+    vi.spyOn(performance, "now").mockReturnValue(startedAt + 30_000);
     control.report("pause");
-    if (budget === "banked") {
-      await vi.advanceTimersByTimeAsync(60_000);
-      control.report("resume");
-      await vi.advanceTimersByTimeAsync(24_999);
-      expect(signal.aborted).toBe(false);
-      await vi.advanceTimersByTimeAsync(2);
-    }
     expect(signal.aborted).toBe(true);
     signal.throwIfAborted();
   });

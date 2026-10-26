@@ -512,40 +512,44 @@ function enrichAgentEvent(
       },
     });
   }
-  // defineProperty consumes the descriptor synchronously; keep one per event.
-  const metadata: PropertyDescriptor = {
+  Object.defineProperty(enriched, "terminalPersistence", {
     value:
       terminalPersistence ??
       (event.stream === "lifecycle" && isDefinitiveRunLifecycle({ phase: data.phase, data })
         ? captureAgentRunTerminalPersistence(event.runId, context ?? capturedOwner)
         : undefined),
     enumerable: false,
-  };
-  Object.defineProperty(enriched, "terminalPersistence", metadata);
-  metadata.value = assistantSource;
-  Object.defineProperty(enriched, "assistantSource", metadata);
-  metadata.value = assistantProjection;
-  Object.defineProperty(enriched, "assistantProjection", metadata);
+  });
+  Object.defineProperty(enriched, "assistantSource", { value: assistantSource, enumerable: false });
+  Object.defineProperty(enriched, "assistantProjection", {
+    value: assistantProjection,
+    enumerable: false,
+  });
   if (lifecycleGeneration) {
     // Persistence needs restart ownership, but agent events are also spread into
     // public payloads. Keep the internal generation readable without serializing it.
-    metadata.value = lifecycleGeneration;
-    Object.defineProperty(enriched, "lifecycleGeneration", metadata);
+    Object.defineProperty(enriched, "lifecycleGeneration", {
+      value: lifecycleGeneration,
+      enumerable: false,
+    });
   }
   for (const [key, source] of AGENT_EVENT_ROUTING_FIELDS) {
     const value = routing?.[source];
     if (value !== undefined) {
-      metadata.value = value;
-      Object.defineProperty(enriched, key, metadata);
+      Object.defineProperty(enriched, key, { value, enumerable: false });
     }
   }
   if (claimId !== undefined) {
-    metadata.value = claimId;
-    Object.defineProperty(enriched, "contextClaimId", metadata);
+    Object.defineProperty(enriched, "contextClaimId", {
+      value: claimId,
+      enumerable: false,
+    });
   }
   if (deliverySessionKey) {
-    metadata.value = deliverySessionKey;
-    Object.defineProperty(enriched, "deliverySessionKey", metadata);
+    Object.defineProperty(enriched, "deliverySessionKey", {
+      value: deliverySessionKey,
+      enumerable: false,
+    });
   }
   return enriched;
 }

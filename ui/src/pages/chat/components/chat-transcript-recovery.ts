@@ -89,7 +89,6 @@ export function projectTranscriptRecovery(
     }).then(completeLoad, () => completeLoad(null));
   };
   return {
-    revision: getExpansionStateVersion(expandedAssistantMessages),
     get: (messageId: string) => expandedAssistantMessages.get(recoveryKey(messageId)),
     expand,
   };

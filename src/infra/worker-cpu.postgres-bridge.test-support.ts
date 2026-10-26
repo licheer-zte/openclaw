@@ -16,8 +16,11 @@ import {
 } from "./postgres-sync/pool.js";
 import type { PostgresBridge } from "./postgres-sync/protocol.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
-import { createCpuTrackedWorker, getTrackedWorkerPoolSnapshot } from "./worker-cpu.js";
-import { waitForWorkerMemoryPort } from "./worker-memory-port.test-support.js";
+import {
+  createCpuTrackedWorker,
+  getTrackedWorkerPoolSnapshot,
+  receiveWorkerMemoryPort,
+} from "./worker-cpu.js";
 import { serveWorkerMemorySamples } from "./worker-memory.js";
 
 if (!parentPort) {
@@ -41,7 +44,14 @@ async function createChild(depth: number): Promise<void> {
   });
   child = worker;
   childControl = port1;
-  await waitForWorkerMemoryPort(worker);
+  await new Promise<void>((resolve, reject) => {
+    worker.on("message", (message: unknown) => {
+      if (receiveWorkerMemoryPort(worker, message)) {
+        resolve();
+      }
+    });
+    worker.once("error", reject);
+  });
 }
 if (workerData.depth > 0) {
   await createChild(workerData.depth - 1);

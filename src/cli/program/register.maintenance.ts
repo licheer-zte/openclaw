@@ -61,12 +61,6 @@ export function registerMaintenanceCommands(
       "Allow doctor to execute exec SecretRefs while verifying configured secrets",
       false,
     )
-    .option(
-      "--replace-model <json>",
-      "With --fix: explicitly replace model refs using {from,to,accessProgram} (repeatable)",
-      collectOption,
-      [],
-    )
     .option("--deep", "Scan system services for extra gateway installs", false)
     .option("--full-integrity-check", "Run full database integrity checks during migrations", false)
     .option("--lint", "Run read-only health checks and report findings", false)
@@ -214,18 +208,7 @@ export function registerMaintenanceCommands(
           opts.json === true,
         );
       }
-      if (opts.replaceModel.length > 0 && !(opts.fix || opts.repair)) {
-        return exitDoctorError(
-          "--replace-model requires --fix or --repair; run --lint first to preview affected references.",
-          opts.json === true,
-        );
-      }
       try {
-        const modelReplacements = opts.replaceModel.length
-          ? (
-              await import("../../commands/doctor/shared/model-replacement.js")
-            ).parseDoctorModelReplacements(opts.replaceModel)
-          : [];
         if (opts.clientCredentials === true) {
           const { prepareStartupClientCredentials } =
             await import("../../commands/startup-client-credentials.js");
@@ -256,7 +239,6 @@ export function registerMaintenanceCommands(
           await doctorCommand(
             defaultRuntime,
             {
-              ...(modelReplacements.length ? { modelReplacements } : {}),
               workspaceSuggestions: opts.workspaceSuggestions,
               yes: Boolean(opts.yes),
               repair: Boolean(opts.repair) || Boolean(opts.fix),

@@ -18,7 +18,6 @@ import {
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
 import * as allocation from "./allocation.js";
 import { captureWorktreeMutationHeartbeat } from "./allocation.test-support.js";
-import * as capacityStore from "./capacity-store.js";
 import * as capacity from "./capacity.js";
 import {
   createWorktreeCapacityStatfs,
@@ -636,29 +635,11 @@ describe("ManagedWorktreeService capacity", () => {
       baseRef: "HEAD",
     });
     await git(created.path, "config", "diff.autoRefreshIndex", "false");
-    const dirtyContent = "preserved delta\n";
-    await fs.writeFile(path.join(created.path, "uncommitted.txt"), dirtyContent);
+    await fs.writeFile(path.join(created.path, "uncommitted.txt"), "preserved delta\n");
     availableBytes = 144 * 1024 ** 2;
-    const admissions = vi.mocked(capacityStore.reserveWorktreeCapacity);
-    admissions.mockClear();
 
     await service.remove({ id: created.id, reason: "archive" });
 
-    const snapshots = admissions.mock.calls
-      .map(([input]) => input.request)
-      .filter((request) => request.snapshot);
-    expect.soft(snapshots).toHaveLength(1);
-    expect(snapshots.at(-1)?.demands).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          path: path.join(repo, ".git"),
-          bytes: expect.any(Number),
-        }),
-      ]),
-    );
-    expect(
-      snapshots.at(-1)?.demands.find((demand) => demand.path === path.join(repo, ".git"))?.bytes,
-    ).toBeGreaterThanOrEqual(2 * Buffer.byteLength(dirtyContent));
     const removed = getRegistryWorktree(env, created.id)!;
     await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await git(repo, "show", `${removed.snapshotRef}:uncommitted.txt`)).toBe(
@@ -670,7 +651,7 @@ describe("ManagedWorktreeService capacity", () => {
       true,
     );
     expect(await fs.readFile(path.join(restored.path, "uncommitted.txt"), "utf8")).toBe(
-      dirtyContent,
+      "preserved delta\n",
     );
   });
 

@@ -73,6 +73,7 @@ function contributionLedger({
     [...nodes.keys()],
     nodes,
     new Map(),
+    new Map(),
     { issuesByPullRequest: new Map() },
     priorRecord,
     new Set(sourcePullRequests),
@@ -123,46 +124,7 @@ describe("renderContributionRecordEntry", () => {
     );
   });
 
-  it.each([
-    { thanks: " Thanks @alice and @bob.", expected: [] },
-    {
-      thanks: "",
-      expected: [
-        "missing editorial Thanks @alice for PR #456",
-        "missing editorial Thanks @bob for directly landed work",
-      ],
-    },
-    {
-      thanks: " Thanks @alice and @bob and @outsider.",
-      expected: ["unexpected editorial Thanks @outsider"],
-    },
-  ])(
-    "validates explicit PR and direct-work thanks despite earlier mentions: '$thanks'",
-    ({ thanks, expected }) => {
-      const entry = recordEntry({ editorialEligible: true, thanks: ["alice"] });
-      const source = recordSection("- **PR #456** Thanks @alice.").replace(
-        "### Fixes",
-        `### Fixes\n\n- Restore playback errors by @alice and @bob; reported alongside @outsider. (#456)${thanks}`,
-      );
-      const directCommits = [
-        {
-          subject: "fix: restore playback errors",
-          closingReferences: [],
-          contributors: ["bob"],
-        },
-      ];
-      expect(
-        ledgerChecks(
-          { source },
-          [entry],
-          new Map([[456, { __typename: "PullRequest" }]]),
-          directCommits,
-        ),
-      ).toEqual(expected);
-    },
-  );
-
-  it("rebuilds seeded references without trusting old credits", () => {
+  it("rebuilds seeded references and credits without duplicating resolved issues", () => {
     const related = "Related #45, OpenClaw/imsg#141, #67.";
     const priorRecord = contributionRecordFor({
       source: recordSection(
@@ -196,7 +158,7 @@ describe("renderContributionRecordEntry", () => {
       now: "2026-07-09T00:00:00Z",
     });
 
-    const line = `- **PR #125** ${related} Thanks @carol.`;
+    const line = `- **PR #125** ${related} Thanks @carol and @alice and @bob.`;
     expect(result.ledger).toContain(line);
     expect(renderContributionRecordEntry(result.pullRequests[0])).toBe(line);
   });

@@ -77,16 +77,8 @@ it.each([
           [newUri, new Set([newEntry.containerName])],
           ["docker", new Set(["old-browser", "new-browser"])],
         ]);
-        const containerIds = new Map([
-          [oldEntry.containerName, "1".repeat(64)],
-          [newEntry.containerName, "2".repeat(64)],
-          ["old-browser", "3".repeat(64)],
-          ["new-browser", "4".repeat(64)],
-        ]);
         const calls: string[][] = [];
         const success = { failed: false, isCanceled: false, exitCode: 0, stderr: Buffer.alloc(0) };
-        const containerStateFormat =
-          '{{.Id}}\n{{.State.Running}}\n{{.HostConfig.ReadonlyRootfs}}\n{{ index .Config.Labels "openclaw.configHash" }}';
         const responses: Record<string, string> = {
           info: "true\ttrue\t\t5.0.0\n",
           system: "[]",
@@ -111,10 +103,7 @@ it.each([
             expect(physical.get(target)?.delete(args.at(-1)!)).toBe(true);
           }
           const key = args[0] === "inspect" ? `inspect:${args[2]}` : args[0];
-          const stdout =
-            key === `inspect:${containerStateFormat}`
-              ? `${expectDefined(containerIds.get(args.at(-1)!), "synthetic container ID")}\ntrue\nfalse\n\n`
-              : expectDefined(responses[key!], "supported container command/format");
+          const stdout = expectDefined(responses[key!], "supported container command/format");
           return { ...success, stdout: Buffer.from(stdout) };
         });
         const runtime = createThrowingTestRuntime();

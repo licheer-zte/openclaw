@@ -7,9 +7,7 @@ export const page = defineSolidPage(
   {
     loader: (context: ApplicationContext) => {
       const primaryRefresh = Promise.all([
-        import("../../lib/channels/index.ts").then(({ createChannelCapability }) =>
-          context.acquireChannels(createChannelCapability).refresh(false),
-        ),
+        context.channels.refresh(false),
         context.runtimeConfig.ensureLoaded(),
       ]);
       void primaryRefresh.then(

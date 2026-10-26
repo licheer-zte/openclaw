@@ -48,7 +48,7 @@ export async function prepareSkillExperienceReviewCandidate(
 ): Promise<ExperienceReviewCandidate | undefined> {
   if (
     isIncognitoSessionKey(candidate.source.sessionKey) ||
-    resolveSkillWorkshopConfig(config).autonomous.mode === "off"
+    resolveSkillWorkshopConfig(config).autonomous.mode !== "auto"
   ) {
     return undefined;
   }
@@ -223,7 +223,7 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
     if (sourceLifetime.entry && !sourceLifetime.entry.isCurrent()) {
       throw new SessionTranscriptReadFenceError("Session review authority changed");
     }
-    if (resolveSkillWorkshopConfig(getRuntimeConfig()).autonomous.mode === "off") {
+    if (resolveSkillWorkshopConfig(getRuntimeConfig()).autonomous.mode !== "auto") {
       throw new Error("Skill Workshop was turned off during review.");
     }
   };
@@ -310,10 +310,7 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
       permissionMode: sourceEntry.permissionMode ?? foregroundPromptContext.permissionMode,
       config,
       abortSignal,
-      prompt: buildSkillExperienceReviewPrompt({
-        ...candidate,
-        propose: resolveSkillWorkshopConfig(config).autonomous.mode === "propose",
-      }),
+      prompt: buildSkillExperienceReviewPrompt(candidate),
       provider: candidate.ctx.modelProviderId,
       model: candidate.ctx.modelId,
       ...(candidate.ctx.authProfileId

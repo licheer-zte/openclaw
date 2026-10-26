@@ -3,7 +3,6 @@ import { once } from "node:events";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi, type TestContext } from "vitest";
 import WebSocket from "ws";
 import * as testInstance from "../../../helpers/openclaw-test-instance.js";
@@ -111,20 +110,12 @@ it("prints bounded readiness receipts from the quota failure hook before Gateway
   }
 });
 
-it.for(["http", "websocket"] as const)(
+it.each(["http", "websocket"] as const)(
   "keeps the catalog held through auxiliary %s success until the primary reply",
-  async (transport, context) => {
+  async (transport) => {
     const provider = await startQuotaProvider("codex_rate_limits", MARKER);
     const hold = provider.holdNextCatalog();
     const catalog = fetch(`${provider.baseUrl}/catalog/models`).then((response) => response.json());
-    context.onTestFinished(async () => {
-      hold.release();
-      try {
-        await catalog;
-      } finally {
-        await provider.stop();
-      }
-    });
     const request = async (model: string, path = "/v1/responses", generate?: boolean) => {
       const body = JSON.stringify({ type: "response.create", model, input: [], generate });
       if (transport === "http") {
@@ -143,7 +134,12 @@ it.for(["http", "websocket"] as const)(
           socket.once("error", reject);
           socket.on("message", (raw) => {
             const event: unknown = JSON.parse(rawDataToString(raw));
-            if (isRecord(event) && event.type === "response.completed") {
+            if (
+              event &&
+              typeof event === "object" &&
+              "type" in event &&
+              event.type === "response.completed"
+            ) {
               resolve();
             }
           });
@@ -157,31 +153,40 @@ it.for(["http", "websocket"] as const)(
         }
       }
     };
-    const captured = await hold.arrived;
-    const expectHeld = () => {
-      expect(observed).not.toHaveBeenCalled();
-      expect(captured.releasedAt).toBeUndefined();
-    };
-    provider.setPhase("restored");
-    const observed = vi.fn(() => hold.release());
-    provider.observeNextSuccess(observed, { model: "gpt-5.5", path: "/v1/responses" });
+    try {
+      const captured = await hold.arrived;
+      const expectHeld = () => {
+        expect(observed).not.toHaveBeenCalled();
+        expect(captured.releasedAt).toBeUndefined();
+      };
+      provider.setPhase("restored");
+      const observed = vi.fn(() => hold.release());
+      provider.observeNextSuccess(observed, { model: "gpt-5.5", path: "/v1/responses" });
 
-    await request("gpt-5.6-luna");
-    expectHeld();
-    await request("gpt-5.5", "/quota-backup/responses");
-    expectHeld();
-
-    if (transport === "websocket") {
-      await request("gpt-5.5", "/v1/responses", false);
+      await request("gpt-5.6-luna");
       expectHeld();
-    }
+      await request("gpt-5.5", "/quota-backup/responses");
+      expectHeld();
 
-    await request("gpt-5.5", "/v1/responses?fixture=primary");
-    expect(observed).toHaveBeenCalledTimes(1);
-    await catalog;
-    expect(captured.releaseReason).toBe("explicit");
-    await request("gpt-5.5");
-    expect(observed).toHaveBeenCalledTimes(1);
-    expect(provider.errors).toEqual([]);
+      if (transport === "websocket") {
+        await request("gpt-5.5", "/v1/responses", false);
+        expectHeld();
+      }
+
+      await request("gpt-5.5", "/v1/responses?fixture=primary");
+      expect(observed).toHaveBeenCalledTimes(1);
+      await catalog;
+      expect(captured.releaseReason).toBe("explicit");
+      await request("gpt-5.5");
+      expect(observed).toHaveBeenCalledTimes(1);
+      expect(provider.errors).toEqual([]);
+    } finally {
+      hold.release();
+      try {
+        await catalog;
+      } finally {
+        await provider.stop();
+      }
+    }
   },
 );

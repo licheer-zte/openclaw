@@ -1,51 +1,107 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  registerSessionBindingAdapter,
+  testing as sessionBindingTesting,
+} from "openclaw/plugin-sdk/conversation-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { slackConversationRouteOwners } from "./conversation-route-owner.js";
+import { inspectSlackConversationRouteOwner } from "./conversation-route-owner.test-support.js";
 import { registerSlackInstallationState } from "./installation-identity-state.js";
 
 const defaultSlack = { accounts: { default: {} } };
-const unbound = { status: "available" as const, binding: null };
-async function inspect(
+function inspect(
   peerId = "C456",
   slack: NonNullable<OpenClawConfig["channels"]>["slack"] = defaultSlack,
   accountId = "default",
+  threadId?: string,
 ) {
-  const input = {
+  return inspectSlackConversationRouteOwner({
     cfg: { channels: { slack } },
     accountId,
-    conversation: { kind: "channel" as const, peerId },
+    conversation: { kind: "channel", peerId, threadId },
+  });
+}
+type BindingAdapter = Parameters<typeof registerSessionBindingAdapter>[0];
+type Conversation = Parameters<NonNullable<BindingAdapter["resolveByConversation"]>>[0];
+function binding(conversation: Conversation, id: string) {
+  return {
+    bindingId: `binding-${id}`,
+    targetSessionKey: "agent:finance:bound",
+    targetKind: "session" as const,
+    conversation,
+    status: "active" as const,
+    boundAt: 1,
   };
-  const [resolve] = await slackConversationRouteOwners.prepareConversationRouteOwnersAsync(
-    [input],
-    async (refs) => () => refs.map(() => unbound),
-  );
-  return resolve!();
+}
+function registerBindingAdapter(
+  resolveByConversation: BindingAdapter["resolveByConversation"],
+  touch?: BindingAdapter["touch"],
+) {
+  registerSessionBindingAdapter({
+    channel: "slack",
+    accountId: "default",
+    listBySession: () => [],
+    resolveByConversation,
+    touch,
+  });
 }
 
-let installation: ReturnType<typeof registerSlackInstallationState>;
+let releaseInstallation: (() => void) | undefined;
+function release() {
+  releaseInstallation?.();
+  releaseInstallation = undefined;
+}
 
 beforeEach(() => {
   for (const key of ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"]) {
     vi.stubEnv(key, undefined);
   }
-  installation = registerSlackInstallationState("default", "workspace");
+  sessionBindingTesting.resetSessionBindingAdaptersForTests();
+  releaseInstallation = registerSlackInstallationState("default", "workspace").release;
 });
 
 afterEach(() => {
-  installation.release();
+  release();
+  sessionBindingTesting.resetSessionBindingAdaptersForTests();
   vi.unstubAllEnvs();
 });
 
+it("prefers the thread over its parent without touching liveness", async () => {
+  const touch = vi.fn();
+  const resolveByConversation = vi.fn((conversation) =>
+    conversation.conversationId === "thread-1" ? binding(conversation, "thread") : null,
+  );
+  registerBindingAdapter(resolveByConversation, touch);
+
+  expect(await inspect("channel-1", defaultSlack, "default", "thread-1")).toEqual({
+    kind: "agent",
+    agentId: "finance",
+  });
+  expect(resolveByConversation).toHaveBeenCalledWith({
+    channel: "slack",
+    accountId: "default",
+    conversationId: "thread-1",
+    parentConversationId: "channel-1",
+  });
+  expect(touch).not.toHaveBeenCalled();
+});
+
 it("distinguishes degraded identity from a qualified target conflict", async () => {
-  installation.update("degraded");
+  release();
+  const installation = registerSlackInstallationState("default", "degraded");
+  releaseInstallation = installation.release;
+
   expect(await inspect()).toEqual({ kind: "unavailable" });
   installation.update("workspace");
   expect(await inspect("team:T123:channel:C456")).toBeNull();
 });
 
 it("fails closed when workspace identity is released during binding inspection", async () => {
-  expect(await inspect()).toEqual({ kind: "agent", agentId: "main" });
-  installation.release();
+  registerBindingAdapter((conversation) => binding(conversation, "channel"));
+  expect(await inspect()).toEqual({
+    kind: "agent",
+    agentId: "finance",
+  });
+  release();
   expect(await inspect()).toEqual({ kind: "unavailable" });
 });
 it.each([
@@ -54,14 +110,14 @@ it.each([
   ["disabled account", "default", { accounts: { default: { enabled: false } } }],
   ["disabled channel", "default", { enabled: false, accounts: { default: { enabled: true } } }],
 ] as const)("rejects inactive %s without identity", async (_name, accountId, slack) => {
-  installation.release();
+  release();
 
   expect(await inspect("C456", slack, accountId)).toBeNull();
 });
 
 it("preserves a configured default while its token and installation are unavailable", async () => {
   vi.stubEnv("OPENCLAW_TEST_MISSING_SLACK_BOT_TOKEN", undefined);
-  installation.release();
+  release();
   expect(
     await inspect("C456", {
       botToken: {
@@ -72,5 +128,7 @@ it("preserves a configured default while its token and installation are unavaila
       appToken: "synthetic-app-token",
       accounts: { secondary: {} },
     }),
-  ).toEqual({ kind: "unavailable" });
+  ).toEqual({
+    kind: "unavailable",
+  });
 });

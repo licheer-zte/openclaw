@@ -315,7 +315,7 @@ export function createSessionRowPlacementProjection(
         hasPrivateQueries = false;
         const ids: string[] = [];
         for (const query of preparedQueries) {
-          const key = prepareSelection ? undefined : privateSessionRowReadKey(cfg, query);
+          const key = privateSessionRowReadKey(cfg, query);
           hasPrivateQueries ||= key !== undefined;
           const privateMemory = key
             ? captureSessionActorStorageOwner(

@@ -46,15 +46,19 @@ async function runShard(config: string, env: NodeJS.ProcessEnv, evidenceId: stri
   // One owner joins each native compiler. A second wrapper's escalation deadline
   // can kill the cleanup owner before it releases its artifact claim.
   let verified = false;
+  let timedOut = false;
   const code = command
     ? await runPreparedTsgoCommand(command, {
         evidenceId,
         onEvidence: () => {
           verified = true;
         },
+        onTimeout: () => {
+          timedOut = true;
+        },
       })
     : 0;
-  return { code, verified };
+  return { code, verified, timedOut };
 }
 
 /** Runs selected canonical graphs under the same output and child-process owner. */
@@ -90,18 +94,19 @@ async function runTsgoCoreTestShards(
           return;
         }
         const startedAt = performance.now();
-        const { code, verified } = await runShard(shard.config, env, shard.evidenceId).catch(
-          (error: unknown) => {
-            stopped = true;
-            failureCode = 1;
-            throw error;
-          },
-        );
+        const { code, verified, timedOut } = await runShard(
+          shard.config,
+          env,
+          shard.evidenceId,
+        ).catch((error: unknown) => {
+          stopped = true;
+          failureCode = 1;
+          throw error;
+        });
         console.error(
           `[tsgo:${shard.name}] ${code === 0 ? "passed" : `failed (exit ${code})`} in ${((performance.now() - startedAt) / 1000).toFixed(1)}s`,
         );
-        // Preserve stop statuses so outer CI collectors also stop admitting work.
-        if (code !== 0 && (failureCode === 0 || code === 124 || code >= 128)) {
+        if (code !== 0 && failureCode === 0) {
           failureCode = code;
         }
         if (verified) {
@@ -109,7 +114,7 @@ async function runTsgoCoreTestShards(
         }
         // Watchdogs and termination do not admit another compiler graph.
         if (
-          code === 124 ||
+          timedOut ||
           code >= 128 ||
           (!ci &&
             ((isRootPartition(shard) && code !== 0) || (evidenceMode ? !verified : code !== 0)))
@@ -300,8 +305,7 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
       process.exitCode = boundaryCode;
     } else {
       const typesCode = await check.checkTypes(concurrency);
-      process.exitCode =
-        typesCode === 124 || typesCode >= 128 ? typesCode : boundaryCode || typesCode;
+      process.exitCode = boundaryCode || typesCode;
     }
   } else {
     // CI stripes split the serial shard sequence across parallel jobs; the

@@ -2,7 +2,6 @@ import { expect, onTestFinished, vi } from "vitest";
 import type { InternalSessionEntry } from "../config/sessions.js";
 import type { SessionOrigin } from "../config/sessions/types.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
-import type { SqliteWorkerAdmissionFactory } from "../infra/sqlite-worker-operation-admission.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
@@ -53,19 +52,6 @@ export type MockSubagentRegistryRows = (
   runIds: readonly string[],
 ) => void | Promise<void>;
 
-/** Policy fixtures supply commit facts; native delivery is covered by real-worker tests. */
-export function acknowledgeMockSubagentRegistryWrite(
-  createAdmission: SqliteWorkerAdmissionFactory | undefined,
-  writeId: string,
-): void {
-  if (!createAdmission) {
-    throw new Error("Registry policy fixture requires a native receipt consumer");
-  }
-  const { admission } = createAdmission({ settled: Promise.resolve({ kind: "completed" }) });
-  Object.defineProperty(admission, "committed", { value: { facts: { writeId, notices: [] } } });
-  admission.finish();
-}
-
 /** Policy fixtures retain the real row owner and stub only the worker transport ACK. */
 export async function configureMockSubagentRegistryPersistence(methods: {
   persistRegistryRows: MockSubagentRegistryRows;
@@ -105,7 +91,7 @@ export async function configureMockSubagentRegistryPersistence(methods: {
           );
           await methods.persistRegistryRows(rows, [...rows.keys(), ...write.deleteRunIds]);
           options?.assertCurrent?.();
-          acknowledgeMockSubagentRegistryWrite(options?.createAdmission, write.writeId);
+          return { writeId: write.writeId, notices: [] };
         }),
       });
     });

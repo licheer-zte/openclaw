@@ -17,8 +17,6 @@ const sessionChangeReasons = new Set([
   "compact",
   "create",
   "cron-continuation",
-  "cron-binding",
-  "cron-bindings-loaded",
   "delete",
   "dispatch",
   "fork",

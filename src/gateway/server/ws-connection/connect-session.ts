@@ -559,6 +559,7 @@ export async function attachAuthenticatedGatewayConnect(
       async () => {
         const { prewarmGatewaySessionHistory } = await import("../../server-history-prewarm.js");
         await prewarmGatewaySessionHistory(getRuntimeConfig(), {
+          onlyIfCold: true,
           isCancelled: () => context.handler.connectionWork.signal.aborted,
         });
       },

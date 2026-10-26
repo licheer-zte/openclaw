@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { advanceCronActiveJobGeneration } from "./active-jobs.js";
-import { resolveCronRunErrorReason } from "./run-error-reason.js";
 import { cronScriptFailureMetadata } from "./script-failure.js";
 import {
   createTelegramDelivery,
@@ -85,17 +84,7 @@ function applyError(
   applyJobResult(
     state,
     job,
-    {
-      status: "error",
-      startedAt: runningAtMs,
-      endedAt: runningAtMs + 1_000,
-      errorReason: resolveCronRunErrorReason(
-        result.error,
-        result.provider,
-        result.errorClassification,
-      ),
-      ...result,
-    },
+    { status: "error", startedAt: runningAtMs, endedAt: runningAtMs + 1_000, ...result },
     { deferredNotifications },
   );
   return { job, deferredNotifications };

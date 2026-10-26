@@ -91,10 +91,12 @@ describe.skipIf(process.platform === "win32")("Gateway connection broker ownersh
     const second = makeWork(secondBroker);
     const withoutBroker = new GatewayConnectionWork();
     const firstGate = createDeferredCore();
+    const entered: string[] = [];
     try {
       const pending = callerContext.run("request", () =>
         runWithSpawnBroker(secondBroker, () =>
           first.track(async () => {
+            entered.push("first");
             expect(getSpawnBroker()).toBe(firstBroker);
             expect(callerContext.getStore()).toBe("request");
             await firstGate.promise;
@@ -103,6 +105,7 @@ describe.skipIf(process.platform === "win32")("Gateway connection broker ownersh
           }),
         ),
       );
+      expect(entered).toEqual(["first"]);
       await runWithSpawnBroker(firstBroker, async () => {
         for (const [work, broker] of [
           [second, secondBroker],

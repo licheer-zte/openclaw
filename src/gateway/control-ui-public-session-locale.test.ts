@@ -20,13 +20,14 @@ vi.mock("./control-ui-public-session-locales.js", async (importOriginal) => ({
   },
 }));
 afterEach(() => vi.useRealTimers());
+const messages = [
+  { role: "user", content: "Question" },
+  { role: "assistant", content: "Answer\n\n```js\n1;\n```" },
+];
 function render(unavailable = false) {
   return renderPublicSessionDocument({
     title: unavailable ? "Conversation unavailable" : "Original title",
-    messages: [
-      { role: "user", content: "Question" },
-      { role: "assistant", content: "Answer\n\n```js\n1;\n```" },
-    ],
+    messages,
     unavailable,
     truncated: false,
     latestUrl: "/chat/main/topic",
@@ -54,7 +55,9 @@ function open(language: string, preference?: string, blockedStorage = false) {
       },
     });
   }
-  const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(render()));
+  const fetch = vi
+    .fn<typeof globalThis.fetch>()
+    .mockImplementation(async () => new Response(render(), { status: 200 }));
   Object.assign(dom.window, { fetch, AbortSignal, setTimeout, clearTimeout });
   runInContext(document.querySelector("script")!.textContent!, dom.getInternalVMContext());
   const find = (selector: string) => document.querySelector<HTMLElement>(selector);
@@ -69,24 +72,28 @@ describe("public reader language", () => {
     ["ar-EG", "unsupported", false, "ar", "rtl", "أعلى"],
     ["fr-FR", undefined, true, "fr", "ltr", "Haut"],
     ["zz-ZZ", undefined, false, "en", "ltr", "Top"],
+    ["zh-Hans-TW", undefined, false, "zh-CN", "ltr", "Top"],
+    ["zh-Hant-CN", undefined, false, "zh-TW", "ltr", "Top"],
+    ["pt-PT", undefined, false, "pt-BR", "ltr", "Top"],
   ])(
     "selects %s with preference %s (blocked storage: %s)",
     (language, preference, blocked, locale, direction, top) => {
       const { document, find, localStorage } = open(language!, preference, blocked!);
       expect(document.documentElement).toMatchObject({ lang: locale, dir: direction });
       expect(find("[data-public-top]")?.textContent).toContain(top);
+      expect(document.title).toBe("Original title · OpenClaw");
+      expect(find(".content")?.textContent).toBe("Question\n");
+      expect(find(".content")?.getAttribute("dir")).toBe("auto");
+      expect(find("code")?.textContent).toBe("1;\n");
       expect(localStorage.getItem("openclaw.i18n.locale")).toBe(preference ?? null);
     },
   );
   it("retains localized chrome and copy controls across refresh and revocation", async () => {
     const { document, fetch, find } = open("fr-FR");
-    expect(document.title).toBe("Original title · OpenClaw");
-    expect(find(".content")?.textContent).toBe("Question\n");
-    expect(find(".content")?.getAttribute("dir")).toBe("auto");
-    expect(find("code")?.textContent).toBe("1;\n");
     expect(find(".copy")?.getAttribute("aria-label")).toBe("Copier le code");
     find("[data-public-refresh-now]")!.click();
     await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledTimes(1);
     expect(find(".copy")?.getAttribute("title")).toBe("Copier");
     expect(find("[data-public-refresh-status]")?.textContent).toBe("À jour");
     expect(find("footer a")?.textContent).toBe("Actualiser");

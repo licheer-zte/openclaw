@@ -11,7 +11,11 @@ const echoTool = {
 };
 const pluginDetails = { id: "test-tools", name: "Test Tools", description: "Tool plugin fixture." };
 function register(entry: ReturnType<typeof defineToolPlugin>, config?: Record<string, unknown>) {
-  const captured = createCapturedPluginRegistration({ id: entry.id });
+  const id = entry.id;
+  const captured = createCapturedPluginRegistration({
+    id,
+    ...(config ? { config: { plugins: { entries: { [id]: { config } } } } } : {}),
+  });
   if (config) {
     captured.api.pluginConfig = config;
   }
@@ -25,21 +29,24 @@ function firstTool(captured: ReturnType<typeof register>) {
 
 describe("defineToolPlugin", () => {
   it("registers declared tools and wraps plain object results", async () => {
-    const outputSchema = Type.Object({ input: Type.String(), configured: Type.Boolean() });
+    const outputSchema = Type.Object(
+      { symbol: Type.String(), configured: Type.Boolean() },
+      { additionalProperties: false },
+    );
     const entry = defineToolPlugin({
       ...pluginDetails,
       configSchema: Type.Object({ apiKey: Type.String() }),
       tools: (tool) => [
         tool({
-          ...echoTool,
-          label: "Echo",
+          name: "quote",
+          label: "Quote",
+          description: "Fetch a quote.",
+          parameters: Type.Object({ symbol: Type.String() }),
           outputSchema,
-          optional: true,
-          workspaceAccess: true,
           async execute(params, config) {
-            expectTypeOf(params.input).toEqualTypeOf<string>();
+            expectTypeOf(params.symbol).toEqualTypeOf<string>();
             expectTypeOf(config.apiKey).toEqualTypeOf<string>();
-            return { input: params.input, configured: config.apiKey === "test-key" };
+            return { symbol: params.symbol, configured: config.apiKey === "test-key" };
           },
         }),
       ],
@@ -47,20 +54,18 @@ describe("defineToolPlugin", () => {
     const captured = register(entry, { apiKey: "test-key" });
 
     expect(captured.tools).toHaveLength(1);
-    expect(captured.tools[0]).toMatchObject({ ...echoTool, label: "Echo", outputSchema });
-    expect(captured.registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "echo" }), {
-      optional: true,
-      workspaceAccess: true,
+    expect(captured.tools[0]).toMatchObject({
+      name: "quote",
+      label: "Quote",
+      description: "Fetch a quote.",
+      outputSchema,
     });
-    expect(getToolPluginMetadata(entry)?.tools).toMatchObject([
-      { name: "echo", optional: true, workspaceAccess: true },
-    ]);
     expect(getToolPluginMetadata(entry)?.tools[0]?.outputSchema).toBe(outputSchema);
-    const result = await firstTool(captured).execute("call-1", { input: "OPEN" });
-    expect(result).toEqual({
-      details: { input: "OPEN", configured: true },
-      content: [{ type: "text", text: '{\n  "input": "OPEN",\n  "configured": true\n}' }],
-    });
+    const result = await firstTool(captured).execute("call-1", { symbol: "OPEN" });
+    expect(result.details).toEqual({ symbol: "OPEN", configured: true });
+    expect(result.content).toEqual([
+      { type: "text", text: JSON.stringify({ symbol: "OPEN", configured: true }, null, 2) },
+    ]);
   });
 
   it("wraps plain string results", async () => {
@@ -75,40 +80,70 @@ describe("defineToolPlugin", () => {
     });
   });
 
-  it("supports context factories while keeping static tool metadata", () => {
+  it("passes optional tool workspace access through registration and metadata", () => {
+    const workspaceAccess = true;
     const entry = defineToolPlugin({
       ...pluginDetails,
       tools: (tool) => [
         tool({
           ...echoTool,
-          label: "Factory Echo",
+          name: "optional_echo",
           optional: true,
-          workspaceAccess: "execute",
-          factory: ({ toolContext }) =>
-            toolContext.sandboxed
-              ? null
-              : {
-                  ...echoTool,
-                  label: "Factory Echo",
-                  execute: async () => ({ content: [], details: undefined }),
-                },
+          workspaceAccess,
+          execute: ({ input }) => input,
         }),
       ],
     });
     const { registerTool } = register(entry);
 
+    expect(registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "optional_echo" }), {
+      optional: true,
+      workspaceAccess,
+    });
+    expect(getToolPluginMetadata(entry)?.tools).toMatchObject([
+      { name: "optional_echo", optional: true, workspaceAccess },
+    ]);
+  });
+
+  it("supports context factories while keeping static tool metadata", () => {
+    const entry = defineToolPlugin({
+      ...pluginDetails,
+      configSchema: Type.Object({ prefix: Type.String() }),
+      tools: (tool) => [
+        tool({
+          ...echoTool,
+          name: "factory_echo",
+          label: "Factory Echo",
+          optional: true,
+          workspaceAccess: "execute",
+          factory({ toolContext }) {
+            if (toolContext.sandboxed) {
+              return null;
+            }
+            return {
+              ...echoTool,
+              name: "factory_echo",
+              label: "Factory Echo",
+              execute: async () => ({ content: [], details: undefined }),
+            };
+          },
+        }),
+      ],
+    });
+    const { registerTool } = register(entry, { prefix: "ctx" });
+
     expect(registerTool).toHaveBeenCalledWith(expect.any(Function), {
-      name: "echo",
+      name: "factory_echo",
       optional: true,
       workspaceAccess: "execute",
     });
     expect(getToolPluginMetadata(entry)?.tools).toMatchObject([
-      { name: "echo", label: "Factory Echo", optional: true, workspaceAccess: "execute" },
+      { name: "factory_echo", label: "Factory Echo", optional: true, workspaceAccess: "execute" },
     ]);
 
     const factory = registerTool.mock.calls[0]?.[0] as (ctx: { sandboxed?: boolean }) => unknown;
     expect(factory({ sandboxed: true })).toBeNull();
-    expect(factory({ sandboxed: false })).toMatchObject({ name: "echo" });
+    expect(factory({ sandboxed: false })).toMatchObject({ name: "factory_echo" });
   });
 
   it("defaults author config to a strict empty object schema", () => {

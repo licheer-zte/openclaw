@@ -23,7 +23,6 @@ import {
   openOpenClawAgentDatabase,
   getOpenClawAgentDatabaseIfOpen,
 } from "../../state/openclaw-agent-db.js";
-import * as nativeExecution from "../../state/openclaw-agent-execution.js";
 import * as writeAdmission from "../../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -62,7 +61,6 @@ import {
   createSessionColdStorageFixture,
   maintenanceConfig,
 } from "./session-cold-storage.test-support.js";
-import { spyAgentExecutions } from "./session-native-binding.execution.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir as waitForReconciliation } from "./session-transcript-reconcile.js";
 
@@ -177,15 +175,15 @@ describe("SQLite transcript archive sessions", () => {
     "retains a timed-out %s archive until native exit and requests recovery when retirement stalls",
     async (mode) => {
       const { sessionId, scope, event, database } = await prepareSession(`timeout-${mode}`);
-      const plan = expectDefined(
-        planSessionStateDeleteIfUnreferenced({
-          archiveDirectory: path.dirname(storePath),
-          database,
-          referencedSessionIds: new Set(),
-          sessionId,
-        }),
-        "retained archive plan",
-      );
+      const plan = planSessionStateDeleteIfUnreferenced({
+        archiveDirectory: path.dirname(storePath),
+        database,
+        referencedSessionIds: new Set(),
+        sessionId,
+      });
+      if (!plan) {
+        throw new Error("expected a retained archive plan");
+      }
       const gate = new Int32Array(new SharedArrayBuffer(8));
       let archive: Worker | undefined;
       using createWorker = vi
@@ -238,12 +236,16 @@ describe("SQLite transcript archive sessions", () => {
       const outcome = Promise.allSettled([active]);
       let following: Promise<void> | undefined;
       try {
-        await awaitGateBeforeSettlement(
-          Promise.resolve(Atomics.waitAsync(gate, 0, 0).value),
-          active,
-          "Archive completed before entering the flush gate",
-        );
-        const native = expectDefined(archive, "archive worker");
+        await Promise.race([
+          Atomics.waitAsync(gate, 0, 0).value,
+          active.then(() => {
+            throw new Error("Archive completed before entering the flush gate");
+          }),
+        ]);
+        if (!archive) {
+          throw new Error("expected an archive worker");
+        }
+        const native = archive;
         const nativeTerminate = native.terminate.bind(native);
         const retirement = createDeferred<number>();
         using terminate = vi.spyOn(native, "terminate").mockReturnValue(retirement.promise);
@@ -253,7 +255,10 @@ describe("SQLite transcript archive sessions", () => {
         following = withArchiveWorker(next);
         expect(terminate).not.toHaveBeenCalled();
         expect(next).not.toHaveBeenCalled();
-        expectDefined(expire, "archive settlement deadline")();
+        if (!expire) {
+          throw new Error("Archive operation has no settlement deadline");
+        }
+        expire();
         expect(terminate).toHaveBeenCalledOnce();
         expect(recovery).not.toHaveBeenCalled();
         expect(native.threadId).toBeGreaterThan(0);
@@ -261,7 +266,10 @@ describe("SQLite transcript archive sessions", () => {
         expect(
           fs.readdirSync(path.dirname(storePath)).some((entry) => entry.includes("stage")),
         ).toBe(true);
-        expectDefined(retireGrace, "archive recovery grace")();
+        if (!retireGrace) {
+          throw new Error("Archive retirement has no recovery grace");
+        }
+        retireGrace();
         await vi.dynamicImportSettled();
         expect(recovery).toHaveBeenCalledOnce();
         const request = recovery.mock.calls[0]![0];
@@ -300,10 +308,10 @@ describe("SQLite transcript archive sessions", () => {
       );
       const original = fixture.snapshot();
       const carriers: Worker[] = [];
-      const createWorker = expectDefined(
-        vi.mocked(workerCpu.createCpuTrackedWorker).getMockImplementation(),
-        "SQLite worker fault wrapper",
-      );
+      const createWorker = vi.mocked(workerCpu.createCpuTrackedWorker).getMockImplementation();
+      if (!createWorker) {
+        throw new Error("Expected the suite's SQLite worker fault wrapper");
+      }
       let finishClose: (() => void) | undefined;
       vi.spyOn(workerCpu, "createCpuTrackedWorker").mockImplementation((...args) => {
         const worker = createWorker(...args);
@@ -928,12 +936,14 @@ describe("SQLite transcript archive sessions", () => {
         database.db.exec("DROP TABLE session_transcript_archives");
         await closeAgentDatabase(database.path);
       }
-      const databasePath = expectDefined(target.path, "durable archive target");
+      if (!target.path) {
+        throw new Error("Expected a durable archive target");
+      }
       await expect(archiveStore.publishSessionStateArchives(options, [])).resolves.toEqual([]);
       expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
-      expect(fs.existsSync(databasePath)).toBe(exists);
+      expect(fs.existsSync(target.path)).toBe(exists);
       if (exists) {
-        using peer = new (requireNodeSqlite().DatabaseSync)(databasePath, { readOnly: true });
+        using peer = new (requireNodeSqlite().DatabaseSync)(target.path, { readOnly: true });
         expect(
           peer
             .prepare("SELECT name FROM sqlite_schema WHERE name = 'session_transcript_archives'")
@@ -947,13 +957,36 @@ describe("SQLite transcript archive sessions", () => {
 type ArchiveSessionReply = TranscriptArchiveWorkerMessage | TranscriptArchivePublishWorkerMessage;
 
 function observeArchiveMetadata(afterExecute: (type: string, result: unknown) => Promise<void>) {
-  spyAgentExecutions(nativeExecution, (worker) => ({
-    execute: async (command, options) => {
-      const result = await worker.execute(command, options);
-      await afterExecute(command.type, result);
-      return result;
-    },
-  }));
+  const withWorker = sessionWorker.withSessionEntryWorker;
+  return vi.spyOn(sessionWorker, "withSessionEntryWorker").mockImplementation((...args) => {
+    const withExecution = args[3];
+    args[3] = (execution, owner, context) =>
+      withExecution(
+        {
+          ...execution,
+          get fileIdentity() {
+            return execution.fileIdentity;
+          },
+          runExisting(readSource, read, readOptions) {
+            return execution.runExisting(
+              readSource,
+              (worker) =>
+                read({
+                  execute: async (command, requestOptions) => {
+                    const result = await worker.execute(command, requestOptions);
+                    await afterExecute(command.type, result);
+                    return result;
+                  },
+                }),
+              readOptions,
+            );
+          },
+        },
+        owner,
+        context,
+      );
+    return withWorker(...args);
+  });
 }
 
 function observeArchiveSessionWorkers(

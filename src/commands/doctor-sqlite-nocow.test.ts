@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import { prepareClientCredentialMigration } from "../infra/client-credential-migration.js";
 import { createClientCredentialMigrationFixture } from "../infra/client-credential-migration.test-support.js";
 import { runClientCredentialOperation } from "../infra/client-credential-store.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -15,6 +16,7 @@ import {
 } from "../infra/session-sqlite-migration-manifest.js";
 import { readSqliteReaderDiagnosticsForPath } from "../infra/sqlite-reader-lifecycle.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { isSqlitePathOnBtrfs } from "../infra/sqlite-wal-filesystem.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
@@ -100,7 +102,7 @@ function replaceDatabase(pathname: string) {
 
 async function repair(assertCurrent = () => {}) {
   const result = await rewrite(assertCurrent);
-  return [...result.changes, ...result.warnings].join("\n");
+  return [...result.changes, ...result.warnings];
 }
 
 async function useNativeTools(useNative: (command: string) => boolean) {
@@ -119,6 +121,24 @@ function expectDatabaseValue(pathname: string, table: string, value: string) {
   }).toEqual({ value, integrity: "ok" });
 }
 
+it("leaves unrelated trees and their inodes untouched with bounded ACL work", async () => {
+  seedDatabase();
+  const nested = path.join(directory, "codex-home");
+  fs.mkdirSync(nested);
+  for (let index = 0; index < 64; index++) {
+    fs.writeFileSync(path.join(nested, `${index}.txt`), "unrelated");
+  }
+  const sibling = path.join(nested, "0.txt");
+  const original = fs.statSync(sibling);
+  const originalDirectory = fs.statSync(directory);
+  expect((await repair()).join("\n")).toContain("Rewrote");
+  expect(fs.statSync(sibling).ino).toBe(original.ino);
+  expect(fs.statSync(directory).ino).toBe(originalDirectory.ino);
+  expect(
+    vi.mocked(spawnSync).mock.calls.filter(([command]) => command === "getfacl").length,
+  ).toBeLessThanOrEqual(2);
+});
+
 it.each([
   ["fuser", "fuser cannot inspect processes"],
   ["mv", "kernel/filesystem lacks RENAME_EXCHANGE"],
@@ -133,7 +153,7 @@ it.each([
   );
   const inventory = vi.spyOn(fs, "readdirSync");
   const copy = vi.spyOn(fsp, "open");
-  expect(await repair()).toContain(limit);
+  expect((await repair()).join("\n")).toContain(limit);
   expect(vi.mocked(spawnSync).mock.calls.some(([name]) => name === "getfacl")).toBe(false);
   expect(inventory.mock.calls.some(([pathname]) => pathname === directory)).toBe(false);
   expect(copy).not.toHaveBeenCalled();
@@ -144,14 +164,14 @@ it.each([
 it("refuses a store opened after copying before the real exchange", async () => {
   seedDatabase();
   const original = fs.statSync(directory).ino;
-  let inspections = 0;
   const tool = vi.mocked(spawnSync).getMockImplementation()!;
+  let inspections = 0;
   vi.mocked(spawnSync).mockImplementation((command, args, options) =>
     command === "fuser" && args?.includes(sqlitePath) && ++inspections === 2
       ? { status: 0, stdout: "12345", stderr: "", pid: 0, output: [], signal: null }
       : tool(command, args, options),
   );
-  expect(await repair()).toContain("store files are open (pids: 12345)");
+  expect((await repair()).join("\n")).toContain("store files are open (pids: 12345)");
   expect(fs.statSync(directory).ino).toBe(original);
   expect(fixture.exchanges).toBe(0);
 });
@@ -165,10 +185,11 @@ it.skipIf(process.platform !== "linux")(
         await useNativeTools(
           (command) => !["lsattr", "getfacl", "setfacl", "mv"].includes(command),
         );
+        const log = vi.fn();
         const maintenance = await beginDoctorMaintenance({
           options: { repair: true, nonInteractive: true, workspaceSuggestions: false },
           root: null,
-          runtime: { log() {}, error() {}, exit() {} },
+          runtime: { log, error() {}, exit() {} },
         });
         try {
           const paths = await maintenance!.run(async () => {
@@ -187,8 +208,8 @@ it.skipIf(process.platform !== "linux")(
               .paths;
           });
           expect(paths).toHaveLength(4);
-          const handleCounts: number[] = [];
           const toolRunner = vi.mocked(spawnSync).getMockImplementation()!;
+          const handleCounts: number[] = [];
           vi.mocked(spawnSync).mockImplementation((command, args, options) => {
             if (command === "fuser") {
               for (const pathname of paths) {
@@ -240,7 +261,7 @@ it.skipIf(process.platform !== "linux")(
     const descriptors = sourceDescriptors();
     expect(descriptors.length).toBeGreaterThanOrEqual(2);
     await useNativeTools((command) => command === "fuser");
-    expect(await repair()).toContain("store files are open");
+    expect((await repair()).join("\n")).toContain("store files are open");
     expect(sourceDescriptors()).toEqual(descriptors);
     expect(unknown.isTransaction).toBe(true);
     expect(fs.statSync(sqlitePath).ino).toBe(identity.ino);
@@ -266,13 +287,6 @@ it.each(["exchange-timeout", "different-owner"] as const)(
     seedDatabase();
     const original = fs.statSync(sqlitePath);
     const originalDirectory = fs.statSync(directory);
-    const nested = path.join(directory, "codex-home");
-    fs.mkdirSync(nested);
-    for (let index = 0; index < 64; index++) {
-      fs.writeFileSync(path.join(nested, `${index}.txt`), "unrelated");
-    }
-    const sibling = path.join(nested, "0.txt");
-    const siblingInode = fs.statSync(sibling).ino;
     if (outcome === "exchange-timeout") {
       fixture.tools = outcome;
     } else {
@@ -287,15 +301,11 @@ it.each(["exchange-timeout", "different-owner"] as const)(
     }
     const chown = vi.spyOn(fs, "chownSync");
     const chmod = vi.spyOn(fs, "chmodSync");
-    expect(await repair()).toContain("Rewrote SQLite files with NOCOW");
+    expect((await repair()).join(",")).toContain("Rewrote SQLite files with NOCOW");
+    expect(fixture.exchanges).toBe(3);
     expect(fs.statSync(sqlitePath).ino).not.toBe(original.ino);
     expect(fs.statSync(sqlitePath).mode).toBe(original.mode);
     expect(fs.statSync(directory).mode).toBe(originalDirectory.mode);
-    expect(fs.statSync(directory).ino).toBe(originalDirectory.ino);
-    expect(fs.statSync(sibling).ino).toBe(siblingInode);
-    expect(
-      vi.mocked(spawnSync).mock.calls.filter(([command]) => command === "getfacl").length,
-    ).toBeLessThanOrEqual(2);
     const backup = fs.readdirSync(root).find((name) => name.startsWith("state.nocow-backup-"))!;
     expect(fs.statSync(path.join(root, backup, "openclaw.sqlite")).ino).toBe(original.ino);
     expect(fs.readFileSync(path.join(directory, "sibling.txt"), "utf8")).toBe("preserve me");
@@ -316,34 +326,52 @@ it.each(["exchange-timeout", "different-owner"] as const)(
 );
 
 it.skipIf(process.platform === "win32")(
-  "leaves unrelated nested symlinks and lock files outside the rewrite",
+  "preserves nested symlink bytes and empty lock files without following targets",
   async () => {
     seedDatabase();
     const nested = path.join(directory, "tmp", "arg0");
     fs.mkdirSync(nested, { recursive: true });
     const external = path.join(root, "external");
-    fs.writeFileSync(external, "outside the store");
-    const link = path.join(nested, "unrelated.sqlite");
-    fs.symlinkSync(external, link);
+    fs.mkdirSync(external);
+    fs.writeFileSync(path.join(external, "untouched"), "outside the store");
+    const links = new Map([
+      [path.join(nested, "absolute"), Buffer.from(external)],
+      [path.join(nested, "relative"), Buffer.from("../../sibling.txt")],
+      [path.join(nested, "dangling.sqlite"), Buffer.from("missing-target")],
+      [path.join(nested, "raw-bytes"), Buffer.from([0x66, 0x80, 0xff])],
+    ]);
+    for (const [pathname, target] of links) {
+      fs.symlinkSync(target, pathname);
+    }
+    const owners = [...links.keys()].map((pathname) => fs.lstatSync(pathname));
     const lock = path.join(nested, ".lock");
     fs.writeFileSync(lock, "");
-    const originalLink = fs.lstatSync(link);
-    const originalLock = fs.lstatSync(lock);
+    const originalLock = fs.statSync(lock);
     const tool = vi.mocked(spawnSync).getMockImplementation()!;
     vi.mocked(spawnSync).mockImplementation((command, args, options) => {
       if (command === "fuser" && !args?.[0]?.includes(".nocow-probe-")) {
         expect(args).not.toContain(lock);
-        expect(args).not.toContain(link);
-        expect(args).not.toContain(external);
+        for (const pathname of args ?? []) {
+          expect(fs.lstatSync(pathname).isSymbolicLink()).toBe(false);
+          expect(pathname.startsWith(external)).toBe(false);
+        }
       }
       return tool(command, args, options);
     });
-    expect(await repair()).toContain("Rewrote SQLite files with NOCOW");
-    expect(fs.lstatSync(link)).toMatchObject(originalLink);
-    expect(fs.readlinkSync(link)).toBe(external);
-    expect(fs.lstatSync(lock)).toMatchObject(originalLock);
+
+    expect((await repair()).join("\n")).toContain("Rewrote SQLite files with NOCOW");
+    expect(fixture.exchanges).toBe(3);
+    for (const [index, [pathname, target]] of [...links].entries()) {
+      const stat = fs.lstatSync(pathname);
+      expect(stat.isSymbolicLink()).toBe(true);
+      expect(fs.readlinkSync(pathname, { encoding: "buffer" })).toEqual(target);
+      expect([stat.uid, stat.gid]).toEqual([owners[index]!.uid, owners[index]!.gid]);
+    }
+    expect(fs.existsSync(path.join(nested, "dangling.sqlite"))).toBe(false);
+    expect(fs.statSync(lock).isFile()).toBe(true);
+    expect(fs.statSync(lock).ino).toBe(originalLock.ino);
     expect(fs.readFileSync(lock)).toHaveLength(0);
-    expect(fs.readFileSync(external, "utf8")).toBe("outside the store");
+    expect(fs.readFileSync(path.join(external, "untouched"), "utf8")).toBe("outside the store");
   },
 );
 
@@ -363,7 +391,7 @@ it.skipIf(process.platform === "win32").each(["access", "default", "denied-grant
       fixture.acls.set(sqlitePath, fileAcl);
     }
     const originalMode = fs.statSync(directory).mode;
-    expect(await repair()).toContain("Rewrote");
+    expect((await repair()).join(",")).toContain("Rewrote");
     expect(fs.statSync(directory).mode).toBe(originalMode);
     expect(fixture.acls.get(directory)).toBe(directoryAcl);
     if (kind !== "denied-grant") {
@@ -394,7 +422,7 @@ it.each([
     stderr: "",
     ...result,
   };
-  expect(await repair()).toContain(
+  expect((await repair()).join("\n")).toContain(
     `fuser could not establish that all handles are closed: ${detail}`,
   );
   expect(fixture.exchanges).toBe(0);
@@ -452,7 +480,7 @@ it.each(["database", "sidecar"])("refuses an aliased %s before mutation", async 
   seedDatabase();
   const source = kind === "database" ? sqlitePath : `${sqlitePath}-wal`;
   fs.linkSync(source, path.join(root, "alias"));
-  expect(await repair()).toContain("hard-linked path");
+  expect((await repair()).join("\n")).toContain("hard-linked path");
   expect(fixture.exchanges).toBe(0);
 });
 
@@ -494,10 +522,10 @@ it.each([
       throw new Error("Gateway owns the store");
     }
   });
-  expect(notes).not.toContain("Rewrote");
+  expect(notes.join(",")).not.toContain("Rewrote");
   expect(fs.statSync(sqlitePath).ino).toBe(original.ino);
   expect(fixture.exchanges).toBe(failure === "exchange-failed" ? 1 : 0);
-  expect(notes).toMatch(
+  expect(notes.join(",")).toMatch(
     failure === "getfacl" || failure === "setfacl" || failure === "verification"
       ? /skipped/u
       : /refused|skipped/u,
@@ -567,10 +595,18 @@ describe("Doctor NOCOW recovery identities", () => {
       fs.rmSync(sqlitePath);
       const credentials = await createClientCredentialMigrationFixture(root);
       try {
-        credentials.migrate(() =>
-          credentials.source.exec(
-            "UPDATE schema_meta SET schema_version=29; PRAGMA user_version=29;",
-          ),
+        credentials.maintenance.run(() =>
+          runSqliteImmediateTransactionSync(credentials.source, () => {
+            prepareClientCredentialMigration(credentials.source, {
+              path: sqlitePath,
+              env,
+              fromVersion: 25,
+              capture: credentials.maintenance.capture,
+            });
+            credentials.source.exec(
+              "UPDATE schema_meta SET schema_version=29; PRAGMA user_version=29;",
+            );
+          }),
         );
       } finally {
         credentials.source.close();

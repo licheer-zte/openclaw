@@ -87,7 +87,7 @@ function modelOption(
   return {
     value: ref,
     label: model.name || ref,
-    ...(auth ? { description: [auth.label, auth.detail].filter(Boolean).join(" · ") } : {}),
+    ...(auth ? { detail: [auth.label, auth.detail].filter(Boolean).join(" · ") } : {}),
     ...(model.available === false ? { disabled: true } : {}),
     ...(model.provider ? { provider: model.provider } : {}),
   };
@@ -301,7 +301,6 @@ function FallbackModel(props: {
       }
       control={
         <ModelPicker
-          windowed
           label={props.label}
           value={props.fallbacks[0] ?? ""}
           options={options()}
@@ -428,23 +427,21 @@ export function DefaultModels(props: DefaultModelsViewProps) {
           ? `${t("quickSettings.model.fastModes.auto")} · ${automatic?.label ?? ref}`
           : t("quickSettings.model.fastModes.auto"),
         provider: automatic?.provider,
-        description:
+        detail:
           ref === null
             ? t("modelProviders.defaults.automaticUnavailable")
             : selected === AUTOMATIC_UTILITY_VALUE && route
-              ? [automatic?.description, route.label].filter(Boolean).join(" · ")
-              : automatic?.description,
+              ? [automatic?.detail, route.label].filter(Boolean).join(" · ")
+              : automatic?.detail,
       },
       { value: "", label: t("modelProviders.defaults.disabled") },
     ];
     for (const option of options()) {
-      const description =
+      const detail =
         option.value === selected && route
-          ? [option.description, route.label].filter(Boolean).join(" · ")
-          : option.description;
-      choices.push(
-        description === option.description ? option : Object.assign({}, option, { description }),
-      );
+          ? [option.detail, route.label].filter(Boolean).join(" · ")
+          : option.detail;
+      choices.push(detail === option.detail ? option : Object.assign({}, option, { detail }));
     }
     return choices;
   });
@@ -462,7 +459,6 @@ export function DefaultModels(props: DefaultModelsViewProps) {
           title={t("modelProviders.defaults.primary")}
           control={
             <ModelPicker
-              windowed
               label={t("modelProviders.defaults.primary")}
               value={primary()}
               options={primaryOptions()}
@@ -486,7 +482,6 @@ export function DefaultModels(props: DefaultModelsViewProps) {
           }
           control={
             <ModelPicker
-              windowed
               id={UTILITY_MODEL_PICKER_ID}
               label={t("modelProviders.defaults.utility")}
               value={utilityValue()}

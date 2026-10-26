@@ -8,8 +8,30 @@ import { captureCurrentSessionRunInterruptTarget } from "../../sessions/session-
 import { createDeferredCore } from "../../shared/deferred.js";
 import { waitForPreparedReplyQueue } from "./get-reply-run-queue.js";
 
+it("waits for the active session before refreshing and rechecking admission", async () => {
+  const order: string[] = [];
+  const interruptActiveRun = vi.fn();
+  const result = await waitForPreparedReplyQueue({
+    activeSessionId: "session-active",
+    queueMode: "followup",
+    interruptActiveRun,
+    waitForActiveRunEnd: async (sessionId) => {
+      order.push(`wait:${sessionId}`);
+    },
+    refreshPreparedState: async () => {
+      order.push("refresh");
+    },
+    resolveBusyState: () => {
+      order.push("recheck");
+      return { isActive: false };
+    },
+  });
+  expect(result).toBeUndefined();
+  expect(order).toEqual(["wait:session-active", "refresh", "recheck"]);
+  expect(interruptActiveRun).not.toHaveBeenCalled();
+});
+
 it.each([
-  ["followup", false, false, undefined],
   ["interrupt", false, false, undefined],
   [
     "interrupt",
@@ -21,31 +43,25 @@ it.each([
 ] as const)(
   "%s admission with active=%s, blocked=%s",
   async (queueMode, isActive, terminalProducerBlocked, text) => {
-    const order: string[] = [];
+    const interruptActiveRun = vi.fn(async () => queueMode === "interrupt");
+    const waitForActiveRunEnd = vi.fn(async () => {
+      if (queueMode === "interrupt") {
+        throw new Error("interrupt mode must use session-work admission settling");
+      }
+    });
+    const refreshPreparedState = vi.fn(async () => {});
     const result = await waitForPreparedReplyQueue({
       activeSessionId: "session-active",
       queueMode,
-      interruptActiveRun: async () => {
-        order.push("interrupt");
-        return true;
-      },
-      waitForActiveRunEnd: async (id) => {
-        order.push(`wait:${id}`);
-      },
-      refreshPreparedState: async () => {
-        order.push("refresh");
-      },
-      resolveBusyState: () => {
-        order.push("recheck");
-        return { isActive, terminalProducerBlocked };
-      },
+      interruptActiveRun,
+      waitForActiveRunEnd,
+      refreshPreparedState,
+      resolveBusyState: () => ({ isActive, terminalProducerBlocked }),
     });
     expect(result).toEqual(text === undefined ? undefined : { text });
-    expect(order).toEqual([
-      queueMode === "interrupt" ? "interrupt" : "wait:session-active",
-      "refresh",
-      "recheck",
-    ]);
+    expect(interruptActiveRun).toHaveBeenCalledTimes(queueMode === "interrupt" ? 1 : 0);
+    expect(waitForActiveRunEnd).toHaveBeenCalledTimes(queueMode === "followup" ? 1 : 0);
+    expect(refreshPreparedState).toHaveBeenCalledOnce();
   },
 );
 it("does not admit after interrupt timeout merely because the old slot cleared", async () => {

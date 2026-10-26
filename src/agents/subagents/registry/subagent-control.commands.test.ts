@@ -5,7 +5,9 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { stopSubagentsForRequester } from "../../../auto-reply/reply/abort-operation.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
+import { abortControlledSubagents } from "../../../gateway/server-methods/chat-abort-descendants.js";
 import { withExecRequestTurn } from "../../../infra/exec-request-context.js";
 import { getProcessSupervisor } from "../../../process/supervisor/index.js";
 import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
@@ -26,7 +28,6 @@ import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
-import { killSessionSubagentRuns } from "./subagent-control-kill.js";
 import * as killSession from "./subagent-control-session.js";
 import { createControlRunFixture } from "./subagent-control.fixtures.test-support.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
@@ -139,16 +140,15 @@ function expectRetained(entry: ReturnType<typeof createSubagentRunRecord>) {
   expect(loadSubagentRegistryFromSqlite().get(entry.runId)).toEqual(entry);
 }
 
-function expectError(result: unknown, message: string) {
-  expect(result).toMatchObject({ error: expect.stringContaining(message) });
-}
-
 it.each([
+  "owned",
   "legacy-owned",
   "other-controller",
   "new-generation",
   "admin-root",
-  "lifecycle",
+  "gateway",
+  "gateway-error",
+  "channel",
   "nested",
   "preaccept-revoked",
   "postaccept-revoked",
@@ -299,13 +299,41 @@ it.each([
         }
         return prepareRead();
       });
-      if (selection === "lifecycle") {
-        const result = await killSessionSubagentRuns({
+      if (selection === "gateway" || selection === "gateway-error") {
+        const parent = capture({ sessionKey: requesterSessionKey, agentId: "main" });
+        const result = await abortControlledSubagents({
           cfg: getRuntimeConfig(),
           sessionKey: requesterSessionKey,
           agentId: "main",
+          execCancellation:
+            selection === "gateway-error"
+              ? {
+                  ...parent,
+                  settle: async () => {
+                    throw new Error("Synthetic parent command cleanup failed");
+                  },
+                }
+              : parent,
         });
-        expect(result).toMatchObject({ status: "ok", killed: 0, execAborted: true });
+        expect(result).toMatchObject({
+          status: selection === "gateway-error" ? "error" : "ok",
+          killed: 0,
+          labels: [],
+          execAborted: true,
+        });
+        if (selection === "gateway-error") {
+          expect(result).toMatchObject({
+            error: expect.stringContaining("Synthetic parent command cleanup failed"),
+          });
+        }
+        execAborted = result?.execAborted === true;
+      } else if (selection === "channel") {
+        const result = await stopSubagentsForRequester({
+          cfg: getRuntimeConfig(),
+          requesterSessionKey,
+          requesterAgentId: "main",
+        });
+        expect(result).toEqual({ stopped: 0, failed: 0, execAborted: true });
         execAborted = result.execAborted === true;
       } else if (selection === "admin-root") {
         const result = await killSubagentRunAdmin({
@@ -344,9 +372,13 @@ it.each([
         if (alternate) {
           expect(injected).toBe(true);
           expectEvicted(ordinaryCommand);
-          expectError(result, "command cleanup could not be confirmed");
+          expect(result).toMatchObject({
+            error: expect.stringContaining("command cleanup could not be confirmed"),
+          });
           if (selection === "alternate-freshness-failed") {
-            expectError(result, "Synthetic freshness read failed");
+            expect(result).toMatchObject({
+              error: expect.stringContaining("Synthetic freshness read failed"),
+            });
           }
         }
         execAborted = result.execAborted === true;
@@ -380,7 +412,15 @@ it.each([
   },
 );
 
-it.each(["confirmed", "uncertain", "late-revoked-evicted", "late-owner-evicted"] as const)(
+it.each([
+  "confirmed",
+  "uncertain",
+  "failed",
+  "evicted",
+  "late-evicted",
+  "late-revoked-evicted",
+  "late-owner-evicted",
+] as const)(
   "parent cancellation reports %s command cleanup and preserves an independent service",
   async (cleanup) => {
     const requesterSessionKey = parentKey;
@@ -390,8 +430,14 @@ it.each(["confirmed", "uncertain", "late-revoked-evicted", "late-owner-evicted"]
     const storePath = await writeCommandSession(childSessionKey, sessionId);
     await runs.register(runId, storePath, {
       childSessionKey,
+      requesterSessionKey,
+      requesterAgentId: "main",
+      requesterDisplayKey: requesterSessionKey,
+      task: "Run an ordinary command and an independent service",
+      cleanup: "keep",
       collect: true,
       queued: true,
+      expectsCompletionMessage: false,
     });
     expect(await startQueuedSubagentRun(runId)).toBe(true);
     const controller = new AbortController();
@@ -414,7 +460,7 @@ it.each(["confirmed", "uncertain", "late-revoked-evicted", "late-owner-evicted"]
       },
     });
     const commands: ProcessSession[] = [];
-    const late = cleanup === "late-revoked-evicted";
+    const late = cleanup === "late-evicted" || cleanup === "late-revoked-evicted";
     const lateOwner = cleanup === "late-owner-evicted";
     const order: string[] = [];
     const requested = createDeferred();
@@ -495,7 +541,7 @@ it.each(["confirmed", "uncertain", "late-revoked-evicted", "late-owner-evicted"]
       .finally(() => {
         // Result eviction can precede the native kill owner's cleanup verdict.
         const ordinary = commands[late ? 2 : 0];
-        if ((late || lateOwner) && ordinary?.exited) {
+        if ((cleanup === "evicted" || late || lateOwner) && ordinary?.exited) {
           deleteSession(ordinary.id);
           recordEvicted = true;
           order.push("evicted");
@@ -575,7 +621,11 @@ it.each(["confirmed", "uncertain", "late-revoked-evicted", "late-owner-evicted"]
           : {}),
       });
       if (cleanup === "late-revoked-evicted") {
-        expectError(result, "Synthetic caller revoked after native cancellation acceptance");
+        expect(result).toMatchObject({
+          error: expect.stringContaining(
+            "Synthetic caller revoked after native cancellation acceptance",
+          ),
+        });
       }
       if (observation) {
         // This plan never requested cancellation; native Stop accepted it through another owner.
@@ -593,7 +643,7 @@ it.each(["confirmed", "uncertain", "late-revoked-evicted", "late-owner-evicted"]
       if (cleanup === "uncertain") {
         expect(ordinary.cleanupUncertain).toBe(true);
       }
-      if (late || lateOwner) {
+      if (cleanup === "evicted" || late || lateOwner) {
         expect(recordEvicted).toBe(true);
         expectEvicted(ordinary);
       }

@@ -1,8 +1,4 @@
 import { createServer, type RequestListener } from "node:http";
-import {
-  closeHttpServer,
-  listenLoopback,
-} from "../../test/helpers/gateway-integration-fixtures.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Context, Model } from "../llm/types.js";
@@ -67,12 +63,26 @@ export function completionChunk(text: string, model = "selected-model") {
 
 export async function startCompletionServer(listener: RequestListener) {
   const server = createServer(listener);
-  const origin = await listenLoopback(server);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.removeListener("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Missing completion fixture port");
+  }
+  const origin = `http://127.0.0.1:${address.port}`;
   return {
     origin,
     baseUrl: `${origin}/v1`,
     async [Symbol.asyncDispose]() {
-      await closeHttpServer(server);
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
     },
   };
 }

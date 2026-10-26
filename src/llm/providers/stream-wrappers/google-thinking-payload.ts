@@ -95,6 +95,10 @@ export function stripInvalidGoogleThinkingBudget(params: {
   return true;
 }
 
+function isGemma4Model(modelId: string): boolean {
+  return normalizeLowercaseStringOrEmpty(modelId).startsWith("gemma-4");
+}
+
 function mapThinkLevelToGemma4ThinkingLevel(
   thinkingLevel?: GoogleThinkingInputLevel,
 ): "MINIMAL" | "HIGH" | undefined {
@@ -145,96 +149,99 @@ export function sanitizeGoogleThinkingPayload(params: {
   }
   const payloadObj = params.payload as Record<string, unknown>;
   for (const field of ["config", "generationConfig"]) {
-    const container = payloadObj[field];
-    const modelId = params.modelId;
-    const thinkingLevel = params.thinkingLevel;
-    if (!container || typeof container !== "object") {
-      continue;
-    }
-    const configObj = container as Record<string, unknown>;
-    const thinkingConfig = configObj.thinkingConfig;
-    if (!thinkingConfig || typeof thinkingConfig !== "object") {
-      continue;
-    }
-    const thinkingConfigObj = thinkingConfig as Record<string, unknown>;
+    sanitizeGoogleThinkingConfigContainer({
+      container: payloadObj[field],
+      modelId: params.modelId,
+      thinkingLevel: params.thinkingLevel,
+    });
+  }
+}
+
+function sanitizeGoogleThinkingConfigContainer(params: {
+  container: unknown;
+  modelId?: string;
+  thinkingLevel?: GoogleThinkingInputLevel;
+}): void {
+  if (!params.container || typeof params.container !== "object") {
+    return;
+  }
+  const configObj = params.container as Record<string, unknown>;
+  const thinkingConfig = configObj.thinkingConfig;
+  if (!thinkingConfig || typeof thinkingConfig !== "object") {
+    return;
+  }
+  const thinkingConfigObj = thinkingConfig as Record<string, unknown>;
+
+  if (typeof params.modelId === "string" && isGemma4Model(params.modelId)) {
+    // Gemma 4 accepts thinkingLevel but not thinkingBudget; map legacy budget
+    // inputs before deleting the unsupported numeric field.
+    const normalizedThinkingLevel = normalizeGemma4ThinkingLevel(thinkingConfigObj.thinkingLevel);
+    const explicitMappedLevel = mapThinkLevelToGemma4ThinkingLevel(params.thinkingLevel);
+    const disabledViaBudget =
+      typeof thinkingConfigObj.thinkingBudget === "number" && thinkingConfigObj.thinkingBudget <= 0;
+    const hadThinkingBudget = thinkingConfigObj.thinkingBudget !== undefined;
+    delete thinkingConfigObj.thinkingBudget;
 
     if (
-      typeof modelId === "string" &&
-      normalizeLowercaseStringOrEmpty(modelId).startsWith("gemma-4")
+      params.thinkingLevel === "off" ||
+      (disabledViaBudget && explicitMappedLevel === undefined && !normalizedThinkingLevel)
     ) {
-      // Gemma 4 accepts thinkingLevel but not thinkingBudget; map legacy budget
-      // inputs before deleting the unsupported numeric field.
-      const normalizedThinkingLevel = normalizeGemma4ThinkingLevel(thinkingConfigObj.thinkingLevel);
-      const explicitMappedLevel = mapThinkLevelToGemma4ThinkingLevel(thinkingLevel);
-      const disabledViaBudget =
-        typeof thinkingConfigObj.thinkingBudget === "number" &&
-        thinkingConfigObj.thinkingBudget <= 0;
-      const hadThinkingBudget = thinkingConfigObj.thinkingBudget !== undefined;
-      delete thinkingConfigObj.thinkingBudget;
-
-      if (
-        thinkingLevel === "off" ||
-        (disabledViaBudget && explicitMappedLevel === undefined && !normalizedThinkingLevel)
-      ) {
-        delete thinkingConfigObj.thinkingLevel;
-        if (Object.keys(thinkingConfigObj).length === 0) {
-          delete configObj.thinkingConfig;
-        }
-        continue;
+      delete thinkingConfigObj.thinkingLevel;
+      if (Object.keys(thinkingConfigObj).length === 0) {
+        delete configObj.thinkingConfig;
       }
+      return;
+    }
 
-      const mappedLevel =
-        explicitMappedLevel ??
-        normalizedThinkingLevel ??
-        (hadThinkingBudget ? "MINIMAL" : undefined);
+    const mappedLevel =
+      explicitMappedLevel ?? normalizedThinkingLevel ?? (hadThinkingBudget ? "MINIMAL" : undefined);
 
+    if (mappedLevel) {
+      thinkingConfigObj.thinkingLevel = mappedLevel;
+    }
+    return;
+  }
+
+  const thinkingBudget = thinkingConfigObj.thinkingBudget;
+
+  if (
+    params.thinkingLevel === "adaptive" &&
+    typeof params.modelId === "string" &&
+    isGoogleGemini25ThinkingBudgetModel(params.modelId)
+  ) {
+    delete thinkingConfigObj.thinkingLevel;
+    thinkingConfigObj.thinkingBudget = -1;
+    return;
+  }
+
+  if (typeof params.modelId === "string" && isGoogleGemini3ThinkingLevelModel(params.modelId)) {
+    delete thinkingConfigObj.thinkingBudget;
+    if (params.thinkingLevel === "adaptive") {
+      // Gemini 3 and 4 adaptive mode omits both controls so the provider chooses.
+      delete thinkingConfigObj.thinkingLevel;
+    } else {
+      const mappedLevel = resolveGoogleGemini3ThinkingLevel({
+        modelId: params.modelId,
+        thinkingLevel: params.thinkingLevel,
+        thinkingBudget: typeof thinkingBudget === "number" ? thinkingBudget : undefined,
+      });
       if (mappedLevel) {
         thinkingConfigObj.thinkingLevel = mappedLevel;
       }
-      continue;
     }
-
-    const thinkingBudget = thinkingConfigObj.thinkingBudget;
-
-    if (
-      thinkingLevel === "adaptive" &&
-      typeof modelId === "string" &&
-      isGoogleGemini25ThinkingBudgetModel(modelId)
-    ) {
-      delete thinkingConfigObj.thinkingLevel;
-      thinkingConfigObj.thinkingBudget = -1;
-      continue;
+  } else if (
+    !stripInvalidGoogleThinkingBudget({
+      thinkingConfig: thinkingConfigObj,
+      modelId: params.modelId,
+    })
+  ) {
+    if (typeof thinkingBudget !== "number" || thinkingBudget >= 0) {
+      return;
     }
-
-    if (typeof modelId === "string" && isGoogleGemini3ThinkingLevelModel(modelId)) {
-      delete thinkingConfigObj.thinkingBudget;
-      if (thinkingLevel === "adaptive") {
-        // Gemini 3 and 4 adaptive mode omits both controls so the provider chooses.
-        delete thinkingConfigObj.thinkingLevel;
-      } else {
-        const mappedLevel = resolveGoogleGemini3ThinkingLevel({
-          modelId,
-          thinkingLevel,
-          thinkingBudget: typeof thinkingBudget === "number" ? thinkingBudget : undefined,
-        });
-        if (mappedLevel) {
-          thinkingConfigObj.thinkingLevel = mappedLevel;
-        }
-      }
-    } else if (
-      !stripInvalidGoogleThinkingBudget({
-        thinkingConfig: thinkingConfigObj,
-        modelId,
-      })
-    ) {
-      if (typeof thinkingBudget !== "number" || thinkingBudget >= 0) {
-        continue;
-      }
-      // Negative budgets from the shared runtime are invalid on Google-compatible backends.
-      delete thinkingConfigObj.thinkingBudget;
-    }
-    if (Object.keys(thinkingConfigObj).length === 0) {
-      delete configObj.thinkingConfig;
-    }
+    // Negative budgets from the shared runtime are invalid on Google-compatible backends.
+    delete thinkingConfigObj.thinkingBudget;
+  }
+  if (Object.keys(thinkingConfigObj).length === 0) {
+    delete configObj.thinkingConfig;
   }
 }

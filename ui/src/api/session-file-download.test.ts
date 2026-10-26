@@ -55,9 +55,7 @@ it.each([
         filename: "report.md",
         url: `${resourceBasePath}/api/artifacts/download/connection/ticket`,
       });
-      expect(request).toHaveBeenCalledWith("sessions.files.download", params, {
-        signal: expect.any(AbortSignal),
-      });
+      expect(request).toHaveBeenCalledWith("sessions.files.download", params);
     }
   },
 );

@@ -4,8 +4,11 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
-import { getSubagentChildControllerSessionKey } from "../agents/subagents/registry/subagent-registry-read.js";
+import { resolveSubagentChildAuthority } from "../agents/subagents/registry/subagent-child-owner-match.js";
+import { getLatestLiveSubagentRunByChildSessionKey } from "../agents/subagents/registry/subagent-registry-read.js";
 import {
+  isSubagentRunLive,
+  isSubagentRunQueued,
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   shouldKeepSubagentRunChildLink,
 } from "../agents/subagents/registry/subagent-run-liveness.js";
@@ -171,14 +174,19 @@ export function resolveSessionChildController(
   entry: SessionEntry,
   parentSessionKey?: string,
 ): string | undefined {
-  if (
-    parentSessionKey &&
-    parentSessionKey !== entry.parentSessionKey &&
-    parentSessionKey !== entry.spawnedBy
-  ) {
+  if (parentSessionKey && ![entry.parentSessionKey, entry.spawnedBy].includes(parentSessionKey)) {
     return undefined;
   }
-  return getSubagentChildControllerSessionKey(key, entry);
+  const run = getLatestLiveSubagentRunByChildSessionKey(
+    key,
+    (candidate) =>
+      (isSubagentRunLive(candidate) || isSubagentRunQueued(candidate)) &&
+      resolveSubagentChildAuthority(candidate, entry).status !== "mismatch",
+  );
+  return (
+    normalizeOptionalString(run?.controllerSessionKey) ??
+    normalizeOptionalString(run?.requesterSessionKey)
+  );
 }
 
 /** Promotion cuts navigation activity, not a live controller's ownership. */

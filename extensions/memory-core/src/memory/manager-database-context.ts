@@ -479,7 +479,7 @@ export class MemoryIndexDatabase {
         const worker = await this.getPublicationWorker();
         return await operation(worker.store);
       } catch (error) {
-        const [cleanup] = await Promise.allSettled([this.retirePublicationWorker()]);
+        const [cleanup] = await Promise.allSettled([this.closePublicationWorker()]);
         if (cleanup.status === "rejected") {
           throw new AggregateError(
             [error, cleanup.reason],
@@ -490,8 +490,9 @@ export class MemoryIndexDatabase {
         throw error;
       }
     };
-    // Published readers also borrow this worker; retirement must not revoke an accepted read.
-    return this.withPrivateAccess(run, { nativeWriter: true, reentrant: true });
+    return this.isShadow
+      ? this.withPrivateAccess(run, { nativeWriter: true, reentrant: true })
+      : run();
   }
 
   private runPublication<T>(
@@ -696,19 +697,10 @@ export class MemoryIndexDatabase {
     );
   }
 
-  private async retirePublicationWorker(): Promise<void> {
+  async closePublicationWorker(): Promise<void> {
     const worker = await this.publicationWorker;
     await worker?.store.close();
     this.publicationWorker = undefined;
-  }
-
-  closePublicationWorker(): Promise<void> {
-    return runQueuedStoreWrite({
-      queues: this.privateQueues,
-      storePath: this.shadow?.path ?? "memory-index",
-      label: "memory publication worker retirement",
-      fn: () => this.retirePublicationWorker(),
-    });
   }
 
   async withPublicationGeneration(run: () => Promise<void>): Promise<void> {

@@ -18,6 +18,7 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
   const runtimeConfig = page.inventories.runtimeConfig.read();
   const cron = page.cron();
   const agentsList = page.inventories.agents.read().agentsList;
+  const catalogModels = page.cronModelSuggestions();
   let agentSuggestions: string[] = [];
   let modelSuggestions: string[] = [];
   let timezoneSuggestions: string[] = [];
@@ -53,7 +54,7 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
       ),
     ]);
     modelSuggestions = normalizeSortedUniqueTrimmedStringList([
-      ...page.cronModelSuggestions(),
+      ...catalogModels,
       ...resolveConfiguredCronModelSuggestions(configValue),
       ...cron.cronJobs.map((job) => {
         const payload = job.payload;

@@ -428,7 +428,7 @@ export function createModelProviderLogin(options: {
         const selectingModel = picker.allowSetup && selected.requiresSetup;
         loginMode = selectingModel ? "activate" : selected.requiresSetup ? "access" : "auth";
         refreshWarning = null;
-        runner.prepareSignIn(selected.kind, selected.label, selected.brandId);
+        runner.prepareSignIn(selected.kind, selected.label);
         void run(() =>
           runner.start(
             selected.id,

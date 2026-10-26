@@ -2,14 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../../../test/helpers/promise.js";
-import { createEnteredGate } from "../../../agents/entered-gate.test-support.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -201,15 +199,15 @@ async function createBrowserConsult(publicOnly = false) {
   await fixture.create({ model: "gpt-live-test" });
   expectBrowserResponse(fixture.respond);
   ownedVoiceSessionId = fixture.respond.mock.calls[0]?.[1].voiceSessionId as string;
-  const consult = expectDefined(
-    fixture.createBrowserSession.mock.calls[0]?.[0].runAgentConsult,
-    "Expected a Gateway-owned browser consult callback",
-  );
+  const consult = fixture.createBrowserSession.mock.calls[0]?.[0].runAgentConsult;
+  if (!consult) {
+    throw new Error("Expected a Gateway-owned browser consult callback");
+  }
   return { ...fixture, consult };
 }
 
 function expectErrorResponse(respond: ReturnType<typeof vi.fn>, message: unknown) {
-  expect(respond).toHaveBeenLastCalledWith(false, undefined, expect.objectContaining({ message }));
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ message }));
 }
 
 function expectBrowserResponse(
@@ -296,11 +294,13 @@ function toolBrowser(dynamicVoice = false) {
     }
     return ownedVoiceSessionId;
   };
-  const control = (index = 0) =>
-    expectDefined(
-      createBrowserSession.mock.calls[index]?.[0].gatewayControl,
-      "Expected Gateway-owned function-tool control",
-    );
+  const control = (index = 0) => {
+    const value = createBrowserSession.mock.calls[index]?.[0].gatewayControl;
+    if (!value) {
+      throw new Error("Expected Gateway-owned function-tool control");
+    }
+    return value;
+  };
   return { ...fixture, createBrowserSession, create, attempt, control };
 }
 
@@ -448,7 +448,8 @@ it("keeps an accepted consult admitted through offer completion and suspension",
   signal,
 }) => {
   const { consult } = await createBrowserConsult();
-  const gate = createEnteredGate();
+  const embeddedEntered = createDeferred();
+  const beforeEnqueue = createDeferred();
   const enqueue = voiceMocks.runEmbeddedAgent.getMockImplementation()!;
   voiceMocks.runEmbeddedAgent.mockImplementationOnce(async (params) => {
     expect(getSessionControllerWorkCount()).toBe(1);
@@ -457,7 +458,8 @@ it("keeps an accepted consult admitted through offer completion and suspension",
       sessionKey,
       voiceSessionId: ownedVoiceSessionId,
     });
-    await gate.wait();
+    embeddedEntered.resolve();
+    await beforeEnqueue.promise;
     return await enqueue(params);
   });
   let work: Promise<{ text: string }> | undefined;
@@ -469,7 +471,7 @@ it("keeps an accepted consult admitted through offer completion and suspension",
       );
       await withinTest(
         awaitGateBeforeSettlement(
-          gate.entered,
+          embeddedEntered.promise,
           work,
           "Talk consult settled before entering the embedded run",
         ),
@@ -480,13 +482,13 @@ it("keeps an accepted consult admitted through offer completion and suspension",
     expect(getSessionControllerWorkCount()).toBe(1);
     suspension = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspension).not.toBeNull();
-    gate.release();
+    beforeEnqueue.resolve();
     await expect(work).resolves.toEqual({ text: "fixture status" });
     expect(getSessionControllerWorkCount()).toBe(0);
     const [run] = voiceMocks.runEmbeddedAgent.mock.calls[0]!;
     expect(resolveClientVoiceRunBinding(run.runId)).toBeUndefined();
   } finally {
-    gate.release();
+    beforeEnqueue.resolve();
     await work?.catch(() => undefined);
     suspension?.rollback();
   }
@@ -552,8 +554,12 @@ it.each([
 ])(
   "keeps accepted work while runtime loading spans $ending (public: $publicOnly)",
   async ({ ending, publicOnly }) => {
-    const gate = createEnteredGate();
-    voiceMocks.executionReady.mockImplementationOnce(gate.wait);
+    const loading = createDeferred();
+    const resume = createDeferred();
+    voiceMocks.executionReady.mockImplementationOnce(async () => {
+      loading.resolve();
+      await resume.promise;
+    });
     const { consult, clients, client, context, cancelBrowserSession } =
       await createBrowserConsult(publicOnly);
     const accepted = consult({ prompt: "Read the project status" });
@@ -562,7 +568,7 @@ it.each([
       (error: unknown) => ({ error }),
     );
     try {
-      await awaitGateBeforeSettlement(gate.entered, accepted, "Consult settled before loading");
+      await awaitGateBeforeSettlement(loading.promise, accepted, "Consult settled before loading");
       expect(rpcSourceTesting.size).toBe(1);
       expect(voiceMocks.runEmbeddedAgent).not.toHaveBeenCalled();
       if (ending === "close") {
@@ -573,7 +579,7 @@ it.each([
       }
       await expect(consult({ prompt: "Start another task" })).rejects.toThrow(/closed|stopped/i);
     } finally {
-      gate.release();
+      resume.resolve();
     }
     expect(await settled).toEqual({ result: { text: "fixture status" } });
     expect(voiceMocks.runEmbeddedAgent).toHaveBeenCalledOnce();
@@ -629,7 +635,11 @@ it("keeps the active selection when a pending same-id browser candidate fails", 
   const control = createBrowserSession.mock.calls[0]?.[0].gatewayControl;
   expect(Boolean(control)).toBe(true);
   await create({ voiceSessionId });
-  expectErrorResponse(respond, expect.stringContaining("Candidate rejected"));
+  expect(respond).toHaveBeenLastCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({ message: expect.stringContaining("Candidate rejected") }),
+  );
   expect(resolveVoice(client.connId, voiceSessionId)).toBe(original);
   expect(() => control?.bindControl?.({ sendUserMessage: vi.fn() })).not.toThrow();
 });

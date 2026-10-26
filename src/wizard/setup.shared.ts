@@ -191,15 +191,14 @@ export function createWizardInferenceConfigTarget(
     options: SetupInferenceConfigWriteOptions,
     baseSnapshot?: ConfigFileSnapshot,
   ) => {
-    const { snapshot, nextConfig, persistedSourceConfig } = await commit(config, {
+    const { snapshot, nextConfig } = await commit(config, {
       baseSnapshot,
       writeOptions: options.writeOptions,
     });
-    // Undo what reached disk: the write pipeline adds metadata the candidate lacks.
     options.captureUndo(
       captureSetupInferenceFileUndo(
         { ...snapshot, sourceConfig: stripPendingPluginInstallRecords(snapshot.sourceConfig) },
-        stripPendingPluginInstallRecords(persistedSourceConfig ?? nextConfig),
+        nextConfig,
       ),
     );
     return nextConfig;

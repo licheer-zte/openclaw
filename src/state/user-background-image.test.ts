@@ -6,8 +6,15 @@ import { USER_BACKGROUND_MAX_INPUT_BYTES } from "../../packages/gateway-protocol
 const workers = vi.hoisted(() => [] as Worker[]);
 vi.mock("node:worker_threads", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:worker_threads")>();
-  const { observeWorkerConstructors } = await import("../../test/helpers/worker-observer.js");
-  return observeWorkerConstructors(actual, workers);
+  return {
+    ...actual,
+    Worker: class extends actual.Worker {
+      constructor(...args: ConstructorParameters<typeof actual.Worker>) {
+        super(...args);
+        workers.push(this);
+      }
+    },
+  };
 });
 import { normalizeUserBackgroundImage } from "./user-background-image.js";
 afterAll(async () => {

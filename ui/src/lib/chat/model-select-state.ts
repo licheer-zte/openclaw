@@ -21,14 +21,12 @@ import {
 registerModelControlsEnglish();
 
 type ChatModelSelectStateInput = {
-  activeSession?: Pick<GatewaySessionRow, "model" | "modelProvider" | "modelOverrideSource">;
+  activeSession?: GatewaySessionRow;
   agentDefaultModel?: string;
   chatModelCatalog: ModelCatalogEntry[];
   modelOverrides: Readonly<Record<string, string | null | undefined>>;
   sessionKey: string;
-  sessionsResult: {
-    defaults: Partial<Pick<SessionsListResult["defaults"], "model" | "modelProvider">>;
-  } | null;
+  sessionsResult: SessionsListResult | null;
   modelSelectionPolicy?: ModelCatalogResult["modelSelectionPolicy"];
   catalogRetired?: boolean;
   catalogInitialized?: boolean;
@@ -60,11 +58,6 @@ export type ChatFastModeSelectState = {
   /** True: offered; false: model-restricted; undefined: capability not confirmed. */
   ultrafastSupported?: boolean;
 };
-
-export type ChatFastModePresentation = Pick<
-  ChatFastModeSelectState,
-  "active" | "currentOverride" | "label" | "supported"
->;
 
 export type ChatFastModeTarget = Pick<
   GatewaySessionRow,
@@ -261,35 +254,15 @@ export function prepareChatModelSelectCatalog(catalog: ModelCatalogEntry[]) {
   return { displayLookup, options: buildChatModelOptions(pickerCatalog, displayLookup) };
 }
 
-export function resolveChatModelSelectValues(
-  state: ChatModelSelectStateInput,
-  preparedOptions?: ChatModelSelectOption[],
-) {
-  let options = preparedOptions;
-  const currentOverride = resolveChatModelOverrideValue(state);
-  const defaultModel = resolveDefaultModelValue(state);
-  if (!options) {
-    const currentKey = normalizeChatModelAvailabilityKey(currentOverride);
-    const defaultKey = normalizeChatModelAvailabilityKey(defaultModel);
-    // Only these identities can change the returned values. Keep their aliases
-    // together so the existing availability and canonical-provider ordering applies.
-    const candidates = state.chatModelCatalog.filter((entry) => {
-      const key = catalogModelAvailabilityKey(entry);
-      return key === currentKey || key === defaultKey;
-    });
-    options = prepareChatModelSelectCatalog(candidates).options;
-  }
-  return {
-    currentOverride: resolveCatalogChatModelValue(currentOverride, options),
-    defaultModel: resolveCatalogChatModelValue(defaultModel, options),
-  };
-}
-
 export function resolveChatModelSelectState(
   state: ChatModelSelectStateInput,
   { displayLookup, options } = prepareChatModelSelectCatalog(state.chatModelCatalog),
 ) {
-  const { currentOverride, defaultModel } = resolveChatModelSelectValues(state, options);
+  const currentOverride = resolveCatalogChatModelValue(
+    resolveChatModelOverrideValue(state),
+    options,
+  );
+  const defaultModel = resolveCatalogChatModelValue(resolveDefaultModelValue(state), options);
   const defaultLabel = formatCatalogChatModelDisplayFromLookup(defaultModel, displayLookup);
 
   return {
@@ -408,14 +381,10 @@ export function resolveChatFastModeSelectState(input: {
   catalog: ModelCatalogEntry[];
   connected: boolean;
   currentModelOverride: string;
-  fastModeTarget?: Omit<ChatFastModeTarget, "agentRuntime"> & {
-    agentRuntime?: Pick<NonNullable<ChatFastModeTarget["agentRuntime"]>, "id">;
-  };
+  fastModeTarget?: ChatFastModeTarget;
   gatewayAvailable: boolean;
   loading: boolean;
-  sessionsResult: {
-    defaults: Partial<Pick<SessionsListResult["defaults"], "model" | "modelProvider">>;
-  } | null;
+  sessionsResult: SessionsListResult | null;
 }): ChatFastModeSelectState {
   const activeRow = input.fastModeTarget;
   const activeProvider = normalizeChatModelProviderId(activeRow?.modelProvider ?? "") || null;

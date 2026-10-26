@@ -7,11 +7,6 @@ export const tuiPtyRuntimeEntrypoints = {
     sourceWorkerName: "../cli/tui-cli",
     distWorkerPath: "cli/tui-cli.js",
   },
-  processLineage: {
-    currentModuleUrl,
-    sourceWorkerName: "../process/supervisor/inherited-process-lineage",
-    distWorkerPath: "process/supervisor/inherited-process-lineage.js",
-  },
   tui: {
     currentModuleUrl,
     sourceWorkerName: "tui",

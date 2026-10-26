@@ -10,44 +10,16 @@ import {
   subscribeSnapshotInvalidation,
 } from "./session-snapshot-invalidation-events.ts";
 
-type PreparedSnapshotRead = ReturnType<
-  typeof import("./session-snapshot-store.ts").readPrewarmedChatSnapshot
->;
-
 type PrewarmedSnapshot = {
   cacheKey: string;
   cancelled: boolean;
   promise: Promise<unknown>;
-  prepared?: {
-    promise: PreparedSnapshotRead;
-    snapshot?: Awaited<PreparedSnapshotRead>;
-  };
 };
 
 let pending: PrewarmedSnapshot | undefined;
-export let prewarmedHistoryStateValidator:
-  | typeof import("../../lib/protocol-validators.generated/history-state.js").isChatHistoryState
-  | undefined;
-
-export async function loadChatHistoryStateValidator() {
-  const { isChatHistoryState } =
-    await import("../../lib/protocol-validators.generated/history-state.js");
-  prewarmedHistoryStateValidator = isChatHistoryState;
-  return isChatHistoryState;
-}
 
 export function peekPrewarmedChatSnapshot(): PrewarmedSnapshot | undefined {
   return pending;
-}
-
-export function readSharedPrewarm(entry: PrewarmedSnapshot, read: () => PreparedSnapshotRead) {
-  const prepared: NonNullable<PrewarmedSnapshot["prepared"]> = (entry.prepared ??= {
-    promise: read().then((snapshot) => {
-      prepared.snapshot = snapshot;
-      return snapshot;
-    }),
-  });
-  return prepared;
 }
 
 export function discardPrewarmedChatSnapshot(cacheKey?: string): void {
@@ -71,15 +43,10 @@ export async function prewarmChatSnapshot(cacheKey: string): Promise<void> {
       .catch(() => undefined),
   };
   pending = entry;
-  // Validate once before mount; dispatch reads facts without adopting display rows.
+  // Load alongside storage so a warm transcript can send its cursor with connect.
+  // Keep board restoration independent of this optional metadata validator.
   try {
-    const [{ readPrewarmedChatSnapshot }] = await Promise.all([
-      import("./session-snapshot-store.ts"),
-      loadChatHistoryStateValidator(),
-    ]);
-    if (pending === entry) {
-      await readPrewarmedChatSnapshot(cacheKey);
-    }
+    await import("../../lib/protocol-validators.generated/history-state.js");
   } catch {}
 }
 

@@ -1,5 +1,22 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
+type ExecApprovalResult =
+  | {
+      kind: "denied" | "finished" | "outcome-unknown" | "not-dispatched";
+      raw: string;
+      metadata: string;
+      body: string;
+    }
+  | {
+      kind: "completed";
+      raw: string;
+      body: string;
+    }
+  | {
+      kind: "other";
+      raw: string;
+    };
+
 const EXEC_COMPLETED_RE = /^exec completed:\s*([\s\S]*)$/i;
 const EXEC_METADATA_PREFIXES = [
   ["denied", "exec denied (", ":"],
@@ -61,10 +78,10 @@ function parseExecApprovalResultWithMetadata(
   };
 }
 
-export function parseExecApprovalResultText(resultText: string) {
+export function parseExecApprovalResultText(resultText: string): ExecApprovalResult {
   const raw = resultText.trim();
   if (!raw) {
-    return { kind: "other" as const, raw };
+    return { kind: "other", raw };
   }
 
   // Only the fixed wrapper prefix is case-insensitive, never the command output.
@@ -72,20 +89,20 @@ export function parseExecApprovalResultText(resultText: string) {
   for (const [kind, prefix, separator] of EXEC_METADATA_PREFIXES) {
     if (normalizedPrefix.startsWith(prefix)) {
       const result = parseExecApprovalResultWithMetadata(raw, prefix.length, separator);
-      return result ? { kind, raw, ...result } : { kind: "other" as const, raw };
+      return result ? { kind, raw, ...result } : { kind: "other", raw };
     }
   }
 
   const completedMatch = EXEC_COMPLETED_RE.exec(raw);
   if (completedMatch) {
     return {
-      kind: "completed" as const,
+      kind: "completed",
       raw,
       body: completedMatch[1]?.trim() ?? "",
     };
   }
 
-  return { kind: "other" as const, raw };
+  return { kind: "other", raw };
 }
 
 export function isExecDeniedResultText(resultText: string): boolean {

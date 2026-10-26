@@ -15,6 +15,7 @@ import {
   gatewayServiceMock,
   healthCommandMock,
   installGatewayDaemonNonInteractiveMock,
+  gatewayOnboardConfigSnapshotMock as readConfigFileSnapshotMock,
   readLastGatewayErrorLineMock,
   readTestConfig,
   resolveTestConfigPath,
@@ -64,16 +65,6 @@ type FailureOutput = {
 
 describe("onboard (non-interactive): gateway and remote auth", () => {
   const { withStateDir } = useGatewayOnboardTestHarness("openclaw-onboard-");
-  const unreachable = (detail = "connect ECONNREFUSED 127.0.0.1:18789") => {
-    gatewayReachableState.mock = vi.fn(async () => ({ ok: false, detail }));
-  };
-  async function registeredSecret() {
-    const secret = "qa-onboarding-health-secret";
-    const { registerSecretValueForRedaction } =
-      await import("../logging/secret-redaction-registry.js");
-    registerSecretValueForRedaction(secret);
-    return secret;
-  }
 
   async function jsonFailure(
     stateDir: string,
@@ -124,7 +115,10 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
   it("uses the setup phase's Fix hint in human and JSON output", async () => {
     for (const json of [false, true]) {
       await withStateDir("state-phase-recovery-", async (stateDir) => {
-        unreachable("connect ECONNREFUSED 127.0.0.1:18997");
+        gatewayReachableState.mock = vi.fn(async () => ({
+          ok: false,
+          detail: "connect ECONNREFUSED 127.0.0.1:18997",
+        }));
         const emitted = await captureFailure(stateDir, json, { installDaemon: undefined });
         const hints = json
           ? (JSON.parse(emitted) as { hints: string[] }).hints
@@ -149,41 +143,46 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
   it("keeps container precedence on every recovery command in human and JSON output", async () => {
     const env = { OPENCLAW_PROFILE: "work", OPENCLAW_CONTAINER_HINT: "preview" };
-    type Recovery = {
-      detail?: string;
-      loaded?: boolean;
-      runtimeStatus?: string;
-      lastError?: string;
-      json?: boolean;
-    };
-    const recovery = (commands: string[], overrides: Recovery = {}) => ({
-      detail: "connect ECONNREFUSED",
-      loaded: true,
-      runtimeStatus: "running",
-      lastError: "",
-      json: true,
-      commands,
-      ...overrides,
-    });
     const cases = [
-      recovery(["doctor --fix"], { detail: "unauthorized: invalid token", json: false }),
-      recovery(["doctor --fix"], { detail: "Cannot find module sqlite-vec" }),
-      recovery(["doctor --fix"], {
+      {
+        detail: "unauthorized: invalid token",
+        commands: ["doctor --fix"],
+        json: false,
+      },
+      {
+        detail: "Cannot find module sqlite-vec",
+        commands: ["doctor --fix"],
+      },
+      {
+        detail: "connect ECONNREFUSED",
         lastError: "Cannot find package '@openclaw/example' imported from /app/plugin.mjs",
-      }),
-      recovery(["gateway install --force"], { loaded: false }),
-      recovery(["gateway restart"], { runtimeStatus: "stopped" }),
-      recovery(["gateway status --deep"], {
+        commands: ["doctor --fix"],
+      },
+      {
+        detail: "connect ECONNREFUSED",
+        loaded: false,
+        commands: ["gateway install --force"],
+      },
+      {
+        detail: "connect ECONNREFUSED",
+        runtimeStatus: "stopped",
+        commands: ["gateway restart"],
+      },
+      {
         detail: "startup timed out",
         lastError: "configuration parse failed",
-      }),
-      recovery(["gateway run", "gateway restart"]),
+        commands: ["gateway status --deep"],
+      },
+      {
+        detail: "connect ECONNREFUSED",
+        commands: ["gateway run", "gateway restart"],
+      },
     ];
 
     await withEnvAsync(env, async () => {
       for (const { detail, loaded, runtimeStatus, lastError, commands, json = true } of cases) {
         await withStateDir("state-container-recovery-", async (stateDir) => {
-          unreachable(detail);
+          gatewayReachableState.mock = vi.fn(async () => ({ ok: false, detail }));
           gatewayServiceMock.isLoaded.mockResolvedValueOnce(loaded ?? true);
           gatewayServiceMock.readRuntime.mockResolvedValueOnce({
             status: runtimeStatus ?? "running",
@@ -200,6 +199,45 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           }
         });
       }
+    });
+  });
+
+  it("rejects invalid existing config without writes and reports JSON failure", async () => {
+    await withStateDir("state-invalid-config-", async (stateDir) => {
+      const snapshot = await readConfigFileSnapshotMock();
+      readConfigFileSnapshotMock.mockResolvedValueOnce({
+        ...snapshot,
+        exists: true,
+        valid: false,
+        issues: [{ path: "gateway.port", message: "invalid" }],
+      });
+      const output = vi.fn();
+      const error = vi.fn();
+      const message =
+        "Config invalid. Run `openclaw doctor --fix` to apply supported repairs, then re-run setup.";
+      await expect(
+        setupLocal(
+          stateDir,
+          { json: true, gatewayBind: "loopback" },
+          {
+            log: output,
+            error,
+            exit: (code) => {
+              throw new Error(`exit:${code}`);
+            },
+          },
+        ),
+      ).rejects.toThrow("exit:1");
+      expect(error).toHaveBeenCalledWith(message);
+      expect(output).toHaveBeenCalledOnce();
+      expect(JSON.parse(String(output.mock.calls[0]?.[0]))).toEqual({
+        ok: false,
+        error: { type: "cli_error", message },
+        phase: "options",
+        message,
+      });
+      expect(capturedReplaceConfigFileCalls).toHaveLength(0);
+      expect(ensureWorkspaceAndSessionsMock).not.toHaveBeenCalled();
     });
   });
 
@@ -265,68 +303,68 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
-  const url = "wss://gateway.example.test";
-  const password = "replacement-password";
-  const tokenRef = { source: "env", provider: "default", id: "OLD_REMOTE_TOKEN" } as const;
-  const passwordRef = {
-    source: "env",
-    provider: "default",
-    id: "EXISTING_REMOTE_PASSWORD",
-  } as const;
-  const trusted = { url, tlsFingerprint: "sha256:test-fingerprint" };
-  const edgeAuth = { "X-Edge-Auth": "existing-edge-secret" };
-  type Remote = NonNullable<NonNullable<OpenClawConfig["gateway"]>["remote"]>;
-  const remoteConfig = (remote: Remote): OpenClawConfig => ({
-    gateway: { mode: "remote", remote },
-  });
+  const remoteCredentialUrl = "wss://gateway.example.test";
+  const remoteTokenRef = { source: "env", provider: "default", id: "OLD_REMOTE_TOKEN" } as const;
+  const remoteTlsFingerprint = "sha256:test-fingerprint";
+  const remoteEdgeAuth = { "X-Edge-Auth": "existing-edge-secret" };
+  const remoteCredentialConfig = (
+    remote: NonNullable<OpenClawConfig["gateway"]>["remote"],
+  ): OpenClawConfig => ({ gateway: { mode: "remote", remote } });
 
-  async function checkRemote(
-    options: Partial<OnboardOptions>,
-    base: OpenClawConfig,
-    expected: Remote,
-    sshPort?: number,
-  ) {
+  async function setupRemoteConfig(opts: Partial<OnboardOptions>, baseConfig: OpenClawConfig) {
+    let config: OpenClawConfig = {};
     await withStateDir("state-remote-credentials-", async () => {
-      testConfigStore.set(resolveTestConfigPath(), base);
+      testConfigStore.set(resolveTestConfigPath(), baseConfig);
       await runNonInteractiveSetup(
-        { nonInteractive: true, mode: "remote", remoteUrl: url, skipHooks: true, ...options },
+        {
+          nonInteractive: true,
+          mode: "remote",
+          remoteUrl: remoteCredentialUrl,
+          skipHooks: true,
+          ...opts,
+        },
         runtime,
       );
-      const result = readTestConfig();
-      expect(result.gateway?.mode).toBe("remote");
-      expect(result.agents).toEqual(base.agents);
-      expect(result.bindings).toEqual(base.bindings);
-      expect(result.hooks).toEqual(base.hooks);
+      config = readTestConfig();
+      expect(config.gateway?.mode).toBe("remote");
+      expect(config.hooks).toEqual(baseConfig.hooks);
       expect(capturedReplaceConfigFileCalls.at(-1)?.writeOptions?.allowConfigSizeDrop).toBe(false);
-      if (sshPort === undefined) {
-        expect(result.gateway?.remote).toEqual(expected);
-      } else {
-        expect(result.gateway?.remote).toMatchObject(expected);
-        expect(resolveGatewaySshRemotePort(result)).toBe(sshPort);
-      }
     });
+    return config;
   }
 
-  type CredentialCase = {
+  const trustedRemote = { url: remoteCredentialUrl, tlsFingerprint: remoteTlsFingerprint };
+  const password = "replacement-password";
+  type RemoteCase = {
     name: string;
-    options: Partial<OnboardOptions>;
-    saved?: Remote;
-    expected: Remote;
+    options?: Partial<OnboardOptions>;
+    config?: OpenClawConfig;
+    expected: NonNullable<NonNullable<OpenClawConfig["gateway"]>["remote"]>;
+    env?: Record<string, string>;
+    sshPort?: number;
   };
-  it.each<CredentialCase>([
-    { name: "fresh password", options: { remotePassword: password }, expected: { url, password } },
+  const remoteCases: RemoteCase[] = [
     {
-      name: "password replaces same-endpoint token",
+      name: "fresh password",
       options: { remotePassword: password },
-      saved: { ...trusted, token: tokenRef, edgeAuth },
-      expected: { ...trusted, password, edgeAuth },
+      expected: { url: remoteCredentialUrl, password },
     },
     {
-      name: "password clears another endpoint's credentials and transport trust",
+      name: "password replacing a same-endpoint token",
       options: { remotePassword: password },
-      saved: {
+      config: remoteCredentialConfig({
+        ...trustedRemote,
+        token: remoteTokenRef,
+        edgeAuth: remoteEdgeAuth,
+      }),
+      expected: { ...trustedRemote, password, edgeAuth: remoteEdgeAuth },
+    },
+    {
+      name: "password replacing credentials and trust from another endpoint",
+      options: { remotePassword: password },
+      config: remoteCredentialConfig({
         url: "wss://old-gateway.example.test",
-        token: tokenRef,
+        token: remoteTokenRef,
         password: { source: "env", provider: "default", id: "OLD_REMOTE_PASSWORD" },
         tlsFingerprint: "sha256:old-fingerprint",
         sshTarget: "operator@old-gateway.example.test",
@@ -334,107 +372,127 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         sshIdentity: "/tmp/old-identity",
         sshHostKeyPolicy: "openssh",
         edgeAuth: { "X-Edge-Auth": "old-edge-secret" },
-      },
-      expected: { url, password },
+      }),
+      expected: { url: remoteCredentialUrl, password },
     },
-    {
-      name: "token replaces same-endpoint password",
-      options: { remoteToken: "replacement-token" },
-      saved: { ...trusted, password: "old-password" },
-      expected: { ...trusted, token: "replacement-token" },
-    },
-    {
-      name: "query change clears credentials and transport trust",
-      options: { remoteUrl: `${url}?account=work` },
-      saved: {
-        ...trusted,
-        token: tokenRef,
-        password: "existing-password",
-        transport: "ssh",
-        sshTarget: "operator@gateway.example.test",
-      },
-      expected: { url: `${url}?account=work` },
-    },
-  ])("$name", ({ options, saved, expected }) =>
-    checkRemote(options, saved ? remoteConfig(saved) : {}, expected),
-  );
-
-  it.each([
-    ["remoteToken", "token", "OPENCLAW_GATEWAY_TOKEN", "password"],
-    ["remotePassword", "password", "OPENCLAW_GATEWAY_PASSWORD", "token"],
-  ] as const)(
-    "stores configured-provider %s references and clears the other credential",
-    async (option, field, envName, previousField) => {
-      const base = {
-        ...remoteConfig({
-          ...trusted,
+    ...(
+      [
+        ["remoteToken", "token", "OPENCLAW_GATEWAY_TOKEN", "password"],
+        ["remotePassword", "password", "OPENCLAW_GATEWAY_PASSWORD", "token"],
+      ] as const
+    ).map(([option, field, envName, previousField]): RemoteCase => ({
+      name: `configured-provider ${field} reference replaces old ${previousField}`,
+      options: { [option]: "replacement-credential", secretInputMode: "ref" },
+      env: { [envName]: "replacement-credential" },
+      config: {
+        ...remoteCredentialConfig({
+          ...trustedRemote,
           [previousField]: { source: "env", provider: "default", id: "OLD_GATEWAY_CREDENTIAL" },
         }),
-        secrets: {
-          defaults: { env: "gatewayenv" },
-          providers: { gatewayenv: { source: "env" as const } },
-        },
-      };
-      await withEnvAsync({ [envName]: "replacement-credential" }, () =>
-        checkRemote({ [option]: "replacement-credential", secretInputMode: "ref" }, base, {
-          ...trusted,
-          [field]: { source: "env", provider: "gatewayenv", id: envName },
-        }),
-      );
+        secrets: { defaults: { env: "gatewayenv" }, providers: { gatewayenv: { source: "env" } } },
+      },
+      expected: {
+        ...trustedRemote,
+        [field]: { source: "env", provider: "gatewayenv", id: envName },
+      },
+    })),
+    {
+      name: "token replacing a same-endpoint password",
+      options: { remoteToken: "replacement-token" },
+      config: remoteCredentialConfig({ ...trustedRemote, password: "old-password" }),
+      expected: { ...trustedRemote, token: "replacement-token" },
     },
-  );
-
-  it.each([
-    [url, "existing-password"],
-    [url, passwordRef],
-    [`${url}/`, passwordRef],
-  ] as const)(
-    "preserves %s %j credentials and fleet (openclaw#84692)",
-    async (savedUrl, savedPassword) => {
-      const remote: Remote = {
-        ...trusted,
-        url: savedUrl,
+    ...(
+      [
+        [remoteCredentialUrl, "existing-password"],
+        [
+          remoteCredentialUrl,
+          { source: "env", provider: "default", id: "EXISTING_REMOTE_PASSWORD" },
+        ],
+        [
+          `${remoteCredentialUrl}/`,
+          { source: "env", provider: "default", id: "EXISTING_REMOTE_PASSWORD" },
+        ],
+      ] as const
+    ).map(([url, savedPassword]): RemoteCase => {
+      const remote = {
+        ...trustedRemote,
+        url,
         password: savedPassword,
-        token: typeof savedPassword === "string" ? "existing-token" : tokenRef,
-        transport: "ssh",
+        token: typeof savedPassword === "string" ? "existing-token" : remoteTokenRef,
+        transport: "ssh" as const,
         sshTarget: "operator@gateway.example.test",
       };
-      await checkRemote(
-        { secretInputMode: "ref", authChoice: "skip", json: true },
-        {
-          ...remoteConfig(remote),
+      return {
+        name: `preserves ${url} ${typeof savedPassword} credentials and fleet (openclaw#84692)`,
+        options: { secretInputMode: "ref", authChoice: "skip", json: true },
+        config: {
+          ...remoteCredentialConfig(remote),
           agents: { ownership: "explicit", entries: makeAgents() },
           bindings: [routeBinding("alpha", "user-1")],
           hooks: {
             internal: { enabled: false, entries: { "session-memory": { enabled: false } } },
           },
         },
-        { ...remote, url },
-      );
-    },
-  );
-
-  it.each([
-    ["ws://127.0.0.1:80", "ws://127.0.0.1", 80],
-    ["ws://127.0.0.1", "ws://127.0.0.1:80", 18789],
-  ] as const)(
-    "preserves SSH port while changing %s to %s",
-    async (originalUrl, nextUrl, sshPort) => {
-      const ssh = { sshTarget: "operator@gateway.example.test", token: "existing-token" };
-      await checkRemote(
-        { remoteUrl: nextUrl },
-        {
-          gateway: { port: 18789, remote: { url: originalUrl, transport: "ssh", ...ssh } },
+        expected: { ...remote, url: remoteCredentialUrl },
+      };
+    }),
+    ...(
+      [
+        ["ws://127.0.0.1:80", "ws://127.0.0.1", 80],
+        ["ws://127.0.0.1", "ws://127.0.0.1:80", 18789],
+      ] as const
+    ).map(([originalUrl, url, sshPort]): RemoteCase => ({
+      name: `preserves SSH port while changing ${originalUrl} to ${url}`,
+      options: { remoteUrl: url },
+      config: {
+        gateway: {
+          port: 18789,
+          remote: {
+            url: originalUrl,
+            transport: "ssh",
+            sshTarget: "operator@gateway.example.test",
+            token: "existing-token",
+          },
         },
-        { url: nextUrl, ...ssh },
-        sshPort,
-      );
+      },
+      expected: { url, sshTarget: "operator@gateway.example.test", token: "existing-token" },
+      sshPort,
+    })),
+    {
+      name: "query change clears credentials and transport trust",
+      options: { remoteUrl: `${remoteCredentialUrl}?account=work` },
+      config: remoteCredentialConfig({
+        ...trustedRemote,
+        token: remoteTokenRef,
+        password: "existing-password",
+        transport: "ssh",
+        sshTarget: "operator@gateway.example.test",
+      }),
+      expected: { url: `${remoteCredentialUrl}?account=work` },
+    },
+  ];
+  it.each(remoteCases)(
+    "$name",
+    async ({ options = {}, config = {}, expected, env = {}, sshPort }) => {
+      const result = await withEnvAsync(env, () => setupRemoteConfig(options, config));
+      expect(result.agents).toEqual(config.agents);
+      expect(result.bindings).toEqual(config.bindings);
+      if (sshPort === undefined) {
+        expect(result.gateway?.remote).toEqual(expected);
+      } else {
+        expect(result.gateway?.remote).toMatchObject(expected);
+        expect(resolveGatewaySshRemotePort(result)).toBe(sshPort);
+      }
     },
   );
 
   it("completes explicit no-daemon setup without a startup wait when no gateway is listening", async () => {
     await withStateDir("state-local-health-hint-", async (stateDir) => {
-      unreachable();
+      gatewayReachableState.mock = vi.fn(async () => ({
+        ok: false,
+        detail: "connect ECONNREFUSED 127.0.0.1:18789",
+      }));
       const log = vi.fn();
 
       await runNonInteractiveSetup(
@@ -495,10 +553,16 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
   it("emits structured JSON diagnostics when daemon health fails", async () => {
     await withStateDir("state-local-daemon-health-json-fail-", async (stateDir) => {
-      const secret = await registeredSecret();
-      unreachable(`gateway closed (1006 abnormal closure (no close frame)): ${secret}`);
+      const registeredSecret = "qa-onboarding-health-secret";
+      const { registerSecretValueForRedaction } =
+        await import("../logging/secret-redaction-registry.js");
+      registerSecretValueForRedaction(registeredSecret);
+      gatewayReachableState.mock = vi.fn(async () => ({
+        ok: false,
+        detail: `gateway closed (1006 abnormal closure (no close frame)): ${registeredSecret}`,
+      }));
       readLastGatewayErrorLineMock.mockResolvedValueOnce(
-        `Gateway failed to start: required secrets are unavailable: ${secret}`,
+        `Gateway failed to start: required secrets are unavailable: ${registeredSecret}`,
       );
 
       const { parsed, output } = await jsonFailure(stateDir);
@@ -515,7 +579,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       });
       expect(parsed.hints).toContain("Run `openclaw gateway status --deep` for more detail.");
       expect(parsed.diagnostics?.service?.loadState).toEqual({ status: "loaded" });
-      expect(output).not.toContain(secret);
+      expect(output).not.toContain(registeredSecret);
     });
   }, 60_000);
 
@@ -548,9 +612,14 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
   it("routes thrown health-check errors through the onboarding failure owner", async () => {
     await withStateDir("state-local-health-failure-text-", async (stateDir) => {
-      const secret = await registeredSecret();
+      const registeredSecret = "qa-onboarding-health-secret";
+      const { registerSecretValueForRedaction } =
+        await import("../logging/secret-redaction-registry.js");
+      registerSecretValueForRedaction(registeredSecret);
       gatewayReachableState.mock = vi.fn(async () => ({ ok: true }));
-      healthCommandMock.mockRejectedValueOnce(new Error(`health request timed out: ${secret}`));
+      healthCommandMock.mockRejectedValueOnce(
+        new Error(`health request timed out: ${registeredSecret}`),
+      );
 
       const failure = await runNonInteractiveSetup(
         createOnboardLocalDaemonOptions(stateDir),
@@ -558,13 +627,16 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       ).catch((error: unknown) => error);
       expect(failure).toBeInstanceOf(Error);
       expect(String(failure)).toMatch(/health check failed[\s\S]*health request timed out/);
-      expect(String(failure)).not.toContain(secret);
+      expect(String(failure)).not.toContain(registeredSecret);
     });
   }, 60_000);
 
   it("preserves unknown service inspection in JSON diagnostics", async () => {
     await withStateDir("state-local-daemon-health-unknown-", async (stateDir) => {
-      unreachable();
+      gatewayReachableState.mock = vi.fn(async () => ({
+        ok: false,
+        detail: "connect ECONNREFUSED 127.0.0.1:18789",
+      }));
       gatewayServiceMock.isLoaded.mockRejectedValueOnce(new Error("systemctl timed out"));
 
       const { parsed } = await jsonFailure(stateDir);

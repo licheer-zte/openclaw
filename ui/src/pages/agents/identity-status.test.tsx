@@ -110,51 +110,57 @@ it("switches identity editors while the previous agent save is pending", async (
   });
   const input = () =>
     mounted.container.querySelector<HTMLInputElement>(".agent-identity-editor__fields input")!;
-  const saving = () => mounted.container.querySelector('.agent-identity-editor [role="status"]');
-  const edit = (name: string) => {
-    input().value = name;
+  try {
+    input().value = "Main draft";
     input().dispatchEvent(new Event("input", { bubbles: true }));
     input().dispatchEvent(new Event("blur"));
-  };
-  try {
-    edit("Main draft");
     await waitForSolid(() =>
       expect(request).toHaveBeenCalledWith("agents.update", {
         agentId: "main",
         name: "Main draft",
       }),
     );
-    await waitForSolid(() => expect(saving()?.textContent).toContain("Saving"));
+    await waitForSolid(() => {
+      expect(
+        mounted.container.querySelector('.agent-identity-editor [role="status"]')?.textContent,
+      ).toContain("Saving");
+    });
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 0);
     });
     page.setRouteData({ ...routeData, panel: "files" });
-    await waitForSolid(() =>
-      expect(mounted.container.querySelector(".agent-identity-editor")).toBeNull(),
-    );
+    await waitForSolid(() => {
+      expect(mounted.container.querySelector(".agent-identity-editor")).toBeNull();
+    });
     page.setRouteData(routeData);
     await waitForSolid(() => {
       expect(input().value).toBe("Main draft");
-      expect(saving()?.textContent).toContain("Saving");
+      expect(
+        mounted.container.querySelector('.agent-identity-editor [role="status"]')?.textContent,
+      ).toContain("Saving");
     });
     selection.set("research");
     await waitForSolid(() => {
       expect(input().value).toBe("Research");
       expect(input().disabled).toBe(false);
-      expect(saving()).toBeNull();
+      expect(mounted.container.querySelector('.agent-identity-editor [role="status"]')).toBeNull();
     });
     pending.resolve();
     await pending.promise;
     expect(input().value).toBe("Research");
     selection.set("main");
-    await waitForSolid(() => expect(input().value).toBe("Main draft"));
+    await waitForSolid(() => {
+      expect(input().value).toBe("Main draft");
+    });
 
     request.mockImplementationOnce(() => retiredBeforePresentation.promise);
-    edit("Main next draft");
+    input().value = "Main next draft";
+    input().dispatchEvent(new Event("input", { bubbles: true }));
+    input().dispatchEvent(new Event("blur"));
     selection.set("research");
     await waitForSolid(() => {
       expect(input().value).toBe("Research");
-      expect(saving()).toBeNull();
+      expect(mounted.container.querySelector('.agent-identity-editor [role="status"]')).toBeNull();
     });
     retiredBeforePresentation.resolve();
   } finally {

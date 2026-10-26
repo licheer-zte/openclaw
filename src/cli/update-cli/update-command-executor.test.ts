@@ -23,7 +23,6 @@ import { isChildProcessTreeAlive } from "../../process/child-process-tree.js";
 import { runUtf8CommandWithTimeout, type CommandOptions } from "../../process/exec.js";
 import * as pidAlive from "../../shared/pid-alive.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import { registerExecutorRootOwnershipTests } from "./update-command-executor-roots.test-support.js";
 import {
@@ -170,7 +169,10 @@ describe("live update executor", () => {
       const runId = randomUUID();
       const owner = randomUUID();
       const metadata = path.join(root, "handoff.json");
-      writeFixtureJsonSync(metadata, { version: 1, meta: { runId, handoffId: owner, root } });
+      fs.writeFileSync(
+        metadata,
+        JSON.stringify({ version: 1, meta: { runId, handoffId: owner, root } }),
+      );
       vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
       vi.stubEnv(CONTROL_PLANE_UPDATE_SENTINEL_META_ENV, metadata);
       const child = spawn(
@@ -220,14 +222,17 @@ describe("live update executor", () => {
           fs.mkdirSync(unrelatedRoot);
         }
         const childMetadata = path.join(root, "child-handoff.json");
-        writeFixtureJsonSync(childMetadata, {
-          version: 1,
-          meta: {
-            runId,
-            handoffId: owner,
-            root: childMetadataRoot === "unrelated" ? unrelatedRoot : candidateRoot,
-          },
-        });
+        fs.writeFileSync(
+          childMetadata,
+          JSON.stringify({
+            version: 1,
+            meta: {
+              runId,
+              handoffId: owner,
+              root: childMetadataRoot === "unrelated" ? unrelatedRoot : candidateRoot,
+            },
+          }),
+        );
         await withUpdateCommandExecutor(runId, async (executor) => {
           const fence = await executor.enter(root, { serviceRoot, preflight: true });
           expect(captureUpdateCommandExecutorAuthority(fence).installKey).toBe(root);

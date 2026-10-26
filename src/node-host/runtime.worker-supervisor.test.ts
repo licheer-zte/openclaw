@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { NODE_WORKER_PRIVATE_COMMANDS } from "../infra/node-commands.js";
-import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
+import * as state from "../state/openclaw-state-db.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import type { NodeHostClient } from "./client.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
@@ -38,7 +39,13 @@ vi.mock("./skills.js", () => ({
   resolveNodeHostedSkillDirectory: vi.fn(() => null),
 }));
 
-const tempDirs = useStateDatabaseTempDirs();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await state.closeOpenClawStateDatabaseAsync();
+    state.closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 it("keeps a claimed worker alive across invoke cancel and reconnect until runtime close", async () => {
   const platform = mockProcessPlatform("linux");

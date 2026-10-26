@@ -35,35 +35,40 @@ function renderUpdates(overrides: UpdatesViewOverrides = {}) {
   mountUpdates(createUpdatesViewProps(overrides));
 }
 
+function failedRun() {
+  return createUpdateRunFixture({ status: "failed", phase: "finished", reason: "build-failed" });
+}
+
 function toggle(title: string) {
   return row(title).querySelector<HTMLInputElement>('input[role="switch"]')!;
 }
 
-it.each([
-  ["onUpdateNow", "Update Gateway…"],
-  ["onReportFailure", "Report update failure"],
-] as const)(
+it.each(["confirmation", "report"] as const)(
   "retains %s progress until its admitted operation completes",
-  async (operation, label) => {
-    const pending = Promise.withResolvers<void>();
-    const command = vi.fn(() => pending.promise);
-    const run = createUpdateRunFixture({
-      status: "failed",
-      phase: "finished",
-      reason: "build-failed",
-    });
+  async (operation) => {
+    const confirmation = Promise.withResolvers<void>();
+    const report = Promise.withResolvers<void>();
+    const onUpdateNow = vi.fn(() => confirmation.promise);
+    const onReportFailure = vi.fn(() => report.promise);
+    const run = failedRun();
     renderUpdates({
-      [operation]: command,
+      onUpdateNow,
+      onReportFailure,
       update: { updateRun: run, reportableUpdateFailureId: run.runId },
     });
+    const label = operation === "confirmation" ? "Update Gateway…" : "Report update failure";
     const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
       (candidate) => candidate.textContent?.trim() === label,
     )!;
     button.click();
     await waitForSolid(() => expect(button.disabled).toBe(true));
     button.click();
-    expect(command).toHaveBeenCalledOnce();
-    pending.resolve();
+    expect(operation === "confirmation" ? onUpdateNow : onReportFailure).toHaveBeenCalledOnce();
+    if (operation === "confirmation") {
+      confirmation.resolve();
+    } else {
+      report.resolve();
+    }
     await waitForSolid(() => expect(button.disabled).toBe(false));
   },
 );
@@ -75,10 +80,13 @@ it("shows a failed confirmation load and retries the command", async () => {
     .mockResolvedValue(undefined);
   renderUpdates({ onUpdateNow });
   row("Update Gateway…").querySelector<HTMLButtonElement>("button")!.click();
-  const alert = () => container.querySelector('[role="alert"]');
-  await waitForSolid(() => expect(alert()?.textContent).toContain("Confirmation unavailable"));
+  await waitForSolid(() =>
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "Confirmation unavailable",
+    ),
+  );
   container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
-  await waitForSolid(() => expect(alert()).toBeNull());
+  await waitForSolid(() => expect(container.querySelector('[role="alert"]')).toBeNull());
   expect(onUpdateNow).toHaveBeenCalledTimes(2);
 });
 
@@ -94,8 +102,7 @@ it("keeps native automatic-update intent until acknowledgement and permits retry
   nativeCapability = createNativeDeviceSettingsCapability();
   post.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
   renderUpdates({ nativeDeviceSettings: nativeCapability });
-  const title = "Check for updates automatically";
-  const input = toggle(title);
+  const input = toggle("Check for updates automatically");
   input.checked = false;
   input.dispatchEvent(new Event("change"));
   await waitForSolid(() => {
@@ -106,11 +113,12 @@ it("keeps native automatic-update intent until acknowledgement and permits retry
   await waitForSolid(() =>
     expect(container.textContent).toContain("Automatic updates could not be saved"),
   );
-  row(title).querySelector<HTMLButtonElement>("button")!.click();
+  const retry = row("Check for updates automatically").querySelector<HTMLButtonElement>("button")!;
+  retry.click();
   flush();
   second.resolve({ ...snapshot, updates: { ...snapshot.updates, automatic: false } });
   await waitForSolid(() => {
-    const confirmed = toggle(title);
+    const confirmed = toggle("Check for updates automatically");
     expect(confirmed.getAttribute("aria-disabled")).toBeNull();
     expect(confirmed.checked).toBe(false);
   });

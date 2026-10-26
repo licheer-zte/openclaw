@@ -22,6 +22,7 @@ import {
   DIFF_ARTIFACT_TOKEN_PATTERN,
   type DiffArtifactBlobMetadata,
   type DiffArtifactContext,
+  type DiffArtifactMeta,
   type DiffOutputFormat,
   type DiffRenderedFileArtifactMetadata,
   type DiffViewerArtifactMetadata,
@@ -71,7 +72,7 @@ export class DiffArtifactStore {
     this.logger = params.logger;
   }
 
-  async createArtifact(params: CreateArtifactParams) {
+  async createArtifact(params: CreateArtifactParams): Promise<DiffArtifactMeta> {
     const html = Buffer.from(params.html, "utf8");
     if (html.byteLength > MAX_DECODED_HTML_BYTES) {
       throw new Error(`Diff viewer HTML exceeds ${MAX_DECODED_HTML_BYTES} bytes.`);
@@ -92,14 +93,7 @@ export class DiffArtifactStore {
     };
     const entry = await this.registerUnique(compressedHtml, metadata, ttlMs);
     this.scheduleCleanup();
-    return {
-      id: entry.key,
-      expiresAt: resolveEntryExpiresAt(entry),
-      title: metadata.title,
-      inputKind: metadata.inputKind,
-      fileCount: metadata.fileCount,
-      viewerPath: `${VIEWER_PREFIX}/${entry.key}/${token}`,
-    };
+    return viewerEntryToMeta(entry, token, metadata);
   }
 
   async readAuthorizedViewer(id: string, token: string) {
@@ -301,6 +295,21 @@ export class DiffArtifactStore {
     }
     return path.join(this.rootDir, id);
   }
+}
+
+function viewerEntryToMeta(
+  entry: PluginBlobRegistrationReceipt & { key: string },
+  token: string,
+  metadata: DiffViewerArtifactMetadata,
+): DiffArtifactMeta {
+  return {
+    id: entry.key,
+    expiresAt: resolveEntryExpiresAt(entry),
+    title: metadata.title,
+    inputKind: metadata.inputKind,
+    fileCount: metadata.fileCount,
+    viewerPath: `${VIEWER_PREFIX}/${entry.key}/${token}`,
+  };
 }
 
 function resolveEntryExpiresAt(entry: { expiresAt?: number }): string {

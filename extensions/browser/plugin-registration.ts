@@ -448,10 +448,7 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
   api.registerTool(
     (ctx: OpenClawPluginToolContext) => {
       const config = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
-      return createLazyBrowserTool(
-        { ...createBrowserToolOptions(ctx), decisions: api.runtime.decisions },
-        config,
-      );
+      return createLazyBrowserTool(createBrowserToolOptions(ctx), config);
     },
     { name: "browser", workspaceAccess: false },
   );

@@ -1,5 +1,5 @@
 /**
- * Prepares the Watched Sessions awareness snapshot (openclaw#114797).
+ * Prepares the Watched Sessions system-prompt section (openclaw#114797).
  *
  * Ambient group watches make same-agent group sessions readable from the main
  * session, but the model only acts on that when the prompt names them. Prepare
@@ -121,11 +121,7 @@ export function prepareWatchedSessionsPrompt(
 
 /** Resolve durable watched-session facts without executing SQL on the caller thread. */
 export async function prepareWatchedSessionsPromptAsync(
-  params: WatchedSessionsPromptParams & {
-    assertCurrent: () => void;
-    /** Supersede earlier turn snapshots when the last readable watch is removed. */
-    includeEmptySnapshot?: boolean;
-  },
+  params: WatchedSessionsPromptParams & { assertCurrent: () => void },
 ): Promise<PreparedWatchedSessionsPrompt | undefined> {
   const input = {
     ...params,
@@ -158,14 +154,7 @@ export async function prepareWatchedSessionsPromptAsync(
     const targets = [...new Set(await watches.read())].toSorted();
     assertCurrent();
     if (targets.length === 0) {
-      return params.includeEmptySnapshot
-        ? {
-            sessions: [],
-            hiddenCount: 0,
-            readToolNames: access.readToolNames,
-            listToolAvailable: access.listToolAvailable,
-          }
-        : undefined;
+      return undefined;
     }
     const prepared = await withSessionStoreReaderInWorker(
       {

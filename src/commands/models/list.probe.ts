@@ -129,6 +129,15 @@ function buildNoModelProbeResult(target: AuthProbeTarget): AuthProbeResult {
   });
 }
 
+export type AuthProbeSummary = {
+  startedAt: number;
+  finishedAt: number;
+  durationMs: number;
+  totalTargets: number;
+  options: Omit<AuthProbeOptions, "includeDirectKeys">;
+  results: AuthProbeResult[];
+};
+
 export type AuthProbeOptions = {
   provider?: string;
   profileIds?: string[];
@@ -631,7 +640,7 @@ export async function runAuthProbes(
     onProgress?: (update: { completed: number; total: number; label?: string }) => void;
     stateOwnership?: AuthProbeStateOwnership;
   },
-) {
+): Promise<AuthProbeSummary> {
   return await withAuthProbeStateOwnership(params.stateOwnership, async (abortSignal) => {
     const startedAt = Date.now();
     const plan = await buildProbeTargets(params);
@@ -816,7 +825,7 @@ export function sortProbeResults(results: AuthProbeResult[]): AuthProbeResult[] 
   });
 }
 
-export function describeProbeSummary(summary: Awaited<ReturnType<typeof runAuthProbes>>): string {
+export function describeProbeSummary(summary: AuthProbeSummary): string {
   if (summary.totalTargets === 0) {
     return "No check targets.";
   }

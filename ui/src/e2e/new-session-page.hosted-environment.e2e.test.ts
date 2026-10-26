@@ -1,7 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ModelCatalogEntry } from "../api/types.ts";
-import { nativeRuntime } from "../test-helpers/chat-model.ts";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -47,7 +46,13 @@ function models(available = true, restoredLabel?: string): ModelCatalogEntry[] {
     runtimeChoices: restoredLabel ? [] : [choice],
   };
   if (!restoredLabel) {
-    model.agentRuntime = nativeRuntime();
+    model.agentRuntime = {
+      id: "openclaw",
+      source: "model",
+      cloudPlacementSupported: true,
+      cloudPlacementExecutionMode: "worker-turn",
+      devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+    };
   }
   return [model];
 }

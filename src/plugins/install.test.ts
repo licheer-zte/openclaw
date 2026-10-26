@@ -252,22 +252,6 @@ function readCapturedInstallPolicyRequests(logPath: string): CapturedInstallPoli
     .map((line) => JSON.parse(line) as CapturedInstallPolicyRequest);
 }
 
-function expectUserArchiveRequests(logPath: string, kind: string, spec: string, count: number) {
-  const requests = readCapturedInstallPolicyRequests(logPath);
-  expect(requests).toHaveLength(count);
-  for (const request of requests) {
-    expect(request.request.kind).toBe(kind);
-    expect(request.source).toEqual({
-      kind: "archive",
-      authority: "user",
-      mutable: true,
-      network: false,
-    });
-  }
-  expect(requests[0]?.request.requestedSpecifier).toBe(spec);
-  return requests;
-}
-
 function mockNpmViewMetadata(params: { name: string; version?: string }) {
   vi.mocked(runCommandWithTimeout).mockResolvedValueOnce(
     createCommandResult({
@@ -443,12 +427,28 @@ beforeEach(() => {
 
 describe("installPluginFromArchive", () => {
   it("reports direct local archive installs as user-provided archive sources", async () => {
-    const { extensionsDir, config, logPath } = setupNpmPolicy("allow");
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const extensionsDir = path.join(stateDir, "extensions");
+    const { scriptPath, logPath } = writeInstallPolicyScript(stateDir, "allow");
     fs.mkdirSync(extensionsDir, { recursive: true });
     const archivePath = await ensureArchive("local-policy-archive", "1.0.0", true);
-    const result = await installPluginFromArchive({ archivePath, extensionsDir, config });
+
+    const result = await installPluginFromArchive({
+      archivePath,
+      extensionsDir,
+      config: configWithInstallPolicy(scriptPath, logPath),
+    });
+
     expect(result.ok).toBe(true);
-    expectUserArchiveRequests(logPath, "plugin-archive", archivePath, 2);
+    const requests = readCapturedInstallPolicyRequests(logPath);
+    expect(requests).toHaveLength(2);
+    for (const request of requests) {
+      expect(request).toMatchObject({
+        request: { kind: "plugin-archive" },
+        source: { kind: "archive", authority: "user", mutable: true, network: false },
+      });
+    }
+    expect(requests[0]?.request.requestedSpecifier).toBe(archivePath);
   });
 
   it("rejects reserved archive package ids", async () => {
@@ -762,14 +762,13 @@ describe("installPluginFromNpmSpec", () => {
 
   it("reports npm-pack local archives as mutable user archive sources", async () => {
     const { npmDir, extensionsDir, config, logPath } = setupNpmPolicy("block");
-    const name = "npm-pack-policy-archive";
-    const archivePath = await ensureArchive(name);
+    const archivePath = await ensureArchive("npm-pack-policy-archive");
     vi.mocked(runCommandWithTimeout).mockResolvedValueOnce(
       createCommandResult({
         stdout: JSON.stringify([
           {
             filename: path.basename(archivePath),
-            name,
+            name: "npm-pack-policy-archive",
             version: "1.0.0",
             integrity: "sha512-test",
             shasum: "abc123",
@@ -786,6 +785,7 @@ describe("installPluginFromNpmSpec", () => {
         dryRun: true,
       }),
     );
+
     expectFailedInstallResult(
       result,
       PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED,
@@ -793,11 +793,28 @@ describe("installPluginFromNpmSpec", () => {
     );
     expect(countNpmCommands()).toBe(1);
     await expect(fsPromises.stat(npmDir)).rejects.toThrow();
-    const requests = expectUserArchiveRequests(logPath, "plugin-npm", `npm-pack:${archivePath}`, 1);
-    expect(requests[0]).toMatchObject({ sourcePath: archivePath, sourcePathKind: "file" });
-    expectAuditEvent(events, name, "plugin.audit.failed", "denied", "archive", "install", {
-      category: "plugin",
+    const requests = readCapturedInstallPolicyRequests(logPath);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      request: { kind: "plugin-npm", requestedSpecifier: `npm-pack:${archivePath}` },
+      sourcePath: archivePath,
+      sourcePathKind: "file",
     });
+    expect(requests[0]?.source).toEqual({
+      kind: "archive",
+      authority: "user",
+      mutable: true,
+      network: false,
+    });
+    expectAuditEvent(
+      events,
+      "npm-pack-policy-archive",
+      "plugin.audit.failed",
+      "denied",
+      "archive",
+      "install",
+      { category: "plugin" },
+    );
   });
 });
 

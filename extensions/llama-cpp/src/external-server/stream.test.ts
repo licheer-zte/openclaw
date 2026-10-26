@@ -1,15 +1,10 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { wrapLlamaServerStream } from "./stream.js";
 
 afterEach(() => vi.useRealTimers());
-const notify = vi.fn();
-beforeEach(() => {
-  vi.useFakeTimers();
-  notify.mockClear();
-});
 
 const response: AssistantMessage = {
   role: "assistant",
@@ -30,49 +25,43 @@ const response: AssistantMessage = {
 };
 
 const schema = { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] };
-function streamWithWait(
-  streamFn: StreamFn,
-  options: Parameters<StreamFn>[2],
-  thinkingLevel?: ProviderWrapStreamFnContext["thinkingLevel"],
-) {
-  return wrapLlamaServerStream({
-    provider: "llama-cpp",
-    modelId: "local",
-    streamFn,
-    thinkingLevel,
-  })({ provider: "llama-cpp" } as never, { messages: [] }, options);
+function streamWithWait(streamFn: StreamFn, options: Parameters<StreamFn>[2]) {
+  return wrapLlamaServerStream({ provider: "llama-cpp", modelId: "local", streamFn })(
+    { provider: "llama-cpp" } as never,
+    { messages: [] },
+    options,
+  );
 }
 
-function afterPayload(result: ReturnType<StreamFn>): StreamFn {
-  return async (model, _context, options) => {
-    await options?.onPayload?.({}, model);
-    return result;
-  };
-}
-
-async function applyPayload(
+function applyPayload(
   payload: unknown,
   thinkingLevel: ProviderWrapStreamFnContext["thinkingLevel"] = "off",
-  options: Parameters<StreamFn>[2] = {},
+  options: Record<string, unknown> = {},
 ) {
-  let result: unknown;
-  await streamWithWait(
-    async (model, _context, streamOptions) => {
-      result = await streamOptions?.onPayload?.(payload, model);
-      return createAssistantMessageEventStream();
-    },
-    options,
+  let payloadHook: ((payload: unknown, model: unknown) => unknown) | undefined;
+  const underlying = vi.fn((_model, _context, streamOptions) => {
+    payloadHook = streamOptions?.onPayload;
+    return {} as ReturnType<StreamFn>;
+  }) as StreamFn;
+  const wrapped = wrapLlamaServerStream({
+    streamFn: underlying,
     thinkingLevel,
-  );
-  return result;
+  } as ProviderWrapStreamFnContext);
+  void wrapped({ provider: "llama-cpp" } as never, { messages: [] }, options as never);
+  if (!payloadHook) {
+    throw new Error("expected llama-server payload hook");
+  }
+  return payloadHook(payload, {});
 }
 
 it("maps thinking off to llama-server chat-template kwargs", async () => {
   await expect(
     applyPayload({
+      model: "model",
       chat_template_kwargs: { preserve_thinking: true, enable_thinking: true },
     }),
   ).resolves.toEqual({
+    model: "model",
     chat_template_kwargs: { preserve_thinking: true, enable_thinking: false },
   });
 });
@@ -82,24 +71,40 @@ it("does not force thinking on when OpenClaw selected another level", async () =
   await expect(applyPayload(payload, "high")).resolves.toBe(payload);
 });
 
-it.each([true, false])("normalizes JSON schema embedded in the payload: %s", async (embedded) => {
-  const format = { type: "json_schema", json_schema: { name: "openclaw_response", schema } };
-  const payload = embedded ? { response_format: format } : {};
-  const options = embedded ? {} : { responseFormat: schema };
-  await expect(applyPayload(payload, "off", options)).resolves.toMatchObject({
+it("maps OpenAI nested JSON Schema to llama-server's direct schema field", async () => {
+  await expect(
+    applyPayload({
+      model: "model",
+      response_format: {
+        type: "json_schema",
+        json_schema: { name: "openclaw_response", schema },
+      },
+    }),
+  ).resolves.toMatchObject({
+    response_format: { type: "json_object", schema },
+  });
+});
+
+it("injects a direct schema when the shared transport omits it", async () => {
+  await expect(
+    applyPayload({ model: "model" }, "off", { responseFormat: schema }),
+  ).resolves.toMatchObject({
     response_format: { type: "json_object", schema },
   });
 });
 
 it("reports a response wait without claiming a slot and clears on first event", async () => {
+  vi.useFakeTimers();
+  const notify = vi.fn();
   const source = createAssistantMessageEventStream();
   const stream = await streamWithWait(
-    afterPayload(
-      Object.freeze({
+    async (model, _context, options) => {
+      await options?.onPayload?.({}, model);
+      return Object.freeze({
         [Symbol.asyncIterator]: () => source[Symbol.asyncIterator](),
         result: () => source.result(),
-      }),
-    ),
+      });
+    },
     { onProviderWait: notify },
   );
   await vi.advanceTimersByTimeAsync(1_000);
@@ -114,13 +119,18 @@ it("reports a response wait without claiming a slot and clears on first event", 
 });
 
 it.each(["cancel", "failure"] as const)("clears a held request on %s", async (ending) => {
+  vi.useFakeTimers();
+  const notify = vi.fn();
   const controller = new AbortController();
   const pending = Promise.withResolvers<ReturnType<typeof createAssistantMessageEventStream>>();
   const result = Promise.resolve(
-    streamWithWait(afterPayload(pending.promise), {
-      onProviderWait: notify,
-      signal: controller.signal,
-    }),
+    streamWithWait(
+      async (model, _context, options) => {
+        await options?.onPayload?.({}, model);
+        return pending.promise;
+      },
+      { onProviderWait: notify, signal: controller.signal },
+    ),
   ).catch((error: unknown) => error);
   await vi.advanceTimersByTimeAsync(1_000);
   expect(notify.mock.calls).toEqual([["response"]]);
@@ -135,6 +145,8 @@ it.each(["cancel", "failure"] as const)("clears a held request on %s", async (en
 });
 
 it("does not start a delayed wait after a synchronous transport failure", async () => {
+  vi.useFakeTimers();
+  const notify = vi.fn();
   expect(() =>
     streamWithWait(
       (model, _context, options) => {

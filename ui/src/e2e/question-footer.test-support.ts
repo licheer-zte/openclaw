@@ -27,31 +27,26 @@ export function defineQuestionFooterTests({
   questionRecord,
   questionSessionKey,
 }: QuestionFooterFixtures) {
-  it("keeps a collapsed question separate from PRs, notices, and the input in portrait and landscape", async () => {
-    const { gateway, page } = await openQuestionPage({ height: 844, width: 390 }, true);
-    for (const { height, width, orientation } of [
-      { height: 844, orientation: "portrait", width: 390 },
-      { height: 390, orientation: "landscape", width: 844 },
-    ]) {
-      await page.setViewportSize({ height, width });
-      const sentCount = (await gateway.getRequests("chat.send")).length;
-      const resolutionCount = (await gateway.getRequests("question.resolve")).length;
+  it.each([
+    { height: 844, orientation: "portrait", width: 390 },
+    { height: 390, orientation: "landscape", width: 844 },
+  ])(
+    "keeps a collapsed question separate from PRs, notices, and the input on $orientation",
+    async ({ height, width }) => {
+      const { gateway, page } = await openQuestionPage({ height, width }, true);
       const composer = page.locator(".agent-chat__input");
       const draft = composer.locator(".agent-chat__composer-combobox > textarea");
       await draft.fill("Review the footer controls");
       await draft.press("Enter");
-      const sent = requireRecord(
-        (await gateway.waitForRequest("chat.send", { after: sentCount })).params,
-      );
+      const sent = requireRecord((await gateway.waitForRequest("chat.send")).params);
       const runId = requireString(sent.idempotencyKey, "sent run ID");
-      const errorMessage = `The ${orientation} verification run failed. Please try again.`;
       await gateway.emitGatewayEvent("chat", {
         sessionKey: questionSessionKey,
         runId,
         state: "error",
-        errorMessage,
+        errorMessage: "The verification run failed. Please try again.",
       });
-      await page.locator(".chat-error").filter({ hasText: errorMessage }).waitFor();
+      await page.locator(".chat-error").waitFor();
       const watchedKey = await waitForWatchedSessionKey(gateway, questionSessionKey);
       await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
         sessions: {
@@ -78,7 +73,7 @@ export function defineQuestionFooterTests({
       await page.keyboard.press("Escape");
       await draft.fill("Keep this follow-up draft");
       const prompt = "Which progress note should I use?";
-      const request = questionRecord(`question-mobile-context-${orientation}`, [
+      const request = questionRecord("question-mobile-context", [
         {
           questionId: "progress_note",
           header: "Progress note",
@@ -171,9 +166,7 @@ export function defineQuestionFooterTests({
         answers,
       } satisfies QuestionResolveResult);
       await panel.getByRole("button", { name: "Submit", exact: true }).tap();
-      expect(
-        (await gateway.waitForRequest("question.resolve", { after: resolutionCount })).params,
-      ).toEqual({
+      expect((await gateway.waitForRequest("question.resolve")).params).toEqual({
         id: request.id,
         answers,
       });
@@ -183,6 +176,6 @@ export function defineQuestionFooterTests({
       await openDetailsPullRequests(page);
       await pullRequest.click({ trial: true });
       await page.keyboard.press("Escape");
-    }
-  });
+    },
+  );
 }

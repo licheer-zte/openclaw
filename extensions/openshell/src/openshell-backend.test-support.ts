@@ -44,10 +44,25 @@ export function uninstallOpenShellBackendMocks() {
 
 export function resetOpenShellBackendMocks() {
   vi.clearAllMocks();
-  cliMocks.createOpenShellSshSession.mockResolvedValue({ host: "openshell-test" });
+  cliMocks.createOpenShellSshSession.mockResolvedValue({
+    command: "ssh",
+    configPath: "/tmp/openclaw-openshell-test-ssh-config",
+    host: "openshell-test",
+  });
+  sandboxMocks.cleanupPreparedExec.mockResolvedValue(undefined);
   sandboxMocks.prepareSshSandboxExec.mockImplementation(
-    async ({ session, tty }: { session: { host: string }; tty?: boolean }) => ({
-      argv: [session.host, ...(tty ? ["-tt"] : [])],
+    async (params: {
+      session: { command: string; configPath: string; host: string };
+      tty?: boolean;
+    }) => ({
+      argv: [
+        params.session.command,
+        "-F",
+        params.session.configPath,
+        ...(params.tty ? ["-tt", "-o", "RequestTTY=force"] : ["-T", "-o", "RequestTTY=no"]),
+        params.session.host,
+        "'/bin/sh' '/tmp/openclaw-synthetic-staging/run.sh'",
+      ],
       cleanup: sandboxMocks.cleanupPreparedExec,
     }),
   );
@@ -56,17 +71,19 @@ export function resetOpenShellBackendMocks() {
       const remoteCommand = params.remoteCommand
         .replaceAll("'/sandbox", `'${sandboxMocks.remoteRoot}`)
         .replaceAll("'/agent", `'${sandboxMocks.remoteAgentRoot}`);
-      const { error, stdout, stderr, status } = spawnSync("sh", ["-c", remoteCommand], {
+      const result = spawnSync("sh", ["-c", remoteCommand], {
         input: params.stdin,
       });
-      if (error) {
-        throw error;
+      if (result.error) {
+        throw result.error;
       }
-      const result = { stdout, stderr, code: status ?? 1 };
-      if (result.code !== 0 && !params.allowFailure) {
-        throw Object.assign(new Error(stderr.toString("utf8").trim()), result);
+      const stdout = result.stdout ?? Buffer.alloc(0);
+      const stderr = result.stderr ?? Buffer.alloc(0);
+      const code = result.status ?? 1;
+      if (code !== 0 && !params.allowFailure) {
+        throw Object.assign(new Error(stderr.toString("utf8").trim()), { code, stdout, stderr });
       }
-      return result;
+      return { stdout, stderr, code };
     },
   );
 }

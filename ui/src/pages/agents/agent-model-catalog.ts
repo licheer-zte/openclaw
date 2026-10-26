@@ -1,6 +1,5 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { AgentsPanel } from "../../lib/agents/panels.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { ModelCatalogReader } from "../../lib/model-catalog-reader.ts";
 import { modelCatalogRefreshError, readAgentModelCatalog } from "../../lib/model-catalog-store.ts";
@@ -12,7 +11,6 @@ export function createAgentModelCatalog(
     client: GatewayBrowserClient | null;
     connected: boolean;
     agentsSelectedId: string | null;
-    agentsPanel: AgentsPanel;
     chatModelCatalogRead: Promise<void> | null;
   },
   publish: () => void,
@@ -20,7 +18,6 @@ export function createAgentModelCatalog(
   let recoveryPending = false;
   let needsRecovery = false;
   const reader = new ModelCatalogReader(publish, {
-    isPresented: () => state.agentsPanel === "overview",
     onRead: (read) => {
       const completion = read.then((result) => {
         const error = result && modelCatalogRefreshError(result);
@@ -61,8 +58,6 @@ export function createAgentModelCatalog(
     }
     if (!reader.pending && (options.refresh || !state.chatModelCatalogRead || reader.failed)) {
       void reader.read();
-    } else {
-      reader.resume();
     }
   }
 

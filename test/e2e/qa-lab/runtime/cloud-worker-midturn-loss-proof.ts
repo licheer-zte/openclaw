@@ -296,7 +296,6 @@ async function runProof(options: ProducerOptions) {
     const transport = createQaChannelTransport(state);
     gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
-      initializeCurrentRuntimeState: true,
       useRepoCli: true,
       providerBaseUrl: `${provider.baseUrl}/v1`,
       providerMode: "mock-openai",

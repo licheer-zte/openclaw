@@ -23,7 +23,7 @@ type Publication = {
   mutation?: object;
   complete: boolean;
   rows: Map<string, DevicePairingBinding | null>;
-  devices: Record<string, PairedDevice | null>;
+  devices: Map<string, PairedDevice | null>;
   nodes?: DevicePairingNodeSnapshot;
   pending: Set<() => void>;
 };
@@ -66,7 +66,7 @@ export function invalidateDevicePairingNodeSnapshot(path: string): void {
   if (publication) {
     publication.epoch++;
     publication.nodes = undefined;
-    publication.devices = Object.create(null);
+    publication.devices.clear();
     publication.complete = false;
   }
 }
@@ -91,7 +91,7 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
       blocked: false,
       complete: false,
       rows: new Map(),
-      devices: Object.create(null),
+      devices: new Map(),
       pending: new Set(),
     };
   }
@@ -103,7 +103,7 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
   const install = (rows: readonly DevicePairingBindingFact[]) => {
     for (const row of rows) {
       captured.rows.set(row.deviceId, row.binding ? { ...row.binding } : null);
-      captured.devices[row.deviceId] = structuredClone(row.device);
+      captured.devices.set(row.deviceId, structuredClone(row.device));
     }
   };
   return {
@@ -114,7 +114,7 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
       if (publications.get(path) !== captured || captured.blocked) {
         return undefined;
       }
-      const device = captured.devices[deviceId];
+      const device = captured.devices.get(deviceId);
       // Public callers own mutable rows; never lend them the authorization publication.
       return device === undefined && !captured.complete
         ? undefined
@@ -128,23 +128,9 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
       for (const service of captured.pending) {
         service();
       }
-      if (publications.get(path) !== captured || captured.blocked || !captured.complete) {
-        return undefined;
-      }
-      if (!captured.nodes) {
-        const bindings = new Map<string, DevicePairingBinding>();
-        for (const [deviceId, binding] of captured.rows) {
-          if (binding) {
-            bindings.set(deviceId, Object.freeze({ ...binding }));
-          }
-        }
-        // Complete receipts already carry the committed rows; discovery must not reread them.
-        const paired = Object.values(captured.devices)
-          .filter((device) => device !== null)
-          .toSorted((a, b) => b.approvedAtMs - a.approvedAtMs);
-        captured.nodes = Object.freeze({ paired: freezeTrustedJsonSnapshot(paired), bindings });
-      }
-      return captured.nodes;
+      return publications.get(path) === captured && !captured.blocked && captured.complete
+        ? captured.nodes
+        : undefined;
     },
     fail() {
       if (publications.get(path) === captured && captured.epoch === epoch) {
@@ -176,13 +162,37 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
       }
       if (complete) {
         captured.rows.clear();
-        captured.devices = Object.create(null);
+        captured.devices.clear();
       }
       captured.revision = revision;
       install(rows);
       captured.complete ||= complete;
       captured.blocked = false;
       return true;
+    },
+    prepareNodes(revision: string, paired: PairedDevice[]): DevicePairingNodeSnapshot {
+      if (
+        publications.get(path) !== captured ||
+        captured.blocked ||
+        captured.mutation ||
+        !captured.complete ||
+        captured.revision !== revision
+      ) {
+        throw new Error("Device pairing nodes require a current worker publication");
+      }
+      if (!captured.nodes) {
+        const bindings = new Map<string, DevicePairingBinding>();
+        for (const [deviceId, binding] of captured.rows) {
+          if (binding) {
+            bindings.set(deviceId, Object.freeze({ ...binding }));
+          }
+        }
+        captured.nodes = Object.freeze({
+          paired: freezeTrustedJsonSnapshot(paired),
+          bindings,
+        });
+      }
+      return captured.nodes;
     },
     beginMutation() {
       captured.epoch++;

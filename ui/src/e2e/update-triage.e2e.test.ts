@@ -39,7 +39,6 @@ const SCHEDULE = {
 } as const;
 const DIAGNOSTIC_REPLY =
   "I will inspect disk space and the recorded install failure before proposing a repair.";
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 async function recordUpdateTraffic(page: Page): Promise<MockGatewayRequest[]> {
   const traffic: MockGatewayRequest[] = [];
@@ -75,18 +74,19 @@ suite.define(() => {
   it.each(["manual", "automatic", "missing triage module"])(
     "requires a button press to diagnose a pre-ledger %s failure without retrying the update",
     async (source) => {
-      const artifactDir = captureUiProof
-        ? createControlUiE2eArtifactDir(`update-triage-${source.replaceAll(" ", "-")}`)
-        : undefined;
+      const artifactDir = createControlUiE2eArtifactDir(
+        `update-triage-${source.replaceAll(" ", "-")}`,
+      );
       await suite.withPage(
         {
           colorScheme: "dark",
           locale: "en-US",
           serviceWorkers: "block",
           viewport: { height: 1_000, width: 1_400 },
-          recordVideo: artifactDir
-            ? { dir: artifactDir, size: { height: 1_000, width: 1_400 } }
-            : undefined,
+          recordVideo:
+            process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+              ? { dir: artifactDir, size: { height: 1_000, width: 1_400 } }
+              : undefined,
         },
         async ({ page }) => {
           const errors: string[] = [];
@@ -166,12 +166,10 @@ suite.define(() => {
               .click();
             await gateway.waitForRequest("update.run");
           }
-          if (artifactDir) {
-            await page.screenshot({
-              animations: "disabled",
-              path: path.join(artifactDir, "01-before-failure.png"),
-            });
-          }
+          await page.screenshot({
+            animations: "disabled",
+            path: path.join(artifactDir, "01-before-failure.png"),
+          });
           await gateway.setMethodResponse("update.status", {
             sentinel: FAILURE,
             schedule: SCHEDULE,
@@ -197,12 +195,10 @@ suite.define(() => {
           expect(await page.locator(".custodian__alert-card").count()).toBe(0);
           expect(questions()).toHaveLength(0);
           expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
-          if (artifactDir) {
-            await page.screenshot({
-              animations: "disabled",
-              path: path.join(artifactDir, "02-failure-awaiting-action.png"),
-            });
-          }
+          await page.screenshot({
+            animations: "disabled",
+            path: path.join(artifactDir, "02-failure-awaiting-action.png"),
+          });
           const replacementDocument =
             source === "missing triage module" ? page.waitForEvent("domcontentloaded") : null;
           await diagnose.click();
@@ -232,12 +228,10 @@ suite.define(() => {
             await panel.getByText(DIAGNOSTIC_REPLY, { exact: true }).waitFor();
             expect(await panel.getByText(DIAGNOSTIC_REPLY, { exact: true }).count()).toBe(1);
           }
-          if (artifactDir) {
-            await page.screenshot({
-              animations: "disabled",
-              path: path.join(artifactDir, "03-triage-outcome.png"),
-            });
-          }
+          await page.screenshot({
+            animations: "disabled",
+            path: path.join(artifactDir, "03-triage-outcome.png"),
+          });
           await expect.poll(updateRuns).toHaveLength(source === "automatic" ? 0 : 1);
           if (source !== "missing triage module") {
             // Loading the same retained failure never repeats the user's action.
@@ -254,12 +248,10 @@ suite.define(() => {
             expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
             expect(questions()).toHaveLength(1);
             expect(updateRuns()).toHaveLength(source === "automatic" ? 0 : 1);
-            if (artifactDir) {
-              await page.screenshot({
-                animations: "disabled",
-                path: path.join(artifactDir, "04-reloaded-without-replay.png"),
-              });
-            }
+            await page.screenshot({
+              animations: "disabled",
+              path: path.join(artifactDir, "04-reloaded-without-replay.png"),
+            });
           }
           expect(errors).toEqual([]);
         },
@@ -270,15 +262,14 @@ suite.define(() => {
   it.each(["denied", "full"] as const)(
     "diagnoses only on demand even when session storage is %s",
     async (storageFailure) => {
-      const artifactDir = captureUiProof
-        ? createControlUiE2eArtifactDir(`update-triage-storage-${storageFailure}`)
-        : undefined;
+      const artifactDir = createControlUiE2eArtifactDir(`update-triage-storage-${storageFailure}`);
       await suite.withPage(
         {
           viewport: { height: 1_000, width: 1_400 },
-          recordVideo: artifactDir
-            ? { dir: artifactDir, size: { height: 1_000, width: 1_400 } }
-            : undefined,
+          recordVideo:
+            process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+              ? { dir: artifactDir, size: { height: 1_000, width: 1_400 } }
+              : undefined,
         },
         async ({ page }) => {
           const errors: string[] = [];
@@ -367,12 +358,10 @@ suite.define(() => {
               message: expect.stringContaining("ENOSPC"),
             });
             expect(traffic.filter(({ method }) => method === "update.run")).toHaveLength(0);
-            if (artifactDir) {
-              await page.screenshot({
-                animations: "disabled",
-                path: path.join(artifactDir, `0${load + 1}-failure-guidance.png`),
-              });
-            }
+            await page.screenshot({
+              animations: "disabled",
+              path: path.join(artifactDir, `0${load + 1}-failure-guidance.png`),
+            });
           }
           expect(errors).toEqual([]);
         },

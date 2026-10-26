@@ -21,6 +21,8 @@ const setup = expectDefined(signalPlugin.setupContract, "registered setup contra
 const write = expectDefined(signalSetupAdapter.applyAccountConfig, "Signal setup writer");
 const disable = expectDefined(signalPlugin.config.setAccountEnabled, "registered enable writer");
 const remove = expectDefined(signalPlugin.config.deleteAccount, "registered delete writer");
+const named = (transport: Signal["transport"] = authored.transport) =>
+  signalConfig({ accounts: { "Work Phone": { ...authored, transport } } });
 const stored = (cfg: OpenClawConfig) => cfg.channels?.signal?.accounts ?? {};
 const external = (signalNumber: string, httpUrl: string) => ({
   signalNumber,
@@ -35,13 +37,15 @@ const restrictedPolicy = {
   replyToMode: "off",
 } satisfies Signal;
 
-it.each([restrictedPolicy, undefined])("Signal setup preserves default policy %j", (policy) => {
-  const { enabled, ...expected } = { enabled: true, ...(policy ?? openPolicy) };
+it.each([true, false])("Signal setup preserves default winner (restricted=%s)", (restricted) => {
   const cfg = signalConfig({
     ...openPolicy,
     transport: { kind: "external-native", url: "http://127.0.0.1:19961" },
     accounts: {
-      "Default.": { account: "+12025550123", ...policy },
+      "Default.": {
+        account: "+12025550123",
+        ...(restricted ? restrictedPolicy : {}),
+      },
       "DEFAULT!": { account: "+12025550125", dmPolicy: "disabled" },
     },
   });
@@ -51,8 +55,13 @@ it.each([restrictedPolicy, undefined])("Signal setup preserves default policy %j
     input: external("+12025550124", "http://127.0.0.1:19962"),
   });
   expect(resolve(next, "default")).toMatchObject({
-    enabled,
-    config: { account: "+12025550123", ...expected },
+    enabled: !restricted,
+    config: {
+      account: "+12025550123",
+      replyToMode: restricted ? "off" : "all",
+      dmPolicy: restricted ? "allowlist" : "open",
+      allowFrom: restricted ? ["+12025550126"] : ["*"],
+    },
   });
   expect(stored(next)["DEFAULT!"]).toEqual(stored(cfg)["DEFAULT!"]);
   expect(next.channels?.signal).toMatchObject(openPolicy);
@@ -63,14 +72,17 @@ it.each([restrictedPolicy, undefined])("Signal setup preserves default policy %j
 it.each([false, true])(
   "Signal Doctor preserves default transport (managed=%s)",
   async (managed) => {
-    const legacy = (account: string, port: number) => ({
-      account,
-      ...(managed ? { httpPort: 18081 } : { httpUrl: `http://127.0.0.1:${port}` }),
-    });
-    const exact = legacy("+12025550124", 19962);
+    const exact = {
+      account: "+12025550124",
+      ...(managed ? { httpPort: 18081 } : { httpUrl: "http://127.0.0.1:19962" }),
+    };
+    const alias = {
+      account: "+12025550125",
+      ...(managed ? { httpPort: 18081 } : { httpUrl: "http://127.0.0.1:19963" }),
+    };
     const signal = {
       apiMode: "native",
-      accounts: { "Default.": legacy("+12025550125", 19963), default: exact },
+      accounts: { "Default.": alias, default: exact },
     };
     const result = normalizeCompatibilityConfig({ cfg: { channels: { signal } } });
     expect(resolve(result.config, "default")).toMatchObject({
@@ -83,6 +95,17 @@ it.each([false, true])(
     ]);
   },
 );
+
+it("Signal status and threading use an owned number", () => {
+  const cfg = signalConfig({ account: "+12025550123", accounts: { "Work Phone": authored } });
+  expect(signalPlugin.config.listAccountIds(cfg)).toContain(workId);
+  expect(resolve(cfg, workId)).toMatchObject({
+    configured: true,
+    baseUrl: authored.transport.url,
+    config: authored,
+  });
+  expect(signalPlugin.threading?.resolveReplyToMode?.({ cfg, accountId: workId })).toBe("off");
+});
 
 it.each([false, true])("Signal writers select the stored key (collision=%s)", (collision) => {
   const cfg = signalConfig({
@@ -115,4 +138,23 @@ it.each([false, true])("Signal writers select the stored key (collision=%s)", (c
     expect(stored(removed)[key]).toBeUndefined();
     expect(resolve(removed, workId).configured).toBe(false);
   }
+});
+
+it("Signal setup preserves container transport when editing its URL", () => {
+  const cfg = named({ kind: "container", url: authored.transport.url });
+  const next = write({ cfg, accountId: workId, input: { httpUrl: localUrl } });
+  expect(stored(next)["Work Phone"]?.transport).toEqual({ kind: "container", url: localUrl });
+});
+
+it("Signal setup reserves the managed port of a named alias", () => {
+  const cfg = named({ kind: "managed-native", httpPort: 18081 });
+  expect(() =>
+    write({
+      cfg,
+      accountId: "personal",
+      input: external("+12025550125", "http://127.0.0.1:18081"),
+    }),
+  ).toThrow(
+    'Signal managed native account "work-phone" binds port 18081, which conflicts with account "personal" local transport endpoint.',
+  );
 });

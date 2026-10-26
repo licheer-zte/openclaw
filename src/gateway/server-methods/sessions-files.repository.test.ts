@@ -46,6 +46,7 @@ import {
   createSessionFilesHandlerInvoker,
   createSessionFilesClient,
   createSessionFileDownloadClient,
+  fetchSessionFileDownload,
   openSessionFileDownload,
   createWorkspaceFixture,
   hashContent,
@@ -123,6 +124,29 @@ const edit = (content = "saved\n", expectedHash = hashContent("before\n")) => ({
   content,
   expectedHash,
 });
+const repositoryEntry = () => ({
+  sessionId,
+  repositoryWorkspaceId: source.workspaceId,
+  lifecycleRevision,
+  archivedAt,
+});
+const environmentRecord = () => ({
+  ...environment(),
+  environmentId: identity.environmentId,
+  ownerEpoch: identity.generation,
+  attachedSessionIds: [identity.sessionId],
+});
+
+function checkpointData(base: Awaited<ReturnType<typeof capture>>, current = base) {
+  return {
+    stagingRoot: workspace,
+    baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
+    currentManifestRaw: serializeWorkerWorkspaceManifest(current.manifest),
+    baseManifestRef: base.manifestRef,
+    currentManifestRef: current.manifestRef,
+  };
+}
+
 const createRepository = (url: string) =>
   store.create({ agentId: "main", sessionKey, url, assertCurrent() {} });
 async function publishCheckpoint(base: Awaited<ReturnType<typeof capture>>, current = base) {
@@ -130,11 +154,7 @@ async function publishCheckpoint(base: Awaited<ReturnType<typeof capture>>, curr
     store,
     workspaceId: source.workspaceId,
     expectedRevision: source.revision,
-    stagingRoot: workspace,
-    baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
-    currentManifestRaw: serializeWorkerWorkspaceManifest(current.manifest),
-    baseManifestRef: base.manifestRef,
-    currentManifestRef: current.manifestRef,
+    ...checkpointData(base, current),
     assertCurrent() {},
   });
   source = await staged.publish();
@@ -246,13 +266,7 @@ afterEach(async () => {
 async function persistSessionEntry() {
   await upsertSessionEntryCore(
     { agentId: "main", sessionKey },
-    {
-      sessionId,
-      repositoryWorkspaceId: source.workspaceId,
-      lifecycleRevision,
-      archivedAt,
-      updatedAt: Date.now(),
-    },
+    { ...repositoryEntry(), updatedAt: Date.now() },
   );
 }
 
@@ -278,11 +292,13 @@ it("keeps incognito repository downloads alive after their RPC planning borrow e
     },
   );
   const download = await files.ok("download", "README", undefined, connection);
-  const fetched = await connection.fetch(download.url);
+  const fetched = await fetchSessionFileDownload(connection.client, download.url);
   expect(fetched.response.statusCode).toBe(200);
   expect(Buffer.from(fetched.body as Uint8Array).toString()).toBe("untouched source\n");
   memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath });
-  expect((await connection.fetch(download.url)).response.statusCode).toBe(404);
+  expect(
+    (await fetchSessionFileDownload(connection.client, download.url)).response.statusCode,
+  ).toBe(404);
 });
 
 it("downloads original live repository bytes in bounded windows and rejects stale placement", async () => {
@@ -313,7 +329,11 @@ it("downloads original live repository bytes in bounded windows and rejects stal
   expect(Buffer.from(first.value!).equals(bytes.subarray(0, first.value!.length))).toBe(true);
   nextWindow.resolve();
   const chunks = [first.value!];
-  for (let next = await reader.read(); !next.done; next = await reader.read()) {
+  for (;;) {
+    const next = await reader.read();
+    if (next.done) {
+      break;
+    }
     chunks.push(next.value);
   }
   expect(Buffer.concat(chunks).equals(bytes)).toBe(true);
@@ -325,7 +345,9 @@ it("downloads original live repository bytes in bounded windows and rejects stal
   onResult = () => {
     generation++;
   };
-  expect((await connection.fetch(download.url)).response.statusCode).toBe(404);
+  expect(
+    (await fetchSessionFileDownload(connection.client, download.url)).response.statusCode,
+  ).toBe(404);
   expect(mocks.workspace).not.toHaveBeenCalled();
 });
 
@@ -362,7 +384,8 @@ it("browses, previews, edits and diffs only the live repository without a Gatewa
   expect(summary.additions).toBe(2);
   expect(summary.deletions).toBe(1);
   expect(summary.commits).toBeUndefined();
-  expect(await files.ok("reveal")).toMatchObject({
+  const reveal = await files.ok("reveal");
+  expect(reveal).toMatchObject({
     ok: false,
     error: expect.stringContaining("no Gateway checkout"),
   });
@@ -371,13 +394,14 @@ it("browses, previews, edits and diffs only the live repository without a Gatewa
 });
 
 it.each(["tunnel", "result"])("rejects a replaced placement after %s work", async (phase) => {
-  const replace = () => {
-    generation++;
-  };
   if (phase === "tunnel") {
-    onTunnel = replace;
+    onTunnel = () => {
+      generation++;
+    };
   } else {
-    onResult = replace;
+    onResult = () => {
+      generation++;
+    };
   }
   await expect(files.request("get", "README")).rejects.toThrow("placement changed");
   expect(mocks.workspace).not.toHaveBeenCalled();
@@ -418,7 +442,8 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
   await publishCheckpoint(base, await capture());
   active = false;
   const originalGitRead = worktreeGit.runGitBuffered;
-  using hostReads = vi.spyOn(worktreeGit, "runGitBuffered");
+  const hostReads = vi.spyOn(worktreeGit, "runGitBuffered");
+  onTestFinished(() => hostReads.mockRestore());
   const list = await files.ok("list");
   expect(list.browser.entries.map((entry: { path: string }) => entry.path)).toEqual(changedPaths);
   const retained = await files.ok("get", "second.txt");
@@ -428,14 +453,15 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
   const blobsRead = () => hostReads.mock.calls.filter(([, args]) => args[1] === "--batch").length;
   using connection = createSessionFileDownloadClient();
   const download = await files.ok("download", "oversized.txt", undefined, connection);
-  const fetched = await connection.fetch(download.url);
+  const fetched = await fetchSessionFileDownload(connection.client, download.url);
   expect(fetched.response.statusCode).toBe(200);
   expect(Buffer.from(fetched.body as Uint8Array).equals(oversizedBytes)).toBe(true);
   await files.error("download", "README", undefined, connection);
   await files.error("download", "../changed.txt", undefined, connection);
   const beforeOversized = blobsRead();
   expect(beforeOversized).toBeGreaterThan(0);
-  expect(await files.error("get", "oversized.txt")).toEqual({
+  const oversized = await files.error("get", "oversized.txt");
+  expect(oversized).toEqual({
     code: "INVALID_REQUEST",
     message: "session file is too large to preview",
     details: {
@@ -512,12 +538,7 @@ it("keeps a timed-out remote save owned until its physical write drains before S
     return await realRename(...args);
   });
   onTestFinished(() => renameSpy.mockRestore());
-  const record = {
-    ...environment(),
-    environmentId: identity.environmentId,
-    ownerEpoch: identity.generation,
-    attachedSessionIds: [identity.sessionId],
-  };
+  const record = environmentRecord();
   const nodeTransport = transport();
   let physicalWrite: Promise<unknown> | undefined;
   nodeTransport.invoke = async (request) => {

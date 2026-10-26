@@ -1,5 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
 import { noteGroupMember } from "./group-members.js";
 import {
@@ -14,19 +14,25 @@ const visibility = {
   groupPolicy: "allowlist",
   groupAllowFrom: ["+111"],
 } as const satisfies Omit<ReplyContextParams, "msg">;
-const visibleReply = (quote: ReplyContextParams["msg"]["quote"]) =>
-  resolveVisibleWhatsAppReplyContext({
-    msg: createTestWebInboundMessage({
-      admission: { conversation: { kind: "group", id: "123@g.us" } },
-      quote,
-    }),
-    ...visibility,
-  });
+const visibleReply = (msg: ReplyContextParams["msg"]) =>
+  resolveVisibleWhatsAppReplyContext({ msg, ...visibility });
 const historyEntry = (name: string, phone: string, body: string) => ({
   sender: `${name} (${phone})`,
   body,
   senderJid: `${phone.slice(1)}@s.whatsapp.net`,
 });
+
+const makeBlockedQuotedReplyMessage = (): ReplyContextParams["msg"] =>
+  createTestWebInboundMessage({
+    admission: {
+      conversation: { kind: "group", id: "123@g.us" },
+    },
+    quote: {
+      id: "blocked-reply",
+      body: "Blocked quoted text",
+      sender: { displayName: "Mallory (+999)", jid: "999@s.whatsapp.net" },
+    },
+  });
 
 describe("whatsapp inbound context visibility", () => {
   it("filters non-allowlisted group history from supplemental context", () => {
@@ -36,27 +42,25 @@ describe("whatsapp inbound context visibility", () => {
       ...visibility,
     });
 
-    expect(history).toEqual([allowed]);
+    expect(history).toEqual([historyEntry("Alice", "+111", "Allowed context")]);
   });
 
   it("redacts blocked quoted replies in allowlist mode", () => {
-    expect(
-      visibleReply({
-        body: "Blocked quoted text",
-        sender: { jid: "999@s.whatsapp.net" },
-      }),
-    ).toBeNull();
+    expect(visibleReply(makeBlockedQuotedReplyMessage())).toBeNull();
   });
 
   it("renders structured quoted media only at the visible preview boundary", () => {
-    const reply = visibleReply({
+    const msg = makeBlockedQuotedReplyMessage();
+    msg.quote = {
       context: {
         id: "quoted-sticker",
         body: "",
         media: { contentType: "image/webp", kind: "sticker" },
         sender: { jid: "111@s.whatsapp.net", label: "Alice (+111)" },
       },
-    });
+    };
+
+    const reply = visibleReply(msg);
 
     expect(reply).toMatchObject({
       body: "<media:sticker>",
@@ -74,12 +78,17 @@ it("ignores incomplete group member values", () => {
   expect(groupMemberNames.get("g1")).toBeUndefined();
 });
 
-it("does not leak unhandled rejections when a tracked task fails", async () => {
+describe("trackBackgroundTask", () => {
   const unhandledRejections: unknown[] = [];
   const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason);
 
-  process.on("unhandledRejection", onUnhandledRejection);
-  try {
+  afterEach(() => {
+    process.off("unhandledRejection", onUnhandledRejection);
+    unhandledRejections.length = 0;
+  });
+
+  it("does not leak unhandled rejections when a tracked task fails", async () => {
+    process.on("unhandledRejection", onUnhandledRejection);
     const backgroundTasks = new Set<Promise<unknown>>();
     const { promise: task, reject } = createDeferred<void>();
 
@@ -94,7 +103,5 @@ it("does not leak unhandled rejections when a tracked task fails", async () => {
 
     expect(backgroundTasks.size).toBe(0);
     expect(unhandledRejections).toStrictEqual([]);
-  } finally {
-    process.off("unhandledRejection", onUnhandledRejection);
-  }
+  });
 });

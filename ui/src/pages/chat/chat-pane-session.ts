@@ -285,9 +285,6 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         retireIfCurrent();
         return;
       }
-      if (historyCommitted) {
-        this.cacheSessionReactions();
-      }
       if (!this.presented || document.visibilityState === "hidden") {
         hydration.resume = () => scheduleHydration(historyCommitted);
         return;

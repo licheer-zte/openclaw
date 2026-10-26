@@ -79,19 +79,6 @@ export function mockGlobalSessionAgentRoster() {
   };
 }
 
-export function pluginSubagentClient(
-  baseClient: NonNullable<AgentHandlerArgs["client"]>,
-): NonNullable<AgentHandlerArgs["client"]> {
-  return {
-    connect: baseClient.connect,
-    internal: {
-      ...baseClient.internal,
-      agentRunTracking: "plugin_subagent",
-      pluginRuntimeOwnerId: "memory-core",
-    },
-  };
-}
-
 export function nativeSubagentClient(): AgentHandlerArgs["client"] {
   const baseClient = requireValue(backendGatewayClient(), "expected backend client");
   return {
@@ -378,7 +365,14 @@ export function registerPluginSubagentAdmissionTests() {
           meta: { durationMs: 100 },
         });
         const baseClient = requireValue(backendGatewayClient(), "expected backend client");
-        const pluginClient: AgentHandlerArgs["client"] = pluginSubagentClient(baseClient);
+        const pluginClient: AgentHandlerArgs["client"] = {
+          connect: baseClient.connect,
+          internal: {
+            ...baseClient.internal,
+            agentRunTracking: "plugin_subagent",
+            pluginRuntimeOwnerId: "memory-core",
+          },
+        };
         const initialCommandCallCount = mocks.agentCommand.mock.calls.length;
         if (inputFailure) {
           mocks.stageSessionPendingInput.mockRejectedValueOnce(

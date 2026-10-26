@@ -108,7 +108,6 @@ export async function createRealPublicationWorkspace(params: {
   const remote = mocks.runCommand.getMockImplementation()!;
   let interrupted = false;
   let remoteHead = "";
-  let remoteBranch = branch;
   const remoteCommits = new Set([baseHead]);
   const effects: string[] = [];
   function interrupt(at: typeof interruptAt, message: string, ready = true) {
@@ -154,18 +153,14 @@ export async function createRealPublicationWorkspace(params: {
     }
     if (argv.includes("push")) {
       effects.push("push");
-      const refspec = argv.find((arg) => /^[a-f0-9]+:refs\/heads\//u.test(arg));
-      if (!refspec) {
-        throw new Error("Publication fixture expected an exact commit push.");
-      }
-      [remoteHead, remoteBranch] = refspec.split(":refs/heads/") as [string, string];
+      remoteHead = await git("rev-parse", "HEAD");
       remoteCommits.add(remoteHead);
       interrupt("push", "synthetic push response lost");
       return commandResult();
     }
     if (argv.includes("ls-remote")) {
       interrupt("observe", "synthetic remote observation unavailable", Boolean(remoteHead));
-      return commandResult(remoteHead ? `${remoteHead}\trefs/heads/${remoteBranch}\n` : "");
+      return commandResult(remoteHead ? `${remoteHead}\trefs/heads/${branch}\n` : "");
     }
     const result = await local(argv, options);
     interrupt("index", "synthetic ref update response lost", argv.includes("update-ref"));

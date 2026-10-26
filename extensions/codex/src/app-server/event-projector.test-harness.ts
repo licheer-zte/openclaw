@@ -40,6 +40,7 @@ export { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 
 export {
   CodexAppServerEventProjector,
+  createCodexTestModel,
   createCodexTestToolTerminalObserver,
   createMockPluginRegistry,
   describe,

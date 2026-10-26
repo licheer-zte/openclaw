@@ -28,8 +28,15 @@ const guardedRead = (workspaceDir: string) =>
 describe("memory filesystem policy", () => {
   let workspaceDir: string;
 
-  beforeEach(() => {
-    workspaceDir = tempDirs.make("openclaw-workspace-outside-");
+  const memoryWriteTool = (relativePath: string) =>
+    wrapToolMemoryFlushAppendOnlyWrite(createHostWorkspaceWriteTool(workspaceDir), {
+      root: workspaceDir,
+      relativePath,
+    });
+
+  beforeEach(async () => {
+    workspaceDir = path.join(tempDirs.make("openclaw-workspace-outside-"), "workspace");
+    await fs.mkdir(workspaceDir);
   });
 
   it("makes only missing canonical daily-memory reads implicitly optional", async () => {
@@ -64,11 +71,7 @@ describe("memory filesystem policy", () => {
     "validates memory append paths after suffix stripping (valid: %s)",
     async (valid) => {
       const file = "memory/2026-03-08.md";
-      const write = wrapToolMemoryFlushAppendOnlyWrite(createHostWorkspaceWriteTool(workspaceDir), {
-        root: workspaceDir,
-        relativePath: file,
-      });
-      const result = write.execute("write", {
+      const result = memoryWriteTool(file).execute("write", {
         path: `${valid ? file : ""}</arg_value>>`,
         content: "new note",
       });

@@ -205,10 +205,18 @@ export type GatewayClosePrepareParams = GatewayRunShutdownParams & {
   getPendingReplyCount: () => number;
 };
 
+export type GatewayClosePreparation = {
+  start: number;
+  notice: ReturnType<typeof resolveGatewayShutdownNotice>;
+  restart: boolean;
+  warnings: string[];
+  cleanupWork: AsyncWorkScope;
+};
+
 export async function prepareGatewayClose(
   params: GatewayClosePrepareParams,
   opts?: GatewayCloseOptions,
-) {
+): Promise<GatewayClosePreparation> {
   const start = Date.now();
   const warnings: string[] = [];
   const notice = resolveGatewayShutdownNotice(opts);
@@ -301,7 +309,7 @@ export async function prepareGatewayClose(
 
 export function completeGatewayClose(
   params: GatewayCloseParams,
-  preparation: Awaited<ReturnType<typeof prepareGatewayClose>>,
+  preparation: GatewayClosePreparation,
 ): Promise<ShutdownResult> {
   // Cleanup belongs to shutdown, not the initiating RPC's drained connection scope.
   return preparation.cleanupWork.run(async () => {
@@ -315,7 +323,7 @@ export function completeGatewayClose(
 
 async function closeGatewayResources(
   params: GatewayCloseParams,
-  preparation: Awaited<ReturnType<typeof prepareGatewayClose>>,
+  preparation: GatewayClosePreparation,
 ): Promise<ShutdownResult> {
   await measureGatewayCloseStep("restart.close.metadata-begin", () =>
     params.pluginMetadata.beginClose(),
@@ -398,6 +406,9 @@ async function closeGatewayResources(
     await disposeRuntime("cli-live-sessions", disposeAllCliLiveSessions);
     await disposeRuntime("agent-harnesses", disposeRegisteredAgentHarnesses);
     await shutdownStep("ai-session-resources", () => cleanupSessionResources());
+    await shutdownStep("provider-transport-dispatchers", () =>
+      params.closeProviderTransportDispatcherPool(),
+    );
     await measureCloseStep("bundle-runtimes", async () => {
       await Promise.all([
         disposeRuntime("bundle-mcp", disposeAllSessionMcpRuntimes),
@@ -527,10 +538,6 @@ async function closeGatewayResources(
     // Grace lets independent teardown advance; raw cleanup and its descendants
     // still join before registry and shared-state retirement.
     await measureCloseStep("cleanup-work", () => cleanupWork.runWhenIdle(() => {}));
-    // MCP termination can send HTTP even after its runtime's close grace expires.
-    await shutdownStep("provider-transport-dispatchers", () =>
-      params.closeProviderTransportDispatcherPool(),
-    );
     await pluginServicesCleanup;
     await measureCloseStep("request-entries", () => params.finishRequestEntries?.());
     await measureCloseStep("media-cleanup-drains", waitForMediaCleanupDrainsToSettle);

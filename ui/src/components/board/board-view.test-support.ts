@@ -20,7 +20,9 @@ type OpenClawBoardView = HTMLElementTagNameMap["openclaw-board-view"];
 export const testId = (root: ParentNode, id: string) =>
   root.querySelector<HTMLElement>(`[data-test-id="${id}"]`);
 export function expectText(element: Element | null | undefined, ...contents: string[]) {
-  contents.forEach((content) => expect(element?.textContent).toContain(content));
+  for (const content of contents) {
+    expect(element?.textContent).toContain(content);
+  }
 }
 export const widgetSnapshot = (widget: Partial<BoardWidget> = {}) =>
   snapshot({ widgets: [boardWidget(widget)] });
@@ -35,7 +37,10 @@ export async function openBoardMenu(
 }
 
 export const boardWidget = (overrides: Partial<BoardWidget> = {}): BoardWidget =>
-  createBoardWidget({ title: "Alpha status", ...overrides });
+  createBoardWidget({
+    title: "Alpha status",
+    ...overrides,
+  });
 
 export const snapshot = (overrides: Partial<BoardSnapshot> = {}): BoardSnapshot => ({
   sessionKey: "agent:main:test",

@@ -1,6 +1,5 @@
 import type { JSX } from "@solidjs/web";
 import { createSignal, onSettled, Show } from "solid-js";
-import { animateDetailsSection } from "../../../components/details-section-motion.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
@@ -59,13 +58,10 @@ export function createDetailsDesktopReveal(
     onMotionChange?.(false);
     disclosure.open = presentation?.[0] ?? false;
     // Keep new content clipped to the last measured size until its resize is scheduled.
-    const retainHeight =
-      presentation?.[0] && presentation?.[1] && (presentation?.[2] || destination === 0);
+    const retainHeight = presentation?.[0] && presentation?.[1] && presentation?.[2];
     const height = retainHeight ? destination : undefined;
     body.style.height = height === undefined ? "" : `${height}px`;
     body.style.overflow = retainHeight ? "hidden" : "";
-    body.style.opacity = presentation?.[0] ? "1" : "0";
-    body.style.marginTop = presentation?.[0] ? "2px" : "0px";
   };
   createLayoutMeasurement(
     read,
@@ -76,8 +72,7 @@ export function createDetailsDesktopReveal(
       const previous = presentation;
       presentation = current;
       const [expanded, presented, animateContentResize] = current;
-      const resizingContent =
-        expanded && presented && (animateContentResize || destination === 0 || Boolean(animation));
+      const resizingContent = animateContentResize && expanded && presented;
       // Restore presentation and keyboard access before the next paint.
       if (!previous || presented !== previous[1] || !presented || keyboard) {
         keyboard = false;
@@ -89,25 +84,18 @@ export function createDetailsDesktopReveal(
         }
         return finish;
       }
-      if (expanded === previous[0] && !resizingContent) {
+      if (expanded === previous[0] && !resizingContent && !(animation && expanded)) {
         return undefined;
       }
       // Closed details still reports its hidden body's intrinsic height.
       // Read visible in-flight geometry only while the native disclosure is open.
-      const from = disclosure.open
-        ? !animation && expanded === previous[0]
-          ? (destination ?? body.getBoundingClientRect().height)
-          : body.getBoundingClientRect().height
-        : 0;
-      const style = getComputedStyle(body);
-      const fromOpacity = disclosure.open ? style.opacity : "0";
-      const fromMargin = disclosure.open ? style.marginTop : "0px";
+      const from = disclosure.open ? body.getBoundingClientRect().height : 0;
       // Native details must expose its content before measuring the opening destination.
       if (expanded) {
         disclosure.open = true;
       }
       const to = expanded ? content.getBoundingClientRect().height : 0;
-      if (expanded === previous[0] && to === destination) {
+      if (resizingContent && expanded === previous[0] && to === destination) {
         return undefined;
       }
       destination = to;
@@ -121,15 +109,13 @@ export function createDetailsDesktopReveal(
         disclosure.open = true;
         body.style.height = `${to}px`;
         body.style.overflow = "hidden";
-        body.style.opacity = expanded ? "1" : "0";
-        body.style.marginTop = expanded ? "2px" : "0px";
         onMotionChange?.(true);
-        const revealAnimation = animateDetailsSection(body, {
-          from: { height: from, opacity: fromOpacity, marginTop: fromMargin },
-          height: to,
-          expanded,
-          reduced,
-        });
+        const revealAnimation = body.animate(
+          reduced
+            ? [{ opacity: expanded ? 0 : 1 }, { opacity: expanded ? 1 : 0 }]
+            : [{ height: `${from}px` }, { height: `${to}px` }],
+          { duration: reduced ? 100 : 300, easing: "cubic-bezier(0.4, 0, 0.2, 1)" },
+        );
         animation = revealAnimation;
         revealAnimation.onfinish = () => {
           if (animation === revealAnimation) {

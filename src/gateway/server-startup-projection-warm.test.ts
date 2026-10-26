@@ -20,8 +20,9 @@ import { buildControlUiSessionEntryUrl } from "./control-ui-session-entry-path.j
 import { createGatewayKernel } from "./server-kernel.js";
 import type { GatewayServer } from "./server-public.js";
 import * as rowReads from "./session-row-database-facts.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
 import * as projections from "./session-row-projection.js";
-import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 
 function observeProjectionDisposal(afterCreate?: () => Promise<void>) {
   const createProjection = projections.createSessionRowProjection;
@@ -56,7 +57,18 @@ async function createStartupState({ ui = false, anonymous = false } = {}) {
   state = await createOpenClawTestState({
     label: "startup-projection",
     layout: "home",
-    env: { ...KERNEL_TEST_ENV },
+    env: {
+      OPENCLAW_GATEWAY_PASSWORD: undefined,
+      OPENCLAW_GATEWAY_TOKEN: undefined,
+      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+      OPENCLAW_SKIP_CANVAS_HOST: "1",
+      OPENCLAW_SKIP_CHANNELS: "1",
+      OPENCLAW_SKIP_CRON: "1",
+      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+      OPENCLAW_SKIP_PROVIDERS: "1",
+      OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+      VITEST: "1",
+    },
   });
   await state.writeConfig({
     gateway: {
@@ -286,7 +298,9 @@ it("joins and disposes a warming projection when transport creation fails", asyn
   }
 });
 
-it("refuses startup and disposes its projection when initial rows fail after the first batch", async () => {
+it("serves a ready session when unrelated initial display rows fail after the first batch", async ({
+  signal,
+}) => {
   const port = await createStartupState();
   let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
   try {
@@ -302,24 +316,37 @@ it("refuses startup and disposes its projection when initial rows fail after the
       { agentId: "main" },
     );
     const failure = new Error("Initial session row batch unavailable");
+    const failedBackgroundBatch = createDeferred();
+    const key = "agent:main:startup-warm-0";
     const readFacts = rowReads.withSessionRowDatabaseFacts;
     let batches = 0;
     vi.spyOn(rowReads, "withSessionRowDatabaseFacts").mockImplementation(async (...args) => {
-      if ((args[0].selected ?? args[0].dirty).size > 0 && ++batches > 1) {
+      const selected = args[0].selected ?? args[0].dirty;
+      if (
+        selected.size > 0 &&
+        ++batches > 1 &&
+        [...selected].some((id) => args[0].rows.get(id)?.key !== key)
+      ) {
+        failedBackgroundBatch.resolve();
         throw failure;
       }
       return readFacts(...args);
     });
     const disposed = observeProjectionDisposal();
-    const startup = createGatewayKernel(port, authenticatedOptions).then((created) => {
-      kernel = created;
-    });
-    await expect(startup).rejects.toBe(failure);
-    expect(batches).toBeGreaterThan(1);
-    expect(disposed).toHaveBeenCalledOnce();
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
-    expect(getActiveSecretsRuntimeConfigSnapshot()).toBeNull();
+    kernel = await createGatewayKernel(port, authenticatedOptions);
+    await withinTest(failedBackgroundBatch.promise, signal);
+    const projection = getSessionRowProjection(kernel.gatewayRequestContext)!;
+    const session = await withReadySessionRows(
+      projection,
+      () => [{ agentId: "main", key }],
+      (read) => read.describe({ agentId: "main", key }),
+    );
+    expect(session?.entry.sessionId).toBe("startup-warm-0");
+    expect(projection.needsMaterialization).toBe(true);
+    expect(disposed).not.toHaveBeenCalled();
   } finally {
     await kernel?.closeOnStartupFailure();
   }
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
+  expect(getActiveSecretsRuntimeConfigSnapshot()).toBeNull();
 });

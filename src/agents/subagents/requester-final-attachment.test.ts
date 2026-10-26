@@ -41,7 +41,7 @@ const deliveredFinal = {
 };
 
 function promote(overrides: Partial<Parameters<typeof promoteRequesterFinalAttachment>[0]> = {}) {
-  return promoteRequesterFinalAttachment({ ...deliveredFinal, ...overrides });
+  return promoteRequesterFinalAttachment({ ...base, ...deliveredFinal, ...overrides });
 }
 
 function finalize(overrides: Partial<Parameters<typeof finalizeRequesterFinalAttachment>[0]> = {}) {
@@ -49,16 +49,15 @@ function finalize(overrides: Partial<Parameters<typeof finalizeRequesterFinalAtt
 }
 
 describe("requester final attachment", () => {
-  let append: ReturnType<typeof vi.fn<() => boolean>>;
-  let registration: ReturnType<typeof registerRequesterFinalAttachment>;
   beforeEach(() => {
     lifecycle.generation = "generation-1";
     lifecycle.rotate?.(lifecycle.generation);
-    append = vi.fn(() => true);
-    registration = registerRequesterFinalAttachment({ ...base, append });
   });
 
   it("promotes an exact durable batch and consumes it once", () => {
+    const append = vi.fn(() => true);
+    const registration = registerRequesterFinalAttachment({ ...base, append });
+
     finalize({ batchRunIds: ["run-a", "run-b"] });
     expect(append).not.toHaveBeenCalled();
     expect(promote({ batchRunIds: ["run-b", "run-a"] })).toBe(true);
@@ -66,41 +65,64 @@ describe("requester final attachment", () => {
 
     finalize({ batchRunIds: ["run-a", "run-b"] });
     expect(append).toHaveBeenCalledExactlyOnceWith("final");
-    finalize({ batchRunIds: ["run-a", "run-b"], finalAssistantVisibleText: "replay" });
+    finalize({
+      batchRunIds: ["run-a", "run-b"],
+      finalAssistantVisibleText: "replay",
+    });
     expect(append).toHaveBeenCalledExactlyOnceWith("final");
   });
 
   it("rejects the wrong session or batch without consuming the owner", () => {
+    const append = vi.fn(() => true);
+    registerRequesterFinalAttachment({ ...base, append });
     promote({ rearmGeneration: 2 });
 
-    finalize({ requesterSessionId: "session-other", rearmGeneration: 2 });
+    finalize({
+      requesterSessionId: "session-other",
+      rearmGeneration: 2,
+      finalAssistantVisibleText: "wrong session",
+    });
     finalize({
       batchRunIds: ["run-b"],
       rearmGeneration: 2,
       finalAssistantVisibleText: "wrong batch",
     });
-    finalize({ rearmGeneration: 1 });
     expect(append).not.toHaveBeenCalled();
     finalize({ rearmGeneration: 2 });
     expect(append).toHaveBeenCalledExactlyOnceWith("final");
   });
 
-  it.each(["rotated", "current"])("only the %s lifecycle can finalize a replacement", (state) => {
-    const rearmGeneration = state === "rotated" ? 1 : 3;
+  it.each([
+    ["rotated", 1],
+    ["current", 3],
+  ] as const)("only the %s lifecycle can finalize a replacement", (state, rearmGeneration) => {
+    const first = vi.fn(() => true);
     const second = vi.fn(() => true);
-    registerRequesterFinalAttachment({ ...base, requesterTurnRunId: "run-new", append: second });
-    registration.revoke();
-    expect(promote({ requesterTurnRunId: "run-new", rearmGeneration })).toBe(true);
+    const firstRegistration = registerRequesterFinalAttachment({ ...base, append: first });
+    registerRequesterFinalAttachment({
+      ...base,
+      requesterTurnRunId: "run-new",
+      append: second,
+    });
+    firstRegistration.revoke();
+    expect(
+      promote({
+        requesterTurnRunId: "run-new",
+        batchRunIds: ["run-new-child"],
+        rearmGeneration,
+      }),
+    ).toBe(true);
 
     if (state === "rotated") {
       lifecycle.generation = "generation-2";
       lifecycle.rotate?.(lifecycle.generation);
     }
     finalize({
+      batchRunIds: ["run-new-child"],
       rearmGeneration,
       finalAssistantVisibleText: state === "rotated" ? "stale" : "new final",
     });
-    expect(append).not.toHaveBeenCalled();
+    expect(first).not.toHaveBeenCalled();
     if (state === "rotated") {
       expect(second).not.toHaveBeenCalled();
     } else {
@@ -109,9 +131,10 @@ describe("requester final attachment", () => {
   });
 
   it("consumes a throwing callback without failing or replaying finalization", () => {
-    append.mockImplementation(() => {
+    const append = vi.fn(() => {
       throw new Error("socket closed");
     });
+    registerRequesterFinalAttachment({ ...base, append });
     promote();
 
     finalize();
@@ -123,7 +146,7 @@ describe("requester final attachment", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(1_000);
-      registerRequesterFinalAttachment({ ...base, timeoutMs: 10, append });
+      registerRequesterFinalAttachment({ ...base, timeoutMs: 10, append: vi.fn(() => true) });
       vi.setSystemTime(1_011);
       expect(promote()).toBe(false);
     } finally {

@@ -8,7 +8,10 @@ import { AgentSession } from "./agent-session.js";
 
 function measuredUsage(input: number, output = 0) {
   return {
-    ...unavailable(input, output),
+    ...createZeroUsageFixture(),
+    input,
+    output,
+    totalTokens: input + output,
     contextUsage: { state: "available" as const, promptTokens: input, totalTokens: input + output },
   };
 }

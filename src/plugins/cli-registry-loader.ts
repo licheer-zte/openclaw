@@ -230,17 +230,8 @@ async function loadPluginCliMetadataRegistryWithContext(
   primaryCommand?: string,
   loaderOptions?: PluginCliLoaderOptions,
 ): Promise<PluginRegistry> {
-  let onlyPluginIds = resolvePrimaryCommandManifestPluginIds(prepared.context, primaryCommand);
-  if (onlyPluginIds?.length === 0) {
-    // Declared CLI roots are complete; only undeclared legacy registrars need discovery.
-    onlyPluginIds = (prepared.context.manifestRegistry?.plugins ?? [])
-      .filter((plugin) => plugin.cliCommands === undefined)
-      .map((plugin) => plugin.id);
-  }
+  const onlyPluginIds = resolvePrimaryCommandManifestPluginIds(prepared.context, primaryCommand);
   prepared.assertCurrent();
-  if (onlyPluginIds?.length === 0) {
-    return createEmptyPluginRegistry();
-  }
   const registry = await (prepared.metadataRegistry ??= prepared.withCache(() => {
     const options = buildPluginRuntimeLoadOptions(prepared.context, {
       ...loaderOptions,

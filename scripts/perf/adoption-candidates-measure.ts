@@ -107,7 +107,6 @@ const unexpected = (): never => {
 const state: CodexBindingStateStore = {
   lookup: unexpected,
   prepareRead: unexpected,
-  prepareGuard: unexpected,
   withCurrent: unexpected,
   asyncReads: {
     lookup: unexpected,

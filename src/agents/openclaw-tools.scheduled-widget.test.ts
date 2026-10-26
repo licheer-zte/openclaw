@@ -18,9 +18,6 @@ afterEach(() => {
 function widget(tools: ReturnType<typeof createOpenClawTools>) {
   return tools.find((candidate) => candidate.name === "show_widget");
 }
-function createWidget(options: Parameters<typeof createOpenClawTools>[0]) {
-  return widget(createOpenClawTools(options));
-}
 
 function expectPinnedOnlySchema(tools: ReturnType<typeof createOpenClawTools>): void {
   expect(widget(tools)?.requiredClientCaps).toBeUndefined();
@@ -32,7 +29,8 @@ function expectPinnedOnlySchema(tools: ReturnType<typeof createOpenClawTools>): 
 it.each([undefined, "agent:main:cron:job:run:detached"])(
   "requires a persistent session for recovered authoring (%s)",
   (agentSessionKey) => {
-    expect(createWidget({ agentSessionKey, pinnedWidgetAuthoring: true })).toBeUndefined();
+    const tools = createOpenClawTools({ agentSessionKey, pinnedWidgetAuthoring: true });
+    expect(widget(tools)).toBeUndefined();
   },
 );
 
@@ -57,13 +55,13 @@ it.each([
     config: { tools: { deny: ["show_widget"] } },
   },
 ])("applies scheduled widget capability and deny policy: %j", (options) => {
-  expect(
-    createWidget({
-      agentSessionKey: "agent:main:dashboard:scheduled",
-      gatewayCallerScheduled: true,
-      ...options,
-    }),
-  ).toBeUndefined();
+  const tools = createOpenClawTools({
+    agentSessionKey: "agent:main:dashboard:scheduled",
+    gatewayCallerScheduled: true,
+    ...options,
+  });
+
+  expect(widget(tools)).toBeUndefined();
 });
 
 it("lets a server-authorized canvas cap select pinned widget authoring", () => {
@@ -82,25 +80,29 @@ it("lets a server-authorized canvas cap select pinned widget authoring", () => {
 });
 
 it("keeps scheduled turns with a real inline client on the normal widget surface", () => {
-  const tool = createWidget({
-    agentSessionKey: "agent:main:dashboard:scheduled",
-    gatewayCallerScheduled: true,
-    runtimeToolAllowlist: ["show_widget"],
-    clientCaps: ["inline-widgets"],
-  });
+  const tool = widget(
+    createOpenClawTools({
+      agentSessionKey: "agent:main:dashboard:scheduled",
+      gatewayCallerScheduled: true,
+      runtimeToolAllowlist: ["show_widget"],
+      clientCaps: ["inline-widgets"],
+    }),
+  );
   expect(tool).toMatchObject({ requiredClientCaps: ["inline-widgets"] });
   expect(tool?.parameters).not.toMatchObject({ required: expect.arrayContaining(["pin"]) });
 });
 
 it("pins from a recovered turn that keeps the session's inline widget catalog", async () => {
   const agentSessionKey = "agent:main:dashboard:recovered";
-  const recorded = createWidget({ agentSessionKey, clientCaps: ["inline-widgets"] });
-  const recovered = createWidget({
-    agentSessionKey,
-    pinnedWidgetAuthoring: true,
-    listingClientCaps: ["inline-widgets"],
-    clientCaps: [],
-  });
+  const recorded = widget(createOpenClawTools({ agentSessionKey, clientCaps: ["inline-widgets"] }));
+  const recovered = widget(
+    createOpenClawTools({
+      agentSessionKey,
+      pinnedWidgetAuthoring: true,
+      listingClientCaps: ["inline-widgets"],
+      clientCaps: [],
+    }),
+  );
   expect(recovered?.parameters).toEqual(recorded?.parameters);
   expect(recovered?.description).toBe(recorded?.description);
   const put = vi.spyOn(gateway, "callInProcessGatewayTool").mockResolvedValue({

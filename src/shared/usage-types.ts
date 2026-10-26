@@ -23,17 +23,6 @@ export type SessionUsageCreator = {
   actor?: SessionCreatedActor;
 };
 
-/** Report-calendar hour facets folded in the usage worker instead of per-quarter rows. */
-type UsageLocalHours = {
-  /** Tokens per hour (0-23), tokens per weekday (24-30), messages (31-54) and errors (55-78) per hour. */
-  values: Float64Array;
-  /** At least one quarter had tokens; otherwise charts spread totals over the active span. */
-  precise: boolean;
-};
-
-/** Overview rows carry hour facets instead of UTC quarter arrays; compact output drops both. */
-export type UsageOverviewSessionSummary = SessionCostSummary & { localHours?: UsageLocalHours };
-
 export type SessionUsageEntry = {
   /** Stable row key for UI diffing; may be a session id or family key. */
   key: string;
@@ -68,7 +57,7 @@ export type SessionUsageEntry = {
   providerOverride?: string;
   modelProvider?: string;
   model?: string;
-  usage: UsageOverviewSessionSummary | null;
+  usage: SessionCostSummary | null;
   computing?: boolean;
   /** Context availability without transferring the full report in overview queries. */
   hasContextWeight?: boolean;
@@ -126,7 +115,7 @@ export type SessionsUsageResult = {
   creatorOptions?: SessionUsageCreator[];
   cacheStatus?: CostUsageSummary["cacheStatus"];
   overview?: SessionsUsageOverview;
-  partial?: { reason: "time-budget" | "aggregate-boundary" | "summarizing"; message: string };
+  partial?: { reason: "time-budget" | "aggregate-boundary"; message: string };
 };
 
 export type UsageOverviewOptions = {

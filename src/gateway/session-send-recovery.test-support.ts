@@ -8,7 +8,11 @@ import type { SessionSendDelivery } from "./session-send-delivery.js";
 import { SessionStoreUnavailableError } from "./session-utils-store-error.js";
 
 export const terminalRecoveryFailures = [
-  new GatewayClientRequestError({ code: "UNAVAILABLE", message: "denied", retryable: false }),
+  new GatewayClientRequestError({
+    code: "UNAVAILABLE",
+    message: "Admission denied",
+    retryable: false,
+  }),
   new SqliteWorkerError("Native outcome is unknown", "outcome-unknown"),
   new SessionStoreUnavailableError("main", "read-failed", {
     name: "SqliteError",
@@ -96,27 +100,44 @@ const exhausted = {
   attempts: 3,
   description: "the Gateway was still unavailable after 3 automatic attempts",
 };
-const diagnostic = (reason: string, description: string) => ({ reason, attempts: 1, description });
-const capacityError = () => new WorkerTaskError(privateDiagnostic, "overloaded");
 
 export const recoveryDiagnosticCases = [
-  ["capacity", "endpoint", capacityError(), exhausted],
+  ["capacity", "endpoint", new WorkerTaskError(privateDiagnostic, "overloaded"), exhausted],
   ["pending inspection", "endpoint", inspectionError("pending"), exhausted],
   [
     "failed inspection",
     "endpoint",
     inspectionError("failed"),
-    diagnostic("store-unavailable", "session storage was unavailable"),
+    {
+      reason: "store-unavailable",
+      attempts: 1,
+      description: "session storage was unavailable",
+    },
   ],
-  ["unknown", "endpoint", new Error(privateDiagnostic), diagnostic("unknown", "delivery failed")],
-  ["requester preparation capacity", "requester", capacityError(), exhausted],
+  [
+    "unknown",
+    "endpoint",
+    new Error(privateDiagnostic),
+    {
+      reason: "unknown",
+      attempts: 1,
+      description: "delivery failed",
+    },
+  ],
+  [
+    "requester preparation capacity",
+    "requester",
+    new WorkerTaskError(privateDiagnostic, "overloaded"),
+    exhausted,
+  ],
   [
     "requester authority refusal",
     "requester",
     new Error(privateDiagnostic),
-    diagnostic(
-      "requester-unavailable",
-      "original requester authority is unavailable; submit a new request",
-    ),
+    {
+      reason: "requester-unavailable",
+      attempts: 1,
+      description: "original requester authority is unavailable; submit a new request",
+    },
   ],
 ] as const;

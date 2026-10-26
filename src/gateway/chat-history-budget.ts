@@ -8,7 +8,6 @@ import { readTranscriptDisplayPosition } from "../chat/transcript-display-positi
 import type { AgentHistoryActivity } from "../infra/agent-activity-events.js";
 import { jsonUtf8Bytes, jsonUtf8BytesOrInfinity } from "../infra/json-utf8-bytes.js";
 import { logLargePayload } from "../logging/diagnostic-payload.js";
-import { mapChatDisplayMessages } from "./chat-display-projection.map.js";
 import type { InFlightRunSnapshot } from "./chat-inflight-snapshot.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
 
@@ -155,7 +154,7 @@ export function replaceOversizedChatHistoryMessages(params: {
   const { messages, maxSingleMessageBytes } = params;
   const byteCounter = params.byteCounter ?? createChatHistoryByteCounter();
   let replacedCount = 0;
-  const next = mapChatDisplayMessages(messages, (message) => {
+  const next = messages.map((message) => {
     if (byteCounter.messageBytes(message) <= maxSingleMessageBytes) {
       return message;
     }
@@ -165,7 +164,7 @@ export function replaceOversizedChatHistoryMessages(params: {
       ? placeholder
       : buildChatHistoryUnavailableSentinel();
   });
-  return { messages: next, replacedCount };
+  return { messages: replacedCount > 0 ? next : messages, replacedCount };
 }
 
 export function reportOmittedChatHistory(params: {

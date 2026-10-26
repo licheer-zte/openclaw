@@ -124,9 +124,6 @@ const TELEGRAM_SECRET = "secret";
 const TELEGRAM_WEBHOOK_PATH = "/hook";
 const webhookOptions = { secret: TELEGRAM_SECRET, path: TELEGRAM_WEBHOOK_PATH };
 const TELEGRAM_WEBHOOK_RATE_LIMIT_BURST = WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests + 10;
-const acceptedResponse = { status: 200, accepted: "durable", body: "" };
-const unauthorizedResponse = { status: 401, accepted: null, body: "unauthorized" };
-const rateLimitedResponse = { status: 429, accepted: null, body: "Too Many Requests" };
 
 vi.mock("grammy", async () => {
   const actual = await vi.importActual<typeof import("grammy")>("grammy");
@@ -199,14 +196,9 @@ function privateMessage(
   };
 }
 async function expectAccepted(response: Response) {
-  expect(await responseResult(response)).toEqual(acceptedResponse);
-}
-async function responseResult(response: Response) {
-  return {
-    status: response.status,
-    accepted: response.headers.get("x-openclaw-delivery-accepted"),
-    body: await response.text(),
-  };
+  expect(response.status).toBe(200);
+  expect(response.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
+  expect(await response.text()).toBe("");
 }
 function expectStopped() {
   expect(stopSpy).toHaveBeenCalledOnce();
@@ -226,7 +218,8 @@ async function expectInvalidLane(laneKey: string) {
 async function expectReplayed(update: unknown) {
   await withWebhook(async ({ ingress }) => {
     await ingress.waitForIdle();
-    expect(handleUpdateSpy).toHaveBeenCalledExactlyOnceWith(update);
+    expect(handleUpdateSpy).toHaveBeenCalledOnce();
+    expect(handleUpdateSpy).toHaveBeenCalledWith(update);
     expect(await webhookQueue().listFailed?.()).toEqual([]);
   });
 }
@@ -1019,7 +1012,13 @@ describe("startTelegramWebhook", () => {
     ["an ordinary callback without a topic", { message: { message_thread_id: undefined } }],
   ] as const)("does not authorize durable-lane reconciliation for %s", async (_name, patch) => {
     const laneKey = "telegram:1234:topic:42";
-    await persistForRestart({ update_id: 141, callback_query: patchedCallback(patch) }, laneKey);
+    await persistForRestart(
+      {
+        update_id: 141,
+        callback_query: patchedCallback(patch),
+      },
+      laneKey,
+    );
     await expectInvalidLane(laneKey);
   });
 
@@ -1045,7 +1044,8 @@ describe("startTelegramWebhook", () => {
         const response = await postUpdate(port, ownUpdate);
         expect(response.status).toBe(200);
         await delivered.promise;
-        expect(handleUpdateSpy).toHaveBeenCalledExactlyOnceWith(ownUpdate);
+        expect(handleUpdateSpy).toHaveBeenCalledWith(ownUpdate);
+        expect(handleUpdateSpy).toHaveBeenCalledOnce();
         expect(await pendingUpdates()).toMatchObject([{ updateId: 133 }]);
         expect(await webhookQueue().listClaims()).toEqual([]);
       },
@@ -1059,25 +1059,30 @@ describe("startTelegramWebhook", () => {
     message_thread_id: 42,
   };
   it.each([
-    [
-      "a malformed callback query",
-      134,
-      { callback_query: { data: "unrecognized-callback", message: legacyTopicMessage } },
-    ],
-    [
-      "a group message",
-      135,
-      {
+    {
+      name: "a malformed callback query",
+      update: {
+        update_id: 134,
+        callback_query: {
+          data: "unrecognized-callback",
+          message: legacyTopicMessage,
+        },
+      },
+    },
+    {
+      name: "a group message",
+      update: {
+        update_id: 135,
         message: {
           ...legacyTopicMessage,
           chat: { id: 1234, type: "group" },
           text: "wrong chat kind",
         },
       },
-    ],
-  ] as const)("rejects legacy lane reconciliation for %s", async (_name, update_id, payload) => {
+    },
+  ])("rejects legacy lane reconciliation for $name", async ({ update }) => {
     const laneKey = "telegram:1234:topic:42";
-    await persistForRestart({ update_id, ...payload }, laneKey);
+    await persistForRestart(update, laneKey);
     await expectInvalidLane(laneKey);
   });
 
@@ -1165,11 +1170,14 @@ describe("startTelegramWebhook", () => {
 
         if (response.status === 429) {
           saw429 = true;
-          expect(await responseResult(response)).toEqual(rateLimitedResponse);
+          expect(response.headers.get("x-openclaw-delivery-accepted")).toBeNull();
+          expect(await response.text()).toBe("Too Many Requests");
           break;
         }
 
-        expect(await responseResult(response)).toEqual(unauthorizedResponse);
+        expect(response.status).toBe(401);
+        expect(response.headers.get("x-openclaw-delivery-accepted")).toBeNull();
+        expect(await response.text()).toBe("unauthorized");
       }
 
       expect(saw429).toBe(true);
@@ -1203,15 +1211,23 @@ describe("startTelegramWebhook", () => {
       const secondEndpoint = { ...endpoint, port: 9001 };
       let second: typeof first | undefined;
       let shared: typeof first | undefined;
+      const denied = { status: 429, body: "Too Many Requests", accepted: null };
+      const accepted = { status: 200, body: "", accepted: "durable" };
       let updateId = 899;
       const request = async (forwarded: string, secret = "wrong-secret") => {
-        return responseResult(
-          await fetch(webhookUrl(getServerPort(gatewayServer), TELEGRAM_WEBHOOK_PATH), {
+        const response = await fetch(
+          webhookUrl(getServerPort(gatewayServer), TELEGRAM_WEBHOOK_PATH),
+          {
             method: "POST",
             headers: { "x-telegram-bot-api-secret-token": secret, "x-forwarded-for": forwarded },
             body: JSON.stringify(telegramMessageUpdate(updateId++, "legacy budget")),
-          }),
+          },
         );
+        return {
+          status: response.status,
+          body: await response.text(),
+          accepted: response.headers.get("x-openclaw-delivery-accepted"),
+        };
       };
       try {
         second = await startAccount("second", secondEndpoint);
@@ -1219,12 +1235,12 @@ describe("startTelegramWebhook", () => {
         for (let index = 1; index <= 120; index += 1) {
           expect((await request(`198.51.100.${index}${suffix}`)).status).toBe(401);
         }
-        expect(await request(`203.0.113.1${suffix}`)).toEqual(rateLimitedResponse);
+        expect(await request(`203.0.113.1${suffix}`)).toEqual(denied);
         shared = await startAccount("shared", endpoint, "shared-secret");
-        expect(await request(`203.0.113.1${suffix}`)).toEqual(rateLimitedResponse);
+        expect(await request(`203.0.113.1${suffix}`)).toEqual(denied);
         expect((await request("203.0.113.1, 127.0.0.3")).status).toBe(otherHopStatus);
-        expect(await request(`203.0.113.1${suffix}`, "shared-secret")).toEqual(acceptedResponse);
-        expect(await request(`203.0.113.1${suffix}`, TELEGRAM_SECRET)).toEqual(acceptedResponse);
+        expect(await request(`203.0.113.1${suffix}`, "shared-secret")).toEqual(accepted);
+        expect(await request(`203.0.113.1${suffix}`, TELEGRAM_SECRET)).toEqual(accepted);
 
         legacyListenerForRequest.mockReturnValue(secondEndpoint);
         expect((await request(`203.0.113.1${suffix}`)).status).toBe(401);

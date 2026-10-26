@@ -11,15 +11,24 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 
-const modelCommands: Record<string, NonNullable<ChannelPlugin["commands"]>> = {
-  telegram: {
+const telegramModelsTestPlugin: ChannelPlugin = {
+  ...createChannelTestPluginBase({
+    id: "telegram",
+  }),
+  commands: {
     buildModelsProviderChannelData: ({ providers }) => ({
       telegram: {
         buttons: providers.map(({ id }) => [{ text: id, callback_data: `models:${id}` }]),
       },
     }),
   },
-  menuonly: {
+};
+
+const menuOnlyModelsTestPlugin: ChannelPlugin = {
+  ...createChannelTestPluginBase({
+    id: "menuonly",
+  }),
+  commands: {
     buildModelsMenuChannelData: ({ providers }) => ({
       menuonly: {
         providerIds: providers.map((provider) => provider.id),
@@ -35,13 +44,15 @@ const cliBackends = [
 ];
 
 export function createModelsTestRegistry() {
-  const registry = createTestRegistry(
-    (["discord", "whatsapp", "telegram", "menuonly"] as const).map((id) => ({
+  const registry = createTestRegistry([
+    ...(["discord", "whatsapp"] as const).map((id) => ({
       pluginId: id,
-      plugin: { ...createChannelTestPluginBase({ id }), commands: modelCommands[id] },
+      plugin: createChannelTestPluginBase({ id }),
       source: "test",
     })),
-  );
+    { pluginId: "telegram", plugin: telegramModelsTestPlugin, source: "test" },
+    { pluginId: "menuonly", plugin: menuOnlyModelsTestPlugin, source: "test" },
+  ]);
   registry.cliBackends = cliBackends.map(({ pluginId, id, command }) => ({
     pluginId,
     backend: { id, modelProvider: pluginId, config: { command } },
@@ -52,7 +63,7 @@ export function createModelsTestRegistry() {
 
 export function setFastModelsCliBackendDeps(): void {
   cliBackendsTesting.setDepsForTest({
-    resolvePluginSetupRegistry: createEmptyPluginSetupRegistry,
+    resolvePluginSetupRegistry: () => createEmptyPluginSetupRegistry(),
     resolveRuntimeCliBackends: () =>
       cliBackends.map(({ pluginId, id, command }) => ({
         id,

@@ -19,23 +19,39 @@ export type MutableSession = {
     prompt?: (...args: unknown[]) => Promise<unknown>;
     streamFn?: (...args: Parameters<StreamFn>) => Promise<unknown>;
     transport?: string;
-    subscribe?: Agent["subscribe"];
+    subscribe?: (
+      listener: (event: unknown, signal: AbortSignal) => Promise<void> | void,
+    ) => () => void;
     reset: () => void;
-    state: Pick<Agent["state"], "systemPrompt" | "tools"> & { messages: unknown[] };
+    state: {
+      messages: unknown[];
+      systemPrompt: string;
+      tools: Agent["state"]["tools"];
+    };
   };
   prompt: (
     prompt: string,
     options?: { images?: unknown[]; preflightResult?: (submitted: boolean) => void },
   ) => Promise<void>;
   setBaseSystemPrompt: (systemPrompt: string) => void;
-  sendCustomMessage: AgentSession["sendCustomMessage"];
+  sendCustomMessage: (
+    message: {
+      customType: string;
+      content: string;
+      display: boolean;
+      details?: Record<string, unknown>;
+    },
+    options?: { deliverAs?: "nextTurn"; triggerTurn?: boolean },
+  ) => Promise<void>;
   getActiveToolNames: () => string[];
   getToolDefinition: AgentSession["getToolDefinition"];
   setActiveToolsByName: (toolNames: string[]) => void;
   abort: () => Promise<void>;
   dispose: () => void;
   steer: (text: string) => Promise<void>;
-  [agentSessionSetContextReplacementHook]: AgentSession[typeof agentSessionSetContextReplacementHook];
+  [agentSessionSetContextReplacementHook]: (
+    callback: ((tokensAfter: number, tokensBefore: number) => void) | undefined,
+  ) => void;
   [agentSessionSetPromptPreparation]: AgentSession[typeof agentSessionSetPromptPreparation];
   [agentSessionQueuePromptContext]: AgentSession[typeof agentSessionQueuePromptContext];
 };

@@ -105,7 +105,6 @@ function validateTerminalAncestry(params: {
           ),
       )
       .$if(!postgres, (parents) =>
-        /* pg-sqlite-only: The !postgres branch bounds SQLite recursive CTEs. */
         parents.limit(Number.isSafeInteger(depthLimit) ? depthLimit : -1),
       ),
   );

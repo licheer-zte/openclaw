@@ -31,15 +31,9 @@ it.each([
   { name: "retained override", api: "openai-completions", override: true, retained: true },
   { name: "generic completions", api: "openai-completions", retained: true },
   { name: "native Ollama", api: "ollama", retained: true },
-  {
-    name: "suppress-only synthetic input",
-    api: "openai-completions",
-    retained: true,
-    suppressOnly: true,
-  },
 ])(
   "preserves hidden runtime input across provider retry and cold session reopen: $name",
-  async ({ api, override, retained, suppressOnly = false }) => {
+  async ({ api, override, retained }) => {
     const { appendOnlyRuntimeContext } = resolveTranscriptPolicy({
       modelApi: api,
       runtimeHandle: {
@@ -72,13 +66,8 @@ it.each([
             : createAssistant(model, "done"),
         );
       });
-      const createPersistedSession = async (suppressInput = false) => {
-        const sessionManager = guardSessionManager(
-          SessionManager.open(target, state.workspaceDir),
-          {
-            suppressNextUserMessagePersistence: suppressInput,
-          },
-        );
+      const createPersistedSession = async () => {
+        const sessionManager = guardSessionManager(SessionManager.open(target, state.workspaceDir));
         const { session } = await createTestSession({ sessionManager, settingsManager });
         await prepareEmbeddedAttemptSessionBoundary({
           activeSession: session,
@@ -94,11 +83,9 @@ it.each([
           sessionManager,
           setActiveSessionSystemPrompt: vi.fn(),
         });
-        const submit = (text: string, runtimeOnly = false, suppressPrompt = false) => {
-          const baseInput = createBaseInput();
-          return submitEmbeddedAttemptPrompt({
-            ...baseInput,
-            attempt: { ...baseInput.attempt, suppressNextUserMessagePersistence: suppressPrompt },
+        const submit = (text: string, runtimeOnly = false) =>
+          submitEmbeddedAttemptPrompt({
+            ...createBaseInput(),
             activeSession: session,
             appendOnlyRuntimeContext,
             runtimeOnly,
@@ -111,17 +98,16 @@ it.each([
             promptActiveSession: (prompt, options) =>
               session.prompt(prompt, { ...options, expandPromptTemplates: false }),
           });
-        };
         return { session, sessionManager, submit };
       };
-      const first = await createPersistedSession(suppressOnly);
+      const first = await createPersistedSession();
       if (retained) {
         await first.session.sendCustomMessage(
           { customType: "test.extension-context", content: "extension context", display: false },
           { deliverAs: "nextTurn" },
         );
       }
-      await first.submit(RUNTIME_EVENT_USER_PROMPT, !suppressOnly, suppressOnly);
+      await first.submit(RUNTIME_EVENT_USER_PROMPT, true);
       expect(requests).toHaveLength(2);
       expect(requests[1]).toEqual(requests[0]);
       expect(requests[0]).toContainEqual(

@@ -34,6 +34,8 @@ const BOT_TOKEN = `424242:${"A".repeat(35)}`;
 const CHAT_ID = -1001234;
 const FILE_NAME = "qa-empty-response-side-effect.txt";
 const FILE_CONTENT = "side effect completed once\n";
+const RECOVERY_INSTRUCTION =
+  "Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step:";
 
 const repoRoot = path.resolve(import.meta.dirname, "../../../..");
 const fixture = createFixtureLifetime();
@@ -64,11 +66,9 @@ const documents: Array<{ chatId: string; name: string; content: string }> = [];
 const writeCalls: JsonObject[] = [];
 const toolCalls: JsonObject[] = [];
 const completedWrites: JsonObject[] = [];
-const finalizers: Array<{ requestId: number; callId: unknown }> = [];
+const finalizers: JsonObject[] = [];
 const markerResponses: boolean[] = [];
 let overloads = 0;
-let modelRequestId = 0;
-let overloadedRequestId = 0;
 const marker = `QA-RECOVERED-ARTIFACT-${randomUUID()}`;
 const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
@@ -81,23 +81,23 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     const body = raw.length ? (JSON.parse(raw.toString()) as JsonObject) : {};
     const input = (body.input ?? []) as JsonObject[];
     const modelRequest = pathname === "/v1/responses";
-    if (modelRequest) {
-      modelRequestId += 1;
-    }
+    // A finalizer carries historical tool output too. Its current instruction
+    // must take precedence over the original failed continuation.
+    const finalizer =
+      modelRequest &&
+      JSON.stringify(input.findLast((item) => item.role === "user")?.content)?.includes(
+        RECOVERY_INSTRUCTION,
+      );
     const completedWrite = input.find(
       (item) =>
         (item.type === "function_call_output" || item.type === "custom_tool_call_output") &&
         writeCalls.some((call) => call.call_id === item.call_id),
     );
-    // The next request carrying the completed write must recover the reply,
-    // regardless of its tool catalog or the wording of its instructions.
-    const finalizer = modelRequest && completedWrite !== undefined && overloads > 0;
     if (finalizer) {
-      finalizers.push({ requestId: modelRequestId, callId: completedWrite.call_id });
+      finalizers.push(body);
     } else if (modelRequest && completedWrite) {
       completedWrites.push(completedWrite);
       overloads += 1;
-      overloadedRequestId = modelRequestId;
       writeOpenAiResponsesSse(res, [
         {
           type: "response.failed",
@@ -263,7 +263,6 @@ beforeAll(async () => {
           workspace,
           apiRoot,
           command: createQaPreparedRepoCliCommand(repoRoot),
-          initializeCurrentRuntimeState: true,
           forcedRuntime: "codex",
           providerMode: "mock-openai",
           providerBaseUrl: `${apiRoot}/v1`,
@@ -377,8 +376,10 @@ test("delivers a recovered artifact once while preserving its inter-session tran
     expect(completedWrites).toHaveLength(1);
     expect(completedWrites[0]?.call_id).toBe(writeCalls[0]?.call_id);
     expect(overloads).toBe(1);
-    expect(finalizers.map(({ callId }) => callId)).toEqual([writeCalls[0]?.call_id]);
-    expect(finalizers[0]?.requestId).toBeGreaterThan(overloadedRequestId);
+    expect(finalizers[0]?.tools ?? []).toEqual([]);
+    expect(JSON.stringify(finalizers[0]?.input)).toContain(
+      "Tools are unavailable in this step: it is a text-only pass",
+    );
     expect(markerResponses).toEqual([true]);
     expect(documents).toEqual([
       { chatId: String(CHAT_ID), name: FILE_NAME, content: FILE_CONTENT },

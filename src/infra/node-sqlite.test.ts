@@ -294,21 +294,24 @@ describe("node SQLite safety", () => {
   });
 
   it.each([
-    ["3.51.3", true],
-    ["3.52.0", true],
-    ["4.0.0", true],
-    ["3.50.7", true],
-    ["3.44.6", false],
-  ] as const)(
-    "accepts patched SQLite %s and reuses its JSONB capability",
-    async (version, jsonb) => {
+    { version: "3.51.3", jsonb: true },
+    { version: "3.52.0", jsonb: true },
+    { version: "3.53.0", jsonb: true },
+    { version: "4.0.0", jsonb: true },
+    { version: "3.50.7", jsonb: true },
+    { version: "3.44.6", jsonb: false },
+    { version: "3.44.7", jsonb: false },
+  ])(
+    "accepts patched SQLite $version and reuses its JSONB capability",
+    async ({ version, jsonb }) => {
       const { requireNodeSqlite, supportsNodeSqliteJsonb, prepare } =
         await loadNodeSqliteWithVersion(version);
       expect(() => requireNodeSqlite()).not.toThrow();
-      expect(prepare).toHaveBeenCalledOnce();
+      const queries = prepare.mock.calls.length;
+      expect(queries).toBe(1);
       expect(supportsNodeSqliteJsonb()).toBe(jsonb);
       expect(supportsNodeSqliteJsonb()).toBe(jsonb);
-      expect(prepare).toHaveBeenCalledOnce();
+      expect(prepare.mock.calls).toHaveLength(queries);
     },
   );
 

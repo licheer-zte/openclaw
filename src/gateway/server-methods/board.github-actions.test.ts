@@ -178,9 +178,6 @@ describe("board authenticated GitHub Actions", () => {
     config = next;
     setRuntimeConfigSnapshot(config);
   }
-  function publishAgents(entries: NonNullable<OpenClawConfig["agents"]>["entries"]) {
-    publishConfig({ ...config, agents: { ...config.agents, entries } });
-  }
   afterEach(async () => {
     await Promise.all(workScopes.splice(0).map((work) => work.drain()));
     clearRuntimeConfigSnapshot();
@@ -300,7 +297,12 @@ describe("board authenticated GitHub Actions", () => {
         expect(new URL(toRequestUrl(url)).origin).toBe("https://api.github.com");
         expect(new Headers(init?.headers).get("Authorization")).toBe(`Bearer ${token}`);
       }
-      if (source !== "native CLI") {
+      if (source === "native CLI") {
+        expect(native).toHaveBeenCalledWith(
+          ["gh", "auth", "token", "--hostname", "github.com"],
+          expect.any(Object),
+        );
+      } else {
         expect(native).not.toHaveBeenCalled();
       }
     },
@@ -340,7 +342,10 @@ describe("board authenticated GitHub Actions", () => {
           controller.abort();
         }
         if (changed === "agent") {
-          publishAgents({ other: {} });
+          publishConfig({
+            ...config,
+            agents: { ...config.agents, entries: { other: {} } },
+          });
         }
         if (changed === "routing") {
           config.session = { scope: "global", mainKey: `runs-${caseNumber}` };
@@ -483,7 +488,10 @@ describe("board authenticated GitHub Actions", () => {
     const { started, release } = holdActions();
     const harness = createGitHubBoardHarness();
     const { read } = await reader(harness);
-    publishAgents({ ...config.agents?.entries, other: {} });
+    publishConfig({
+      ...config,
+      agents: { ...config.agents, entries: { ...config.agents?.entries, other: {} } },
+    });
     const otherSession = await reader(harness, "runs", "other");
     const sharedSecond = otherSession.read();
     const first = read();
@@ -499,7 +507,11 @@ describe("board authenticated GitHub Actions", () => {
       "https://api.github.com/repos/owner/repo/actions/runs?per_page=20&exclude_pull_requests=true",
     );
     expect(init?.method ?? "GET").toBe("GET");
-    expect(init?.redirect).toBe("manual");
+    expect(init).toMatchObject({
+      headers: { Authorization: `Bearer ${token}` },
+      redirect: "manual",
+      signal: expect.any(AbortSignal),
+    });
     expect(JSON.stringify(http.mock.calls)).not.toContain("synthetic-preview-only");
     await read({ repository: "owner/repo", branch: "other" });
     expect(actionCalls()).toHaveLength(2);
@@ -514,31 +526,42 @@ describe("board authenticated GitHub Actions", () => {
     expect(actionCalls()).toHaveLength(4);
   });
 
-  it("returns expired Actions while one background refresh settles", async ({ signal }) => {
-    const now = Date.now();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-    const { read } = await reader();
-    await expectResult(read());
-    clock.mockReturnValue(now + 30_001);
-    const updated = { ...result, workflow_runs: [{ ...run, conclusion: "failure" }] };
-    const { started, release } = holdActions(() => json(updated));
-    const pending = read();
-    try {
-      await withinTest(started.promise, signal);
-      await expectResult(withinTest(pending, signal), { ...result, stale: true });
-      await expectResult(read(), { ...result, stale: true });
-      expect(actionCalls()).toHaveLength(2);
-    } finally {
-      release.resolve();
-      await pending;
-      await AsyncWorkScope.runWhenAllIdle(
-        () => workScopes,
-        async () => {},
+  it.for(["success", "failure"] as const)(
+    "returns expired Actions while one background refresh settles with %s",
+    async (outcome, { signal }) => {
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+      const { read } = await reader();
+      await expectResult(read());
+      clock.mockReturnValue(now + 30_001);
+      const updated = { ...result, workflow_runs: [{ ...run, conclusion: "failure" }] };
+      const { started, release } = holdActions(() =>
+        outcome === "success" ? json(updated) : new Response(token, { status: 503 }),
       );
-    }
-    await expectResult(read(), updated);
-    expect(actionCalls()).toHaveLength(2);
-  });
+      const pending = read();
+      try {
+        await withinTest(started.promise, signal);
+        await expectResult(withinTest(pending, signal), { ...result, stale: true });
+        await expectResult(read(), { ...result, stale: true });
+        expect(actionCalls()).toHaveLength(2);
+      } finally {
+        release.resolve();
+        await pending;
+        await AsyncWorkScope.runWhenAllIdle(
+          () => workScopes,
+          async () => {},
+        );
+      }
+      const response = await read();
+      if (outcome === "success") {
+        expect(response.mock.calls[0]).toEqual([true, updated]);
+        expect(actionCalls()).toHaveLength(2);
+      } else {
+        await expectDenied(Promise.resolve(response), "request failed");
+        expect(actionCalls()).toHaveLength(3);
+      }
+    },
+  );
 
   it.each(["session ownership", "token"] as const)(
     "rejects changed %s across an awaited fetch",
@@ -550,7 +573,10 @@ describe("board authenticated GitHub Actions", () => {
       if (changed === "token") {
         await writeCredential("synthetic-rotated-token");
       } else {
-        publishAgents({ other: {} });
+        publishConfig({
+          ...config,
+          agents: { ...config.agents, entries: { other: {} } },
+        });
       }
       release.resolve();
       await expectDenied(pending);

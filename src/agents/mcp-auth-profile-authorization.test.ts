@@ -3,7 +3,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import * as directoryObservation from "../infra/owned-directory-observation.js";
-import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -30,7 +29,6 @@ import {
 import type { OAuthCredential } from "./auth-profiles/types.js";
 import { persistAuthProfileBatch } from "./auth-profiles/upsert-with-lock.js";
 import { captureMcpAuthProfileAuthorization as captureMcp } from "./mcp-auth-profile-authorization.js";
-import { mcpImportRuntimeEntrypoints } from "./mcp-import-runtime.test-support.js";
 
 const { seedRoot, apiKey } = createAuthOwnerTestFixtures();
 afterEach(() => vi.restoreAllMocks());
@@ -86,15 +84,15 @@ function source() {
 
 async function foreign(root: AuthRoot, script: string) {
   const result = await runNodeScript(
-    (workerArgv) => [...workerArgv(captureUrl).slice(0, -1), "--input-type=module", "-e", script],
+    ["--import", "tsx", "--input-type=module", "-e", script],
     root.env,
     30_000,
   );
-  expect(result.error, `${result.stderr}\n${result.stdout}`).toBeUndefined();
+  expect(result.error, result.stderr).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
   return result.stdout;
 }
-const captureUrl = resolveRuntimeWorkerUrl(mcpImportRuntimeEntrypoints.authorization);
+const captureUrl = new URL("./mcp-auth-profile-authorization.ts", import.meta.url).href;
 const writeProfile = (profileId: string, key: string, agentDir?: string) =>
   upsertAuthProfileWithLockOrThrow({ profileId, agentDir, credential: apiKey(key) });
 
@@ -141,7 +139,7 @@ it("enrolls inherited owners through the generic API and preserves MCP capture a
     const output = await foreign(
       root,
       "import { captureMcpAuthProfileAuthorization as capture } from " +
-        JSON.stringify(captureUrl.href) +
+        JSON.stringify(captureUrl) +
         ";" +
         "let active = true; const authority = await capture({ profileId: 'shared', agentDir: " +
         JSON.stringify(root.agentDir) +

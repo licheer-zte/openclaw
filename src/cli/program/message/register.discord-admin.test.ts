@@ -2,11 +2,16 @@ import { describe, expect, it } from "vitest";
 import { createMessageCliProgram, messageCliMocks } from "./command.test-support.js";
 
 type Options = Record<string, string>;
-type AdminCase = [string, string, Options, Options?, Record<string, unknown>?];
+type AdminCase = [
+  command: string,
+  action: string,
+  required: Options,
+  optional?: Options,
+  defaults?: Record<string, unknown>,
+];
 
 const guild = { guildId: "guild-1" };
 const member = { ...guild, userId: "user-1" };
-const baseOptions = { json: false, dryRun: false, verbose: false, accountId: undefined };
 const cases: AdminCase[] = [
   [
     "edit",
@@ -71,20 +76,33 @@ const cases: AdminCase[] = [
   ["ban", "ban", member, { reason: "QA reason", deleteDays: "0" }],
 ];
 
+function flag(key: string) {
+  return "--" + key.replace(/[A-Z]/g, (letter) => "-" + letter.toLowerCase());
+}
+
+function argumentsFor(options: Options) {
+  return Object.entries(options).flatMap(([key, value]) => [flag(key), value]);
+}
+
 function run(path: string, options: Options) {
   messageCliMocks.command.mockClear();
-  const args = Object.entries(options).flatMap(([key, value]) => [
-    "--" + key.replace(/[A-Z]/g, (letter) => "-" + letter.toLowerCase()),
-    value,
-  ]);
-  return createMessageCliProgram().parseAsync(["message", ...path.split(" "), ...args], {
-    from: "user",
-  });
+  return createMessageCliProgram().parseAsync(
+    ["message", ...path.split(" "), ...argumentsFor(options)],
+    { from: "user" },
+  );
 }
 
 function expectAction(action: string, options: Options, defaults: Record<string, unknown> = {}) {
   expect(messageCliMocks.command).toHaveBeenCalledExactlyOnceWith(
-    { ...baseOptions, ...defaults, ...options, action },
+    {
+      json: false,
+      dryRun: false,
+      verbose: false,
+      ...defaults,
+      ...options,
+      accountId: undefined,
+      action,
+    },
     expect.anything(),
     expect.anything(),
   );
@@ -104,8 +122,9 @@ describe("message action registration", () => {
     "%s rejects every missing mandatory identifier before dispatch",
     async (path, _action, required) => {
       for (const missing of Object.keys(required)) {
-        const remaining = { ...required };
-        delete remaining[missing];
+        const remaining = Object.fromEntries(
+          Object.entries(required).filter(([key]) => key !== missing),
+        );
         await expect(run(path, remaining)).rejects.toMatchObject({
           code: "commander.missingMandatoryOptionValue",
         });

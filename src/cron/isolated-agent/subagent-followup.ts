@@ -99,13 +99,13 @@ export async function waitForDescendantSubagentSummary(params: {
   };
   const requestGateway = bindAgentToolGatewayRequest({ hostedOnly: true });
   const initialReply = params.initialReply;
-  const deadline = performance.now() + Math.max(timings.waitMinMs, Math.floor(params.timeoutMs));
+  const deadline = Date.now() + Math.max(timings.waitMinMs, Math.floor(params.timeoutMs));
 
   const callGateway: typeof requestGateway = (request) =>
     requestGateway({
       ...request,
       signal: params.abortSignal,
-      timeoutMs: Math.min(request.timeoutMs ?? Infinity, Math.max(1, deadline - performance.now())),
+      timeoutMs: Math.min(request.timeoutMs ?? Infinity, Math.max(1, deadline - Date.now())),
     });
 
   const getActiveRuns = async () => {
@@ -150,9 +150,9 @@ export async function waitForDescendantSubagentSummary(params: {
       callGateway,
     });
     let pendingRunIds = initialActiveRuns.map((entry) => entry.runId);
-    while (performance.now() < deadline && !params.abortSignal?.aborted) {
+    while (Date.now() < deadline && !params.abortSignal?.aborted) {
       await waitForAgentRunsToDrain({
-        timeoutMs: Math.max(0, deadline - performance.now()),
+        deadlineAtMs: deadline,
         callGateway,
         initialPendingRunIds: pendingRunIds,
         getPendingRunIds: async () => (await getActiveRuns()).map((entry) => entry.runId),
@@ -163,7 +163,7 @@ export async function waitForDescendantSubagentSummary(params: {
       // A yielded task still owns completion while no execution can be waited
       // on. Observe the registry's handoff without waking a competing parent.
       await sleepWithAbort(
-        Math.min(timings.gracePollMs, Math.max(0, deadline - performance.now())),
+        Math.min(timings.gracePollMs, Math.max(0, deadline - Date.now())),
         params.abortSignal,
       );
       pendingRunIds = (await getActiveRuns()).map((entry) => entry.runId);
@@ -177,7 +177,7 @@ export async function waitForDescendantSubagentSummary(params: {
     }
 
     // Give the parent a bounded window to synthesize the settled descendants.
-    const gracePeriodDeadline = Math.min(performance.now() + timings.finalReplyGraceMs, deadline);
+    const gracePeriodDeadline = Math.min(Date.now() + timings.finalReplyGraceMs, deadline);
 
     const resolveUsableLatestReply = async () => {
       const latest = await readLatestAssistantReply({ sessionKey: params.sessionKey, callGateway });
@@ -187,20 +187,20 @@ export async function waitForDescendantSubagentSummary(params: {
       return undefined;
     };
 
-    while (performance.now() < gracePeriodDeadline) {
+    while (Date.now() < gracePeriodDeadline) {
       const latest = await resolveUsableLatestReply();
       if (latest) {
         return latest;
       }
       await sleepWithAbort(
-        Math.min(timings.gracePollMs, gracePeriodDeadline - performance.now()),
+        Math.min(timings.gracePollMs, gracePeriodDeadline - Date.now()),
         params.abortSignal,
       );
     }
 
     return await resolveUsableLatestReply();
   } catch (error) {
-    if (params.abortSignal?.aborted || performance.now() >= deadline) {
+    if (params.abortSignal?.aborted || Date.now() >= deadline) {
       return undefined;
     }
     throw error;

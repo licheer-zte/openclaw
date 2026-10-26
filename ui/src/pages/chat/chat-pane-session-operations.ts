@@ -113,7 +113,6 @@ export async function runHeaderSessionOperation(
       gatewayHasActiveRun: actionRow.hasActiveRun,
       hasActiveSubagentRun: actionRow.hasActiveSubagentRun,
       hasArchiveDescendants: hasSessionArchiveDescendants(actionRow, rows),
-      hasAutomation: actionRow.hasAutomation === true,
     };
   };
   const session = toActionSession(row);

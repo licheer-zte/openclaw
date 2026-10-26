@@ -3,7 +3,6 @@ import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { McpToolCatalog } from "../../agents/agent-bundle-mcp-types.js";
-import * as conversationToolPolicyPipeline from "../../agents/conversation-tool-policy-pipeline.js";
 import * as toolSchemaRuntime from "../../agents/embedded-agent-runner/tool-schema-runtime.js";
 import { createStubTool } from "../../agents/test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
@@ -421,16 +420,9 @@ describe("tools.effective handler", () => {
   });
 
   it("coalesces identical base inventory cache misses while inventory resolution is pending", async () => {
-    const buildSteps = vi.spyOn(
-      conversationToolPolicyPipeline,
-      "buildConversationToolPolicyPipelineSteps",
-    );
-    onTestFinished(() => buildSteps.mockRestore());
     const [first, second] = await Promise.all([invokeTools(), invokeTools()]);
-    const warm = await invokeTools();
     expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(1);
-    expectResponsesOk(first, second, warm);
-    expect(buildSteps).toHaveBeenCalledTimes(0);
+    expectResponsesOk(first, second);
   });
 
   it("returns stale cached base inventory immediately while refreshing in the background", async () => {

@@ -12,7 +12,6 @@ import type { MessageClientSource } from "../../../../src/chat/message-client-so
 import type { ClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
 import type { RunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
 import type { SkillWorkshopChangeNotice } from "../../../../src/shared/skill-workshop-change-notice.js";
-import type { CyberAccessProgram } from "../../api/types.ts";
 import type { BrowserTabTarget } from "../../components/browser/browser-target.ts";
 import type { IconName } from "../../components/icon-data.ts";
 import type { SenderIdentity } from "./sender-label.ts";
@@ -84,8 +83,6 @@ export type DurableDraftModelSelection = {
   model: string;
   agentRuntime?: string;
   thinkingLevel: string;
-  cyberAccessProgram?: CyberAccessProgram;
-  daybreakAccessProgram?: Exclude<CyberAccessProgram, "standard">;
 };
 
 export type DurableComposerDraft = {
@@ -97,8 +94,6 @@ export type DurableComposerDraft = {
   modelSelection?: DurableDraftModelSelection;
   attachments: DurableComposerDraftAttachment[];
   questionDrafts?: DurableQuestionDraft[];
-  /** Context-only comments have no uploaded file payload. */
-  selectionAnnotations?: ChatSelectionAnnotation[];
 };
 
 export type ChatComposerDraftRetry = {
@@ -532,7 +527,6 @@ export type ToolCardOutcome =
   | "failed"
   | "blocked"
   | "skipped"
-  | "unrecorded"
   | "unknown";
 
 export type ChatGoalMutationAction = { goalId: string } & (

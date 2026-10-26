@@ -2,11 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 const providerEligibility = vi.hoisted(() => vi.fn());
 
-// mock-isolation: Pin provider eligibility without loading plugin registries into this policy test.
 vi.mock("../../plugins/provider-runtime.js", () => ({
   resolveProviderCacheTtlEligibility: (params: { context: { provider: string } }) => {
     providerEligibility(params);
-    if (params.context.provider === "moonshot") {
+    if (params.context.provider === "moonshot" || params.context.provider === "zai") {
       return true;
     }
     if (params.context.provider === "openrouter") {
@@ -55,12 +54,15 @@ describe("isCacheTtlEligibleProvider", () => {
   it.each(["openai-responses", "openai-completions", "openai-chatgpt-responses"])(
     "requires explicit cache support for a custom %s provider",
     (modelApi) => {
+      const route = { baseUrl: "https://proxy.example/v1" };
       const eligible = (supportsPromptCacheKey?: boolean) =>
         isEligible("myproxy", "model-1", modelApi, {
-          baseUrl: "https://proxy.example/v1",
+          ...route,
           supportsPromptCacheKey,
         });
-      expect([eligible(true), eligible(false), eligible()]).toEqual([true, false, false]);
+      expect(eligible(true)).toBe(true);
+      expect(eligible(false)).toBe(false);
+      expect(isEligible("myproxy", "model-1", modelApi, route)).toBe(false);
     },
   );
 
@@ -76,11 +78,9 @@ describe("readLastCacheTtlTimestamp", () => {
     customType: "openclaw.cache-ttl",
     data,
   });
-  const read = (...entries: ReturnType<typeof marker>[]) =>
-    readLastCacheTtlTimestamp({ getEntries: () => entries }, target);
   it("returns the latest matching timestamp while ignoring projection metadata", () => {
-    expect(
-      read(
+    const sessionManager = {
+      getEntries: () => [
         marker({
           timestamp: 1_700_000_000_000,
           provider: "anthropic",
@@ -97,11 +97,18 @@ describe("readLastCacheTtlTimestamp", () => {
           prunedToolResults: [],
           frozenToolResults: [{ key: "tool:new:43", sourceHash: "hash" }],
         }),
-      ),
-    ).toBe(1_700_000_000_000);
+      ],
+    };
+
+    expect(readLastCacheTtlTimestamp(sessionManager, target)).toBe(1_700_000_000_000);
   });
 
   it("ignores unscoped cache-ttl entries when a context filter is requested", () => {
-    expect(read(marker({ timestamp: 1_700_000_000_000 }))).toBeNull();
+    expect(
+      readLastCacheTtlTimestamp(
+        { getEntries: () => [marker({ timestamp: 1_700_000_000_000 })] },
+        target,
+      ),
+    ).toBeNull();
   });
 });

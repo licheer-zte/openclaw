@@ -88,7 +88,13 @@ it("routes a pending fence to the settlement-aware profile resolver", async () =
   const profileId = "openai:pending-refresh";
   const expired = oauth({ expires: 1, accountId: "acct-a" });
   const fence = createOAuthRefreshFence({ profileId, credential: expired });
-  const settled = { apiKey: "settled-access", provider: "openai", profileId };
+  const credential = {
+    ...fence,
+    access: "settled-access",
+    refresh: "settled-refresh",
+    expires: Date.now() + 60_000,
+  };
+  const settled = { apiKey: "settled-access", provider: "openai", profileId, credential };
   resolveProfile.mockResolvedValueOnce(settled);
   await expect(
     resolveAuth({

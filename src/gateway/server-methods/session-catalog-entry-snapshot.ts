@@ -40,7 +40,6 @@ type SessionCatalogRequestEntrySnapshot = {
   freeze: () => void;
   captureHostInstances: (host: SessionCatalogHost, instances: SessionCatalogInstances) => void;
   entryForSession: (sessionKey: string) => SessionEntry | undefined;
-  isMember: (sessionKey: string, profileId: string) => boolean;
   projectHostSessions: (
     host: SessionCatalogHost,
     instances: SessionCatalogInstances,
@@ -182,12 +181,11 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       params.fallbackAgentId,
       ...listAgentIds(params.cfg).filter((agentId) => agentId !== params.fallbackAgentId),
     ];
-    catalogEntries = [];
-    for (const agentId of agentIds) {
-      for (const pair of captureAgentEntries(agentId)?.pairs ?? []) {
-        catalogEntries.push(Object.freeze({ sessionKey: pair[0], entry: pair[1], agentId }));
-      }
-    }
+    catalogEntries = agentIds.flatMap((agentId) =>
+      (captureAgentEntries(agentId)?.pairs ?? []).map(([sessionKey, entry]) =>
+        Object.freeze({ sessionKey, entry, agentId }),
+      ),
+    );
     Object.freeze(catalogEntries);
     return catalogEntries;
   };
@@ -278,15 +276,6 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       }
     },
     entryForSession,
-    isMember: (sessionKey, profileId) => {
-      const target = params.projection.sharingTarget({
-        key: sessionKey,
-        agentId: entryAgentId(sessionKey),
-      });
-      return Boolean(
-        target && params.projection.hasMembership(target.storePath, target.storeKey, profileId),
-      );
-    },
     projectHostSessions: (host, instances, audience) => {
       const source = JSON.stringify(host);
       const revision = params.projection.sharingRevision;

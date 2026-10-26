@@ -3,7 +3,6 @@ import {
   createWebSearchProviderContractFields,
   type WebSearchProviderPlugin,
 } from "openclaw/plugin-sdk/provider-web-search-contract";
-import { resolveDeepSeekModelKeyFallback } from "./model-credential.js";
 
 const CREDENTIAL_PATH = "plugins.entries.deepseek.config.webSearch.apiKey";
 const loadRuntime = createLazyRuntimeModule(() => import("./web-search-provider.runtime.js"));
@@ -27,7 +26,10 @@ export function createDeepSeekWebSearchProvider(): WebSearchProviderPlugin {
       configuredCredential: { pluginId: "deepseek" },
       selectionPluginId: "deepseek",
     }),
-    getConfiguredCredentialFallback: resolveDeepSeekModelKeyFallback,
+    getConfiguredCredentialFallback: (config) => {
+      const value = config?.models?.providers?.deepseek?.apiKey;
+      return value === undefined ? undefined : { path: "models.providers.deepseek.apiKey", value };
+    },
     createTool: (ctx) => ({
       description:
         "Search the web using DeepSeek. Returns titles, URLs, and model-oriented summaries. Queries support site:, -site:, lang:, after:, before:, and quoted phrases; maximum 128 Unicode characters.",

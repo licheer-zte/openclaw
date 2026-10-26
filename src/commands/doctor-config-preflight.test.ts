@@ -2,7 +2,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { patchConfigHealthEntryToStore } from "../config/io.health-state.js";
@@ -153,24 +152,30 @@ describe("runDoctorConfigPreflight", () => {
         )}`;
         await fs.mkdir(path.dirname(configPath), { recursive: true });
         if (selector === "prefixed-include") {
-          await writeFixtureJson(path.join(path.dirname(configPath), "auth-selector.json"), config);
+          await fs.writeFile(
+            path.join(path.dirname(configPath), "auth-selector.json"),
+            JSON.stringify(config),
+          );
         }
         await fs.writeFile(configPath, originalConfig);
         const authStorePath = path.join(home, ".openclaw/agents/main/agent/auth-profiles.json");
         await fs.mkdir(path.dirname(authStorePath), { recursive: true });
-        await writeFixtureJson(authStorePath, {
-          profiles: {
-            "openai-codex:default": {
-              type: "oauth",
-              provider: "openai-codex",
-              oauthRef: {
-                source: "openclaw-credentials",
+        await fs.writeFile(
+          authStorePath,
+          JSON.stringify({
+            profiles: {
+              "openai-codex:default": {
+                type: "oauth",
                 provider: "openai-codex",
-                id: "a".repeat(32),
+                oauthRef: {
+                  source: "openclaw-credentials",
+                  provider: "openai-codex",
+                  id: "a".repeat(32),
+                },
               },
             },
-          },
-        });
+          }),
+        );
         const authBytes = await fs.readFile(authStorePath);
         const sidecarDir = path.join(oauthDir, "auth-profiles");
         const sidecarPath = path.join(sidecarDir, `${"a".repeat(32)}.json`);

@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
 import {
   dispatchTestSessionId as sessionId,
   dispatchTestSessionKey as sessionKey,
@@ -17,6 +18,13 @@ import {
 import type { SessionMutationAuthorization } from "./types.js";
 
 const mocks = getDispatchTestMocks();
+const activePlacement = (): WorkerSessionPlacementRecord => ({
+  ...makeReclaimedPlacement(),
+  state: "active",
+  recoveryError: null,
+  terminalReason: null,
+  terminalAtMs: null,
+});
 
 it("rejects queued placement mutations after session participation is revoked", async () => {
   vi.clearAllMocks();
@@ -44,42 +52,45 @@ it("rejects queued placement mutations after session participation is revoked", 
   const expected = { generation: 4, environmentId: "environment-previous", ownerEpoch: 1 };
 
   for (const scenario of scenarios) {
+    let participating = true;
     const authorizationError = new SessionMutationAuthorizationChangedError(
       errorShape(ErrorCodes.INVALID_REQUEST, "session participation changed"),
     );
     const authorization: SessionMutationAuthorization = {
-      assertCurrent: vi.fn(),
+      assertCurrent: () => {
+        if (!participating) {
+          throw authorizationError;
+        }
+      },
       assertTargetCurrent: vi.fn(),
     };
     const operationStarted = createDeferredCore();
     const releaseOperation = createDeferredCore();
     const durableTransition = vi.fn();
-    const transition = async (
-      _request: unknown,
-      onTransitionOrAuthorize?: () => void,
-      authorize?: () => void,
-    ) => {
+    const afterWait = async (authorize?: () => void) => {
       operationStarted.resolve();
       await releaseOperation.promise;
-      (scenario.method === "reclaim" ? onTransitionOrAuthorize : authorize)?.();
+      authorize?.();
       durableTransition();
     };
-    const service = {
-      dispatch: scenario.method === "dispatch" ? transition : vi.fn(),
-      ...(scenario.method === "dispatch" ? {} : { [scenario.method]: transition }),
-    };
+    const transition = vi.fn((_request, _onTransition, authorize?: () => void) =>
+      afterWait(authorize),
+    );
+    const service =
+      scenario.method === "dispatch"
+        ? { dispatch: transition }
+        : scenario.method === "move"
+          ? { dispatch: vi.fn(), move: transition }
+          : {
+              dispatch: vi.fn(),
+              reclaim: vi.fn((_request, authorize?: () => void) => afterWait(authorize)),
+            };
     const placement =
       scenario.method === "dispatch"
         ? undefined
         : scenario.method === "reclaim" && scenario.failed
           ? { ...makeFailedPlacement(), environmentId: null }
-          : {
-              ...makeReclaimedPlacement(),
-              state: "active" as const,
-              recoveryError: null,
-              terminalReason: null,
-              terminalAtMs: null,
-            };
+          : activePlacement();
     const context = makeDispatchTestContext({
       workerPlacementDispatchService: service as never,
       workerSessionPlacementService: {
@@ -94,9 +105,7 @@ it("rejects queued placement mutations after session participation is revoked", 
           ? invokeSessionMove(context, { expected, target: scenario.target }, authorization)
           : invokeSessionReclaim(context, authorization);
     await operationStarted.promise;
-    vi.mocked(authorization.assertCurrent).mockImplementation(() => {
-      throw authorizationError;
-    });
+    participating = false;
     releaseOperation.resolve();
 
     const name = JSON.stringify(scenario);

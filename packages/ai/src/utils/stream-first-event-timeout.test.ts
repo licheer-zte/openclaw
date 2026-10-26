@@ -1,134 +1,115 @@
-import { promiseHooks } from "node:v8";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createFirstStreamEventAbortController,
   withFirstStreamEventTimeout,
 } from "./stream-first-event-timeout.js";
 
-function createStream(next: () => Promise<IteratorResult<unknown>> = () => new Promise(() => {})) {
-  const close = vi
-    .fn<() => Promise<IteratorResult<unknown>>>()
-    .mockResolvedValue({ done: true, value: undefined });
+function createStream(
+  onReturn = vi.fn(),
+  next: () => Promise<IteratorResult<unknown>> = () => new Promise(() => {}),
+): AsyncIterable<unknown> {
   return {
-    close,
-    [Symbol.asyncIterator]: () => ({ next, return: close }),
+    [Symbol.asyncIterator]() {
+      return {
+        next,
+        async return() {
+          onReturn();
+          return { done: true, value: undefined };
+        },
+      };
+    },
   };
 }
 
-beforeEach(() => void vi.useFakeTimers());
-afterEach(() => void vi.useRealTimers());
+describe("withFirstStreamEventTimeout", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
-it.each([5, Number.MAX_SAFE_INTEGER])(
-  "times out, aborts and closes at a clamped %dms",
-  async (timeoutMs) => {
-    const source = createStream();
+  it("fails, aborts and closes the source when the first event never arrives", async () => {
+    const onReturn = vi.fn();
     const abort = vi.fn();
     const onTimeout = vi.fn();
-    const iterator = withFirstStreamEventTimeout(source, {
+    const stream = withFirstStreamEventTimeout(createStream(onReturn), {
       provider: "local",
-      timeoutMs,
+      api: "openai-completions",
+      model: "test-model",
+      timeoutMs: 5,
       stage: "completions",
       abort,
       onTimeout,
-    })[Symbol.asyncIterator]();
-    const next = iterator.next().catch((error: unknown) => error);
-    const clamped = Math.min(timeoutMs, MAX_TIMER_TIMEOUT_MS);
-    await vi.advanceTimersByTimeAsync(clamped);
+    });
+    const next = stream[Symbol.asyncIterator]()
+      .next()
+      .catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(5);
     const error = await next;
     expect(error).toBeInstanceOf(Error);
-    expect(error).toMatchObject({
-      name: "FirstStreamEventTimeoutError",
-      message: expect.stringMatching(new RegExp(`completions.*within ${clamped}ms`)),
-    });
+    expect(error).toHaveProperty("name", "FirstStreamEventTimeoutError");
+    expect(error).toHaveProperty(
+      "message",
+      expect.stringMatching(
+        /completions HTTP stream opened but did not deliver a first SSE event within 5ms after streaming headers \(first-event timeout\)/,
+      ),
+    );
     expect(onTimeout).toHaveBeenCalledWith(error);
     expect(abort).toHaveBeenCalledWith(error);
-    expect(source.close).toHaveBeenCalledTimes(1);
-  },
-);
+    expect(onReturn).toHaveBeenCalledTimes(1);
+  });
 
-it("calls iterator return when the consumer closes after the first event", async () => {
-  const source = createStream(async () => ({ done: false, value: "first" }));
-  const iterator = withFirstStreamEventTimeout(source, { timeoutMs: 5 })[Symbol.asyncIterator]();
-  await expect(iterator.next()).resolves.toEqual({ done: false, value: "first" });
-  await iterator.return?.();
-  expect(source.close).toHaveBeenCalledTimes(1);
-});
-
-it("propagates parent aborts through derived first-event signals", () => {
-  const parent = new AbortController();
-  const firstEventAbort = createFirstStreamEventAbortController(parent.signal);
-  parent.abort("run-timeout");
-  expect(firstEventAbort.signal.aborted).toBe(true);
-  expect(firstEventAbort.signal.reason).toBe("run-timeout");
-  firstEventAbort.dispose();
-});
-
-it("passes through events after the first event without adding inter-event timing", async () => {
-  async function* delayedSecondEvent() {
-    yield "first";
-    await new Promise((resolve) => {
-      setTimeout(resolve, 50);
-    });
-    yield "second";
-  }
-  const iterator = withFirstStreamEventTimeout(delayedSecondEvent(), { timeoutMs: 5 })[
-    Symbol.asyncIterator
-  ]();
-  await expect(iterator.next()).resolves.toEqual({ done: false, value: "first" });
-  const second = iterator.next();
-  await vi.advanceTimersByTimeAsync(50);
-  await expect(second).resolves.toEqual({ done: false, value: "second" });
-});
-
-it("returns the original stream when disabled", () => {
-  const stream = createStream();
-  expect(withFirstStreamEventTimeout(stream, { timeoutMs: 0 })).toBe(stream);
-  expect(withFirstStreamEventTimeout(stream, { timeoutMs: Number.NaN })).toBe(stream);
-});
-
-it.each(["throw", "reject"])(
-  "clears the deadline when the first read fails by %s",
-  async (mode) => {
-    const failure = new Error("source failed");
-    const source = createStream(() => {
-      if (mode === "throw") {
-        throw failure;
-      }
-      return Promise.reject(failure);
-    });
-    source.close.mockRejectedValueOnce(new Error("cleanup failed"));
+  it("calls iterator return when the consumer closes after the first event", async () => {
+    const onReturn = vi.fn();
+    const source = createStream(onReturn, async () => ({ done: false, value: "first" }));
     const iterator = withFirstStreamEventTimeout(source, { timeoutMs: 5 })[Symbol.asyncIterator]();
-    await expect(iterator.next()).rejects.toBe(failure);
-    expect(source.close).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
-  },
-);
+    await expect(iterator.next()).resolves.toEqual({ done: false, value: "first" });
+    await iterator.return?.();
+    expect(onReturn).toHaveBeenCalledTimes(1);
+  });
 
-it.skipIf(Boolean(process.versions.bun))(
-  "clears first-event deadlines without settlement promises",
-  async () => {
-    let promises = 0;
-    let received = "";
-    const stop = promiseHooks.createHook({ init: () => promises++ });
-    try {
-      for (let index = 0; index < 100; index++) {
-        async function* source() {
-          yield "first";
-          yield "second";
-          yield "third";
-        }
-        for await (const event of withFirstStreamEventTimeout(source(), { timeoutMs: 5 })) {
-          received += event;
-        }
-      }
-    } finally {
-      stop();
+  it("clamps oversized first-event timeouts before scheduling", async () => {
+    const stream = withFirstStreamEventTimeout(createStream(), {
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+    const next = expect(stream[Symbol.asyncIterator]().next()).rejects.toThrow(
+      new RegExp(`within ${MAX_TIMER_TIMEOUT_MS}ms`),
+    );
+    await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
+    await next;
+  });
+
+  it("propagates parent aborts through derived first-event signals", () => {
+    const parent = new AbortController();
+    const firstEventAbort = createFirstStreamEventAbortController(parent.signal);
+    parent.abort("run-timeout");
+    expect(firstEventAbort.signal.aborted).toBe(true);
+    expect(firstEventAbort.signal.reason).toBe("run-timeout");
+    firstEventAbort.dispose();
+  });
+
+  it("passes through events after the first event without adding inter-event timing", async () => {
+    async function* delayedSecondEvent() {
+      yield "first";
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+      yield "second";
     }
-    expect(received).toBe("firstsecondthird".repeat(100));
-    expect(vi.getTimerCount()).toBe(0);
-    // Budget for source/consumer iteration and the first-event race, with fixed
-    // harness slack; Promise.finally adds four settlement promises per stream.
-    expect(promises).toBeLessThan(3_200);
-  },
-);
+    const iterator = withFirstStreamEventTimeout(delayedSecondEvent(), { timeoutMs: 5 })[
+      Symbol.asyncIterator
+    ]();
+    await expect(iterator.next()).resolves.toEqual({ done: false, value: "first" });
+    const second = iterator.next();
+    await vi.advanceTimersByTimeAsync(50);
+    await expect(second).resolves.toEqual({ done: false, value: "second" });
+  });
+
+  it("returns the original stream when disabled", () => {
+    const stream = createStream();
+    expect(withFirstStreamEventTimeout(stream, { timeoutMs: 0 })).toBe(stream);
+    expect(withFirstStreamEventTimeout(stream, { timeoutMs: Number.NaN })).toBe(stream);
+  });
+});

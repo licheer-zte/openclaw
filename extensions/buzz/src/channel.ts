@@ -14,7 +14,6 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { resolveBuzzAccountConfig } from "./account-config.js";
 import { buzzSetupPlugin } from "./channel.setup.js";
 import {
   listBuzzDirectoryGroupsFromConfig,
@@ -42,6 +41,7 @@ import {
   assertBuzzAccountAvailable,
   decodeBuzzPrivateKey,
   resolveBuzzAccount,
+  resolveBuzzAccountConfig,
   type ResolvedBuzzAccount,
 } from "./types.js";
 

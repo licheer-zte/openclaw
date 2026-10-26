@@ -93,36 +93,22 @@ export function createSessionRowProvenance() {
     ) {
       return current;
     }
-    // A patch ACK advances updatedAt while retaining the row's earlier sampling time.
-    // Unsampled rows still use the durable-write and read-revision ordering below.
-    const currentAt =
-      current.snapshotAt === undefined
-        ? undefined
-        : Math.max(current.snapshotAt, current.updatedAt ?? -Infinity);
-    const offeredAt =
-      offered.snapshotAt === undefined
-        ? undefined
-        : Math.max(offered.snapshotAt, offered.updatedAt ?? -Infinity);
     const newer =
-      offeredAt !== undefined && currentAt !== undefined && offeredAt !== currentAt
-        ? offeredAt > currentAt
+      offered.snapshotAt !== undefined &&
+      current.snapshotAt !== undefined &&
+      offered.snapshotAt !== current.snapshotAt
+        ? offered.snapshotAt > current.snapshotAt
           ? offered
           : current
-        : offered.snapshotAt !== undefined &&
-            current.snapshotAt !== undefined &&
-            offered.snapshotAt !== current.snapshotAt
-          ? offered.snapshotAt > current.snapshotAt
+        : offered.updatedAt != null &&
+            current.updatedAt != null &&
+            offered.updatedAt !== current.updatedAt
+          ? offered.updatedAt > current.updatedAt
             ? offered
             : current
-          : offered.updatedAt != null &&
-              current.updatedAt != null &&
-              offered.updatedAt !== current.updatedAt
-            ? offered.updatedAt > current.updatedAt
-              ? offered
-              : current
-            : rowRevision(offered) >= rowRevision(current)
-              ? offered
-              : current;
+          : rowRevision(offered) >= rowRevision(current)
+            ? offered
+            : current;
     const older = newer === offered ? current : offered;
     const olderValues: Record<string, unknown> = older;
     const next = { ...newer, key: current.key };

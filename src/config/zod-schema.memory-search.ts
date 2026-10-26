@@ -44,7 +44,6 @@ export const MemorySearchSchema = z
       .optional(),
     fallback: z.string().optional(),
     model: z.string().optional(),
-    inputFormat: z.strictObject({ query: z.string(), document: z.string() }).optional(),
     inputType: z.string().min(1).optional(),
     queryInputType: z.string().min(1).optional(),
     queryInstruction: z.string().optional(),

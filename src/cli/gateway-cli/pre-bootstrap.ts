@@ -187,14 +187,12 @@ async function readGuardedGatewayRunConfig(
     () => import("../../config/io.factory.js"),
   );
   return await withArtifactPreservingStateReads(async () => {
-    const current = await measureGatewayBootstrapStep("cli.environment.config-read", () =>
-      createConfigIO({
-        env: cloneEnvWithPlatformSemantics(process.env),
-        observe: false,
-        pluginValidation: "core-only",
-        measure: (name, run) => measureGatewayBootstrapStep(`cli.environment.${name}`, run),
-      }).readConfigFileSnapshot(),
-    );
+    const current = await createConfigIO({
+      env: cloneEnvWithPlatformSemantics(process.env),
+      observe: false,
+      pluginValidation: "core-only",
+      measure: (name, run) => measureGatewayBootstrapStep(`cli.environment.${name}`, run),
+    }).readConfigFileSnapshot();
     const guard = (snapshot: ConfigFileSnapshot) =>
       enforceGatewayRunFutureConfigGuard({ ...params, snapshot });
     if (!guard(current)) {
@@ -573,9 +571,7 @@ export async function selectGatewayRunEnvironment(params: GatewayRunGuardParams)
   selectedGatewayRunEnvironment = undefined;
   let guarded: boolean;
   try {
-    guarded = await measureGatewayBootstrapStep("cli.environment.config-guard", () =>
-      guardGatewayRunSelectedConfig(params),
-    );
+    guarded = await guardGatewayRunSelectedConfig(params);
   } finally {
     if (params.opts.reset) {
       restoreAppliedGatewayRunConfigEnvironment(false);
@@ -590,7 +586,7 @@ export async function selectGatewayRunEnvironment(params: GatewayRunGuardParams)
     before: envBeforeGuard,
     after: { ...fsSafeEnvInput(process.env) },
   };
-  await measureGatewayBootstrapStep("cli.environment.pin-runtime-paths", pinGatewayRunRuntimePaths);
+  await pinGatewayRunRuntimePaths();
   return guarded;
 }
 

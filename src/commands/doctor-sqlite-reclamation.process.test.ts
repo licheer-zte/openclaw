@@ -1,5 +1,7 @@
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { expect, it } from "vitest";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { doctorOutputEntrypoints } from "../cli/cli-entrypoint.test-support.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -8,13 +10,13 @@ import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lif
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { spawnNodeEvalSync } from "../test-utils/node-process.js";
+import { createNodeEvalArgs } from "../test-utils/node-process.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 it.skipIf(process.platform === "win32")(
   "settles admitted SQLite work before queued SIGTERM exits Doctor",
-  () =>
-    withOpenClawTestState({ scenario: "external-service" }, async (state) => {
+  async () => {
+    await withOpenClawTestState({ scenario: "external-service" }, async (state) => {
       const agent = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       const shared = resolveOpenClawStateSqlitePath(state.env);
       await closeOpenClawAgentDatabasesAsync(state.stateDir);
@@ -34,12 +36,14 @@ it.skipIf(process.platform === "win32")(
       const { installCliSignalExitHandlers, registerSignalExitBarrier } = await import(${JSON.stringify(new URL("../signal-exit-barrier.js", registrar).href)});
       installCliSignalExitHandlers();
       const events = [];
-      const record = event => { events.push({ ...event, pid: process.pid }); fs.writeFileSync(${JSON.stringify(eventsPath)}, JSON.stringify(events)); };
+      const record = event => { events.push({ ...event, at: Date.now(), pid: process.pid }); fs.writeFileSync(${JSON.stringify(eventsPath)}, JSON.stringify(events)); };
+      let signalled = false;
       registerSignalExitBarrier(async () => { record({ event: "exit-barrier" }); });
       const maintenance = await beginDoctorMaintenance({
         root: null, options: { repair: true, nonInteractive: true },
         runtime: { log(message) {
-          if (message.startsWith("Enabling incremental")) {
+          if (message.startsWith("Enabling incremental") && !signalled) {
+            signalled = true;
             record({ event: "queued-SIGTERM" });
             process.kill(process.pid, "SIGTERM");
           } else if (message.startsWith("Enabled incremental")) {
@@ -56,8 +60,10 @@ it.skipIf(process.platform === "win32")(
         if (!maintenance.signal.aborted) throw error;
       } finally { await maintenance.release(); }
     `;
-      const result = spawnNodeEvalSync(script, {
-        env: {
+      let child: ChildProcess | undefined;
+      const result = await runNodeScript(
+        createNodeEvalArgs(script),
+        {
           ...state.env,
           VITEST: undefined,
           VITEST_POOL_ID: undefined,
@@ -65,29 +71,40 @@ it.skipIf(process.platform === "win32")(
           OPENCLAW_UPDATE_IN_PROGRESS: undefined,
           OPENCLAW_UPDATE_RUN_ID: undefined,
         },
-        timeout: 30_000,
-      });
+        30_000,
+        {
+          onReady(spawned) {
+            child = spawned;
+          },
+        },
+      );
       expect(
-        { error: result.error, code: result.status, signal: result.signal },
+        { error: result.error, code: result.status, signal: child?.signalCode },
         result.stderr,
       ).toEqual({ error: undefined, code: 143, signal: null });
       const events = JSON.parse(fs.readFileSync(eventsPath, "utf8"));
       expect(events).toMatchObject([
-        { event: "queued-SIGTERM", pid: result.pid },
+        { event: "queued-SIGTERM", pid: child?.pid },
         { event: "verified-conversion" },
         { event: "interrupted", aborted: true },
         { event: "exit-barrier" },
       ]);
+      expect(events[0].at).toBeLessThanOrEqual(events[1].at);
       expect(fs.readFileSync(agent.path)).toEqual(untouched);
       {
         using database = openNodeSqliteDatabase(shared, { readOnly: true });
-        expect({
+        const observed = {
           mode: database.prepare("PRAGMA auto_vacuum").get()?.auto_vacuum,
           integrity: database.prepare("PRAGMA integrity_check").get()?.integrity_check,
           value: database.prepare("SELECT value FROM retained").get()?.value,
-        }).toEqual({ mode: 2, integrity: "ok", value: "signal preserved" });
+        };
+        expect(observed).toEqual({ mode: 2, integrity: "ok", value: "signal preserved" });
       }
       const replacement = acquireGatewayStateOwner({ databasePath: shared });
       replacement.release();
-    }),
+      expect(() => process.kill(child!.pid!, 0)).toThrow(
+        expect.objectContaining({ code: "ESRCH" }),
+      );
+    });
+  },
 );

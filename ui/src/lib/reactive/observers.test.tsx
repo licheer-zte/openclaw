@@ -15,43 +15,44 @@ function resizeEntry(target: Element): ResizeObserverEntry {
   };
 }
 
-function mockObserver(name = "ResizeObserver") {
-  const instances: Observer[] = [];
-  class Observer {
-    readonly targets = new Set<Element>();
-    constructor(readonly deliver: ResizeObserverCallback) {
-      instances.push(this);
-    }
-    observe = (target: Element) => this.targets.add(target);
-    unobserve = (target: Element) => this.targets.delete(target);
-    disconnect = () => this.targets.clear();
-  }
-  vi.stubGlobal(name, Observer);
-  return instances;
-}
-
 it.each([
   { name: "ResizeObserver", create: createResizeObserver },
   { name: "IntersectionObserver", create: createIntersectionObserver },
-])("waits for refs, rebinds $name targets and disconnects with the owner", ({ name, create }) => {
-  const instances = mockObserver(name);
-  let first!: HTMLDivElement;
+])("rebinds $name targets and disconnects with the owner", ({ name, create }) => {
+  const instances: Array<{ targets: Set<Element> }> = [];
+  vi.stubGlobal(
+    name,
+    class {
+      targets = new Set<Element>();
+      constructor() {
+        instances.push(this);
+      }
+      observe(target: Element) {
+        this.targets.add(target);
+      }
+      unobserve(target: Element) {
+        this.targets.delete(target);
+      }
+      disconnect() {
+        this.targets.clear();
+      }
+    },
+  );
+  const first = document.createElement("div");
   const second = document.createElement("div");
-  const [targets, setTargets] = createSignal<readonly Element[]>();
-  const view = mountSolid(() => {
-    create(
-      () => targets() ?? [first.closest("section") ?? first, second],
-      () => {},
-    );
-    return <div ref={(node) => (first = node)} />;
+  const [targets, setTargets] = createSignal<readonly Element[]>([first, second]);
+  const dispose = createRoot((stop) => {
+    create(targets, () => {});
+    return stop;
   });
+  onTestFinished(dispose);
   flush();
   expect(instances[0]?.targets).toEqual(new Set([first, second]));
   setTargets([second]);
   flush();
   expect(instances[0]?.targets.size).toBe(0);
   expect(instances[1]?.targets).toEqual(new Set([second]));
-  view.unmount();
+  dispose();
   expect(instances[1]?.targets.size).toBe(0);
 });
 
@@ -68,8 +69,66 @@ it("does not require browser observers when they are unavailable", () => {
   expect(() => flush()).not.toThrow();
 });
 
+it("waits for rendered refs before reading observer targets", () => {
+  const targets = new Set<Element>();
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe(target: Element) {
+        targets.add(target);
+      }
+      unobserve(target: Element) {
+        targets.delete(target);
+      }
+      disconnect() {
+        targets.clear();
+      }
+    },
+  );
+  const view = mountSolid(() => {
+    let element!: HTMLDivElement;
+    createResizeObserver(
+      () => [element.closest("section") ?? element],
+      () => {},
+    );
+    return (
+      <div
+        ref={(node) => {
+          element = node;
+        }}
+      />
+    );
+  });
+  flush();
+  expect(targets).toEqual(new Set([view.container.firstElementChild]));
+  view.unmount();
+  expect(targets.size).toBe(0);
+});
+
 it("shares resize delivery without mixing subscribers or retaining retired targets", async () => {
-  const instances = mockObserver();
+  let deliver!: ResizeObserverCallback;
+  const nativeObservers: ResizeObserver[] = [];
+  const observed = new Set<Element>();
+  const create = vi.fn();
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(callback: ResizeObserverCallback) {
+        create();
+        deliver = callback;
+        nativeObservers.push(this);
+      }
+      observe(target: Element) {
+        observed.add(target);
+      }
+      unobserve(target: Element) {
+        observed.delete(target);
+      }
+      disconnect() {
+        observed.clear();
+      }
+    },
+  );
   const first = document.createElement("div");
   const second = document.createElement("div");
   const batches: Element[][] = [];
@@ -82,12 +141,11 @@ it("shares resize delivery without mixing subscribers or retaining retired targe
   releaseSecond = observeResize([second], secondCallback);
   onTestFinished(releaseFirst);
   onTestFinished(releaseSecond);
-  expect(instances).toHaveLength(1);
-  const observer = instances[0]!;
-  observer.deliver([resizeEntry(first), resizeEntry(second)], observer);
+  expect(create).toHaveBeenCalledOnce();
+  deliver([resizeEntry(first), resizeEntry(second)], nativeObservers[0]!);
   expect(batches).toEqual([[first, second]]);
   expect(secondCallback).not.toHaveBeenCalled();
-  expect(observer.targets).toEqual(new Set([first, second]));
+  expect(observed).toEqual(new Set([first, second]));
   const lateCallback = vi.fn();
   const releaseLate = observeResize([second], lateCallback);
   onTestFinished(releaseLate);
@@ -96,15 +154,28 @@ it("shares resize delivery without mixing subscribers or retaining retired targe
     [second],
   );
   releaseFirst();
-  expect(observer.targets).toEqual(new Set([second]));
+  expect(observed).toEqual(new Set([second]));
   releaseLate();
-  expect(observer.targets.size).toBe(0);
+  expect(observed.size).toBe(0);
 });
 
 it("reports subscriber errors without starving independent observation", () => {
-  const instances = mockObserver();
+  let deliver!: ResizeObserverCallback;
+  const nativeObservers: ResizeObserver[] = [];
   const report = vi.fn();
   vi.stubGlobal("reportError", report);
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(callback: ResizeObserverCallback) {
+        deliver = callback;
+        nativeObservers.push(this);
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
   const target = document.createElement("div");
   const failure = new Error("Observer callback failed");
   onTestFinished(
@@ -114,8 +185,7 @@ it("reports subscriber errors without starving independent observation", () => {
   );
   const receive = vi.fn();
   onTestFinished(observeResize([target], receive));
-  const observer = instances[0]!;
-  observer.deliver([resizeEntry(target)], observer);
+  deliver([resizeEntry(target)], nativeObservers[0]!);
   expect(report).toHaveBeenCalledExactlyOnceWith(failure);
   expect(receive).toHaveBeenCalledOnce();
 });

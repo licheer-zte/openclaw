@@ -62,14 +62,28 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllEnvs());
 
-it("stops sampling and closes profilers after CPU start failure", async () => {
-  failCpuStart = true;
+it.each([false, true])("closes profilers (CPU start failure=%s)", async (fails) => {
+  failCpuStart = fails;
   const outcome = await captureWorkerGcProfiles();
-  expect(outcome).toMatchObject({ status: "unavailable", reason: "capture-failed" });
-  expect(native.post).toHaveBeenCalledWith("HeapProfiler.stopSampling");
-});
-
-afterEach(() => {
+  if (fails) {
+    expect(outcome).toMatchObject({ status: "unavailable", reason: "capture-failed" });
+    expect(native.post).toHaveBeenCalledWith("HeapProfiler.stopSampling");
+  } else {
+    assert(outcome.status === "complete", JSON.stringify(outcome));
+    expect(native.post).toHaveBeenCalledWith("HeapProfiler.startSampling", {
+      samplingInterval: 262144,
+      includeObjectsCollectedByMajorGC: true,
+      includeObjectsCollectedByMinorGC: true,
+    });
+    expect(native.wait.mock.calls.map(([duration]) => duration)).toEqual([5000]);
+    expect(JSON.parse(outcome.result.heap)).toMatchObject({
+      includeObjectsCollectedByMajorGC: true,
+      includeObjectsCollectedByMinorGC: true,
+      profile: { samples: [{ size: 8192, nodeId: 1, ordinal: 1 }] },
+    });
+    expect(JSON.parse(outcome.result.cpu)).toMatchObject({ profile: { samples: [1] } });
+    expect(JSON.stringify(outcome.result)).not.toMatch(/secret|user\.js/);
+  }
   for (const domain of ["HeapProfiler", "Profiler"]) {
     expect(native.post).toHaveBeenCalledWith(`${domain}.disable`);
   }
@@ -85,12 +99,6 @@ it("bounds concurrent worker artifacts globally and preserves unrelated diagnost
     await Promise.all(preserved.map((name) => fs.writeFile(path.join(directory, name), "keep")));
     const outcome = await captureWorkerGcProfiles();
     assert(outcome.status === "complete", JSON.stringify(outcome));
-    expect(JSON.parse(outcome.result.heap)).toMatchObject({
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-      profile: { samples: [{ size: 8192, nodeId: 1, ordinal: 1 }] },
-    });
-    expect(JSON.parse(outcome.result.cpu)).toMatchObject({ profile: { samples: [1] } });
     const batches = await Promise.all(
       Array.from({ length: 12 }, () => writeWorkerGcProfiles(outcome.result)),
     );

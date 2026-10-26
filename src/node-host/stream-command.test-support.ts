@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import http from "node:http";
 import net from "node:net";
 import { afterEach, expect } from "vitest";
@@ -16,7 +15,9 @@ export function streamParams(kind: "desktop" | "portal", overrides: object = {})
 
 export function portOf(server: net.Server) {
   const address = server.address();
-  assert(address && typeof address !== "string", "expected local test address");
+  if (!address || typeof address === "string") {
+    throw new Error("expected local test address");
+  }
   return address.port;
 }
 
@@ -40,23 +41,23 @@ export async function listen(
 
 export function useStreamFixture() {
   const cleanups: Array<() => Promise<void>> = [];
-  const onCleanup = (close: (done: () => void) => void) => {
-    cleanups.push(() => new Promise<void>(close));
-  };
   afterEach(async () => {
     await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
   });
   return {
     cleanups,
     closeServer: (server: net.Server, peers: Iterable<{ destroy(): void }> = []) => {
-      onCleanup((done) => {
-        for (const peer of peers) {
-          peer.destroy();
-        }
-        server.close(() => done());
-      });
+      cleanups.push(
+        () =>
+          new Promise<void>((resolve) => {
+            for (const peer of peers) {
+              peer.destroy();
+            }
+            server.close(() => resolve());
+          }),
+      );
     },
-    gateway: async (_kind: "portal", contextPath = "") => {
+    gateway: async (kind: "desktop" | "portal", contextPath = "") => {
       const peer: {
         socket?: WebSocket;
         headers: Array<string | undefined>;
@@ -70,7 +71,7 @@ export function useStreamFixture() {
       }
       const wss = new WebSocketServer({
         server,
-        path: `${contextPath.replace(/\/$/u, "")}/node-portal/attach`,
+        path: `${contextPath.replace(/\/$/u, "")}/node-${kind}/attach`,
       });
       wss.on("connection", (ws, request) => {
         peer.socket = ws;
@@ -78,20 +79,27 @@ export function useStreamFixture() {
           request.headers[name]?.toString(),
         );
         ws.on("message", (data, binary) => {
-          expect(binary).toBe(true);
-          assert(Buffer.isBuffer(data), "expected stream frame buffer");
+          if (kind === "portal") {
+            expect(binary).toBe(true);
+          }
+          if (!Buffer.isBuffer(data)) {
+            throw new Error("expected stream frame buffer");
+          }
           peer.frames.push(data);
         });
         ws.once("close", () => {
           peer.closed = true;
         });
       });
-      onCleanup((done) => {
-        for (const client of wss.clients) {
-          client.terminate();
-        }
-        wss.close(() => server.close(() => done()));
-      });
+      cleanups.push(
+        () =>
+          new Promise<void>((resolve) => {
+            for (const client of wss.clients) {
+              client.terminate();
+            }
+            wss.close(() => server.close(() => resolve()));
+          }),
+      );
       return { peer, gatewayUrl: `ws://127.0.0.1:${portOf(server)}${contextPath}` };
     },
   };

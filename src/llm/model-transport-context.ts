@@ -1,4 +1,4 @@
-import { AsyncContext } from "../shared/async-context.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 type ModelTransportContext = {
   sessionKey?: string;
@@ -8,9 +8,7 @@ type ModelTransportContext = {
   onRateLimitWait?: (retryAt: number) => () => void;
 };
 
-const modelTransportContext = new AsyncContext<ModelTransportContext>(
-  Symbol("modelTransportContext"),
-);
+const modelTransportContext = new AsyncLocalStorage<ModelTransportContext>();
 
 export function withModelTransportContext<T>(context: ModelTransportContext, run: () => T): T {
   return modelTransportContext.run(context, run);

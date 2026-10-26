@@ -62,11 +62,17 @@ describe("scope upgrade observations", () => {
     vi.useFakeTimers();
     await using f = fixture();
     const { coordinator, observer } = f;
-    const secondSettled = vi.fn();
-    const first = f.track(observer.run(() => coordinator.wait("upgrade", owner)).catch(rejection));
+    const [firstSettled, secondSettled] = [vi.fn(), vi.fn()];
+    const first = f.track(
+      observer
+        .run(() => coordinator.wait("upgrade", owner))
+        .catch(rejection)
+        .finally(firstSettled),
+    );
     const second = f.track(coordinator.wait("upgrade", owner).finally(secondSettled));
     observer.beginClose();
     await vi.advanceTimersByTimeAsync(0);
+    expect(firstSettled).toHaveBeenCalledOnce();
     expect(await first).toEqual({ error: expect.objectContaining({ name: "AbortError" }) });
     expect(secondSettled).not.toHaveBeenCalled();
     pairing.pending = false;

@@ -53,30 +53,6 @@ const duplexIO = () => ({
   emitChunk: async () => {},
   onInput: () => {},
 });
-const transcriptNode = () =>
-  node("devbox", {
-    commands: [CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND, CODEX_CATALOG_TRANSCRIPT_READ_COMMAND],
-  });
-const wireBytes = (payloadJSON: string) =>
-  Buffer.byteLength(JSON.stringify({ payloadJSON }), "utf8");
-function readTranscript(runtime: PluginRuntime, control = createEligibleControl(), limit = 1) {
-  return readCodexSessionTranscript({
-    runtime,
-    control,
-    hostId: "node:devbox",
-    threadId: "thread-1",
-    limit,
-  });
-}
-function terminalCommand(
-  commands = createCodexSessionCatalogNodeHostCommands(createEligibleControl()),
-) {
-  const command = commands.find((candidate) => candidate.command === CODEX_TERMINAL_RESUME_COMMAND);
-  if (!command || command.duplex !== true) {
-    throw new Error("Codex terminal command was not registered as duplex");
-  }
-  return command;
-}
 function listCatalog(
   runtime: PluginRuntime,
   control: ReturnType<typeof createControl>,
@@ -129,12 +105,16 @@ it("does not start paired hosts when retired during node inventory", async () =>
 });
 
 it("filters managed threads and publishes websocket source continuation support", async () => {
-  const native = (id: string) => session(id, { source: "cli" });
   const listPage = vi.fn(async ({ cursor }: { cursor?: string; limit: number }) =>
     cursor
-      ? { sessions: [native("native-2")] }
+      ? {
+          sessions: [session("native-2", { source: "cli" })],
+        }
       : {
-          sessions: [session("managed", { source: "vscode" }), native("native-1")],
+          sessions: [
+            session("managed", { source: "vscode" }),
+            session("native-1", { source: "cli" }),
+          ],
           nextCursor: "page-2",
           backwardsCursor: "page-0",
         },
@@ -176,7 +156,7 @@ it("filters managed threads and publishes websocket source continuation support"
   expect(JSON.parse(result)).toEqual({
     sourceHomeId: "home-main",
     canContinueCodex: false,
-    sessions: [native("native-1"), native("native-2")],
+    sessions: [session("native-1", { source: "cli" }), session("native-2", { source: "cli" })],
     backwardsCursor: "page-0",
   });
   expect(bindingStore.managedThreads.snapshot).toHaveBeenCalledOnce();
@@ -191,7 +171,11 @@ it("filters managed threads and publishes websocket source continuation support"
 });
 
 it("keeps paired-node catalogs non-archived and metadata-only", async () => {
-  const control = createControl();
+  const control = createControl({
+    listPage: vi.fn(async () => ({
+      sessions: [session("local")],
+    })),
+  });
   const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async () =>
     nodePage([
       session("remote", {
@@ -495,7 +479,9 @@ it("serves bounded generic items through the optional node transcript command", 
     ],
     nextCursor: "native-older",
   });
-  expect(wireBytes(payload)).toBeLessThan(20 * 1024 * 1024);
+  expect(Buffer.byteLength(JSON.stringify({ payloadJSON: payload }), "utf8")).toBeLessThan(
+    20 * 1024 * 1024,
+  );
   expect(listItemPage).toHaveBeenCalledWith(
     expect.objectContaining({
       cursor: "native-start",
@@ -503,10 +489,23 @@ it("serves bounded generic items through the optional node transcript command", 
     }),
   );
   const { runtime } = createRuntime({
-    nodes: [transcriptNode()],
+    nodes: [
+      node("devbox", {
+        commands: [
+          CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+          CODEX_CATALOG_TRANSCRIPT_READ_COMMAND,
+        ],
+      }),
+    ],
     invoke: vi.fn(async () => ({ payloadJSON: payload })),
   });
-  const received = await readTranscript(runtime, control, 2);
+  const received = await readCodexSessionTranscript({
+    runtime,
+    control,
+    hostId: "node:devbox",
+    threadId: "thread-1",
+    limit: 2,
+  });
   expect(received.nextCursor).toBe("native-older");
   expect(received.items).toMatchObject([
     {
@@ -530,7 +529,14 @@ it("bounds recovered display inputs from released nodes without losing their sou
     success: true,
   });
   const { runtime } = createRuntime({
-    nodes: [transcriptNode()],
+    nodes: [
+      node("devbox", {
+        commands: [
+          CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+          CODEX_CATALOG_TRANSCRIPT_READ_COMMAND,
+        ],
+      }),
+    ],
     invoke: vi.fn(async () =>
       nodePayload({
         items: [{ id: source.id, type: "toolResult", text: "done", raw: source }],
@@ -538,7 +544,13 @@ it("bounds recovered display inputs from released nodes without losing their sou
       }),
     ),
   });
-  const received = await readTranscript(runtime);
+  const received = await readCodexSessionTranscript({
+    runtime,
+    control: createEligibleControl(),
+    hostId: "node:devbox",
+    threadId: "thread-1",
+    limit: 1,
+  });
   expect(received.nextCursor).toBe("native-older");
   expect(received.items).toEqual([
     {
@@ -553,7 +565,9 @@ it("bounds recovered display inputs from released nodes without losing their sou
       toolInputOmitted: true,
     },
   ]);
-  expect(wireBytes(JSON.stringify(received))).toBeLessThanOrEqual(20 * 1024 * 1024);
+  expect(
+    Buffer.byteLength(JSON.stringify({ payloadJSON: JSON.stringify(received) }), "utf8"),
+  ).toBeLessThanOrEqual(20 * 1024 * 1024);
   const local = await readCodexSessionTranscript({
     runtime,
     control: createEligibleControl({
@@ -565,11 +579,18 @@ it("bounds recovered display inputs from released nodes without losing their sou
     limit: 1,
   });
   expect(local.items).toEqual([{ ...received.items[0], text: "" }]);
-  expect(wireBytes(JSON.stringify(local))).toBeLessThanOrEqual(20 * 1024 * 1024);
+  expect(
+    Buffer.byteLength(JSON.stringify({ payloadJSON: JSON.stringify(local) }), "utf8"),
+  ).toBeLessThanOrEqual(20 * 1024 * 1024);
 });
 
 it("rejects malformed terminal resume thread ids before spawning", async () => {
-  const command = terminalCommand();
+  const command = createCodexSessionCatalogNodeHostCommands(createEligibleControl()).find(
+    (candidate) => candidate.command === CODEX_TERMINAL_RESUME_COMMAND,
+  );
+  if (!command || command.duplex !== true) {
+    throw new Error("Codex terminal command was not registered as duplex");
+  }
   await expect(
     command.handle(JSON.stringify({ threadId: "not-a-uuid", cols: 80, rows: 24 }), duplexIO()),
   ).rejects.toThrow("threadId must be a UUID");
@@ -610,26 +631,27 @@ it.each([
         },
       }),
     });
-    const command = terminalCommand(
-      createCodexSessionCatalogNodeHostCommands({
-        ...factory,
-        forNode: async (agentId) => {
-          const source = await factory.forNode(agentId);
-          vi.spyOn(source.control, "requireEligibleThread").mockImplementation(async () => {
-            vi.stubEnv("CODEX_HOME", "/changed/after/eligibility");
-            if (reload) {
-              runtimeConfig = { ...runtimeConfig };
-            }
-            return idleThread({
-              id: threadId,
-              source: { custom: "atlas" },
-              cwd: "/node/catalog/cwd",
-            });
+    const command = createCodexSessionCatalogNodeHostCommands({
+      ...factory,
+      forNode: async (agentId) => {
+        const source = await factory.forNode(agentId);
+        vi.spyOn(source.control, "requireEligibleThread").mockImplementation(async () => {
+          vi.stubEnv("CODEX_HOME", "/changed/after/eligibility");
+          if (reload) {
+            runtimeConfig = { ...runtimeConfig };
+          }
+          return idleThread({
+            id: threadId,
+            source: { custom: "atlas" },
+            cwd: "/node/catalog/cwd",
           });
-          return source;
-        },
-      }),
-    );
+        });
+        return source;
+      },
+    }).find((candidate) => candidate.command === CODEX_TERMINAL_RESUME_COMMAND);
+    if (!command || command.duplex !== true) {
+      throw new Error("Codex terminal command was not registered as duplex");
+    }
 
     expect(
       command.isAvailable?.({
@@ -641,12 +663,13 @@ it.each([
       JSON.stringify({ agentId: "beta", threadId, cwd: "/caller/cwd", cols: 80, rows: 24 }),
       duplexIO(),
     );
-    if (transport !== "stdio" || reload) {
-      await expect(invocation).rejects.toThrow(
-        transport !== "stdio"
-          ? "Native terminal requires a local Codex source"
-          : "configuration changed",
-      );
+    if (transport !== "stdio") {
+      await expect(invocation).rejects.toThrow("Native terminal requires a local Codex source");
+      expect(nodeHostMocks.runNodePtyCommand).not.toHaveBeenCalled();
+      return;
+    }
+    if (reload) {
+      await expect(invocation).rejects.toThrow("configuration changed");
       expect(nodeHostMocks.runNodePtyCommand).not.toHaveBeenCalled();
       return;
     }

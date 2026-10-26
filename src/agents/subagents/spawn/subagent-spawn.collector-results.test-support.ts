@@ -101,8 +101,8 @@ export function registerCollectorResultSpawnCases(options: NativePluginSpawnTest
           collected.completed.find((item) => item.runId === runId),
           `collected ${runId}`,
         );
-      // The producer's bounded evidence remains the fallback after payloads leave resident memory.
-      const preview = prepareAgentRunTerminalReply({ rawText: answers.unrecorded }).terminalReply;
+      // Preview truncation itself is covered by agent-run-terminal-reply.test.ts.
+      const preview = subagentRuns.get(unrecorded ?? "")?.completion?.terminalReply;
       if (preview?.disposition !== "visible") {
         throw new Error("Missing unrecorded child's lifecycle preview");
       }

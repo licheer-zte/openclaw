@@ -14,8 +14,6 @@ import {
   type AssistantMessageOptions,
 } from "./event-projector-assistant-message.js";
 import {
-  createAssistantItemSuppression,
-  type AssistantCompletion,
   shouldAdvancePersistableAssistantBarrier,
   shouldClearTerminalPresentationForNativeItem,
 } from "./event-projector-items.js";
@@ -26,6 +24,10 @@ import { attachCodexAssistantItemIds } from "./upstream-prompt-provenance.js";
 
 type AgentEvent = Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0];
 type AnswerCandidateStatus = "candidate" | "superseded" | "selected";
+type AssistantCompletion = Pick<CodexThreadItem, "type" | "id" | "text"> & {
+  phase?: unknown;
+  delivery?: unknown;
+};
 
 export class CodexAssistantProjection {
   readonly assistantTextByItem = new Map<string, string>();
@@ -58,7 +60,6 @@ export class CodexAssistantProjection {
   // finals (codex-rs userShell injects as user-role, never assistant). Filtering typed items
   // would drop legitimate verbatim answers ("reply with exactly the command output").
   private readonly rawPromotedAssistantItemIds = new Set<string>();
-  private readonly suppressItem = createAssistantItemSuppression(() => this.hasDeliveredFinal?.());
   private assistantStarted = false;
   private responseModel: string | undefined;
   // Native handoffs retire earlier finals; terminal summaries contain only the last answer.
@@ -79,7 +80,7 @@ export class CodexAssistantProjection {
       itemId: string,
       entry: CodexTranscriptCheckpointEntry,
     ) => void,
-    private readonly hasDeliveredFinal?: () => boolean,
+    private readonly hasDeliveredFinalSourceReply?: () => boolean,
   ) {}
 
   handleNotification(method: string, params: JsonObject): void {
@@ -91,7 +92,7 @@ export class CodexAssistantProjection {
   async handleAssistantDelta(params: JsonObject, final = false): Promise<void> {
     const itemId = readString(params, "itemId") ?? "assistant";
     const delta = readString(params, "delta") ?? "";
-    if ((!delta && !final) || this.suppressItem(itemId)) {
+    if ((!delta && !final) || this.hasDeliveredFinalSourceReply?.()) {
       return;
     }
     if (itemId !== this.pendingRawTerminalAssistantEchoItemId) {
@@ -108,7 +109,7 @@ export class CodexAssistantProjection {
       this.assistantStarted = true;
       await this.params.onAssistantMessageStart?.();
     }
-    if (this.suppressItem(itemId)) {
+    if (this.hasDeliveredFinalSourceReply?.()) {
       return;
     }
     this.rememberAssistantItem(itemId);
@@ -165,7 +166,7 @@ export class CodexAssistantProjection {
     item: CodexThreadItem | undefined,
     itemId: string | undefined,
   ): Promise<void> {
-    if (item?.type === "agentMessage" && this.suppressItem(item.id)) {
+    if (item?.type === "agentMessage" && this.hasDeliveredFinalSourceReply?.()) {
       return;
     }
     this.noteNativeWorkBarrier(item);
@@ -208,7 +209,7 @@ export class CodexAssistantProjection {
     item: CodexThreadItem | undefined,
     notification?: { itemId: string | undefined; activeItemIds: ReadonlySet<string> },
   ): { itemId: string; message: AssistantMessage; text: string } | undefined {
-    if (item?.type === "agentMessage" && this.suppressItem(item.id)) {
+    if (item?.type === "agentMessage" && this.hasDeliveredFinalSourceReply?.()) {
       return undefined;
     }
     this.adoptSteeringPrefixForCompletion(item);
@@ -281,7 +282,7 @@ export class CodexAssistantProjection {
     if (!isPendingTerminalAssistantEcho) {
       this.markTerminalAssistantCandidateSupersededBy(rawItemId);
     }
-    if (item.role !== "assistant" || this.suppressItem(rawItemId)) {
+    if (item.role !== "assistant" || this.hasDeliveredFinalSourceReply?.()) {
       return;
     }
     if (phase === "commentary" && this.pendingRawCommentaryEchoes > 0) {
@@ -416,7 +417,7 @@ export class CodexAssistantProjection {
   }
 
   finalizeAnswerCandidate(turn: { status?: string; items?: CodexThreadItem[] }): void {
-    if (turn.status !== "completed" || this.hasDeliveredFinal?.()) {
+    if (turn.status !== "completed" || this.hasDeliveredFinalSourceReply?.()) {
       this.supersedeVisibleAnswerCandidate();
       return;
     }
@@ -439,7 +440,6 @@ export class CodexAssistantProjection {
     const authoritativeIndex = turnItems.findLastIndex((item) => {
       if (
         item.type !== "agentMessage" ||
-        this.suppressItem(item.id) ||
         typeof item.text !== "string" ||
         item.text.trim().length === 0
       ) {

@@ -7,7 +7,6 @@ import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
 import { prepareCoreToolPolicy, projectAgentToolDefinition } from "./prepared-tool-surface.js";
-import { fakeTool } from "./test-helpers/fake-tool.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 describe("prepared core tool policy", () => {
@@ -41,37 +40,50 @@ describe("prepared core tool policy", () => {
   ] as const)("checks patch model allowlist (%#)", (allowed, modelId, applyPatchEnabled) => {
     expect(
       prepareCoreToolPolicy({
-        config: {
-          tools: { exec: { applyPatch: { allowModels: [allowed] } } },
-          agents: { defaults: { imageMaxDimensionPx: 800 } },
-        },
+        config: { tools: { exec: { applyPatch: { allowModels: [allowed] } } } },
         modelProvider: "openai",
         modelId,
+      }),
+    ).toMatchObject({ applyPatchEnabled });
+  });
+
+  it("preserves image and transport policy", () => {
+    expect(
+      prepareCoreToolPolicy({
+        config: { agents: { defaults: { imageMaxDimensionPx: 800 } } },
         modelContextWindowTokens: 32000,
         modelHasVision: false,
       }),
-    ).toMatchObject({
-      applyPatchEnabled,
+    ).toEqual({
+      workspaceOnly: false,
+      readOnly: false,
+      applyPatchEnabled: true,
       applyPatchWorkspaceOnly: true,
+      applyPatchContainmentSource: "config",
       imageSanitization: { maxDimensionPx: 800 },
       modelContextWindowTokens: 32000,
       modelHasVision: false,
     });
   });
 
-  it.each([false, true])(
+  it.each([
+    { tools: { fs: { workspaceOnly: true }, exec: { applyPatch: { enabled: false } } } },
+    {
+      tools: { fs: { workspaceOnly: false } },
+      agents: {
+        entries: {
+          restricted: {
+            tools: {
+              fs: { workspaceOnly: true },
+              exec: { applyPatch: { allowModels: ["other-model"] } },
+            },
+          },
+        },
+      },
+    },
+  ] satisfies OpenClawConfig[])(
     "enforces configured containment after policy transport (%#)",
-    async (agentScoped) => {
-      const restrictions = {
-        fs: { workspaceOnly: true },
-        exec: { applyPatch: agentScoped ? { allowModels: ["other-model"] } : { enabled: false } },
-      };
-      const config: OpenClawConfig = agentScoped
-        ? {
-            tools: { fs: { workspaceOnly: false } },
-            agents: { entries: { restricted: { tools: restrictions } } },
-          }
-        : { tools: restrictions };
+    async (config) => {
       const parent = await fs.realpath(tempDirs.make("prepared-tool-policy-"));
       const root = path.join(parent, "workspace");
       const outside = path.join(parent, "outside.txt");
@@ -108,7 +120,9 @@ it("issues byte-identical definitions to the local session adapter", () => {
   const tools = finalizeAgentTools({
     tools: [
       {
-        ...fakeTool("sample", "A canonical tool."),
+        name: "sample",
+        label: "Sample",
+        description: "A canonical tool.",
         parameters: {
           type: "object",
           properties: { value: { type: "string" } },
@@ -116,6 +130,7 @@ it("issues byte-identical definitions to the local session adapter", () => {
         },
         hideFromChannelProgress: true,
         executionMode: "sequential",
+        execute: async () => ({ content: [], details: {} }),
       },
     ],
     modelProvider: "openai",

@@ -553,7 +553,6 @@ it.each(["unknown", "delivered"] as const)(
     });
     const gatewayRuntime: GatewayRecoveryRuntime = {
       prepareRestartRecovery: () => undefined,
-      prepareFailedWorkerPlacement: async () => undefined,
       dispatchAgent: unexpectedDispatch,
       dispatchSessionMethod: unexpectedDispatch,
       resumeChatInput: unexpectedDispatch,

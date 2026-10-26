@@ -257,7 +257,19 @@ describe("accepted context-engine turn finalization", () => {
       database,
       engineId: "test",
       payload: {
-        boundary: createTurnBoundary(database.path, retrySessionId, retrySessionId),
+        boundary: {
+          admission: {
+            ...facts.boundary.admission,
+            logicalTurnId: retrySessionId,
+            sessionId: retrySessionId,
+            sessionKey: `agent:main:${retrySessionId}`,
+          },
+          terminal: {
+            ...facts.boundary.terminal,
+            sessionId: retrySessionId,
+            sessionKey: `agent:main:${retrySessionId}`,
+          },
+        },
         messages: [],
       },
     });

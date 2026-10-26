@@ -3,8 +3,7 @@ import {
   resolveCronListPageNextOffset,
 } from "../../../src/cron/service/list-page-validation.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { CronJob } from "../api/types.ts";
-import { readCronInventory } from "./cron/inventory.ts";
+import type { CronJob, CronJobsListResult } from "../api/types.ts";
 import {
   CI_AUTOMATION_OPTIONS,
   ciAutomationDeclarationKey,
@@ -30,8 +29,8 @@ export async function loadCiAutomationJobs(
   let offset = 0;
   let revision: string | undefined;
   do {
-    const response = await readCronInventory(
-      client,
+    const response = await client.request<CronJobsListResult>(
+      "cron.list",
       {
         sessionKey: target.sessionKey,
         sessionAgentId: target.agentId,

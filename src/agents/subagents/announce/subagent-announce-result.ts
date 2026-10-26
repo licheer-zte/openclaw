@@ -1,12 +1,6 @@
-import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
-import { readTerminalSourceReplyDeliveryMirror } from "../../../shared/chat-message-content.js";
 import { truncateUtf16WithEllipsis } from "../../../shared/text-truncate.js";
-import {
-  parseInlineDirectives,
-  stripInlineDirectiveTagsForDelivery,
-} from "../../../utils/directive-tags.js";
-import { prepareTerminalAssistantReply } from "../../assistant-terminal-reply.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
@@ -123,24 +117,7 @@ export async function readSubagentRunFinalAnswerUsing(
         ?.event;
     }
     assertCurrent?.();
-    const message = isRecord(event) ? asOptionalObjectRecord(event.message) : undefined;
-    // Explicit delivery records already own their display text, including literal NO_REPLY.
-    // Parent review keeps media references as data rather than extracting channel attachments.
-    const answer =
-      message?.display === true || readTerminalSourceReplyDeliveryMirror(message)
-        ? extractStoredAssistantText(message)
-        : stripInlineDirectiveTagsForDelivery(
-            parseInlineDirectives(
-              prepareTerminalAssistantReply(
-                message && {
-                  content: typeof message.text === "string" ? message.text : message.content,
-                  stopReason: message.stopReason,
-                  phase: message.phase,
-                },
-              ).text,
-            ).text,
-          ).text;
-    return answer || undefined;
+    return (isRecord(event) ? extractStoredAssistantText(event.message) : undefined) || undefined;
   });
 }
 

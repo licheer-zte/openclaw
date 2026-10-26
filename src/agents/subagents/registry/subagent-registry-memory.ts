@@ -144,23 +144,27 @@ export function freezeSubagentRunReadRecord<T extends SubagentRunReadRecord>(rec
   return record;
 }
 
-const emptyRunBucket: readonly SubagentRunRecord[] = Object.freeze([]);
+class SubagentRunIndex extends Map<string, Map<string, SubagentRunRecord>> {
+  private readonly latest = new Map<string, SubagentRunRecord>();
 
-class SubagentRunIndex extends Map<string, SubagentRunRecord[]> {
   constructor(private readonly keyFor: (entry: SubagentRunRecord) => string | undefined) {
     super();
   }
 
-  update(previous?: SubagentRunRecord, entry?: SubagentRunRecord): void {
+  update(runId: string, previous?: SubagentRunRecord, entry?: SubagentRunRecord): void {
     const previousKey = previous && this.keyFor(previous);
     const key = entry && this.keyFor(entry);
     if (previousKey && previousKey !== key) {
       const bucket = this.get(previousKey);
-      const position = bucket && previous ? bucket.indexOf(previous) : -1;
-      if (bucket && position >= 0) {
-        bucket.splice(position, 1);
-        if (bucket.length === 0) {
+      if (bucket?.get(runId) === previous) {
+        bucket.delete(runId);
+        if (bucket.size === 0) {
           this.delete(previousKey);
+          this.latest.delete(previousKey);
+        } else if (this.latest.get(previousKey) === previous) {
+          for (const remaining of bucket.values()) {
+            this.latest.set(previousKey, remaining);
+          }
         }
       }
     }
@@ -168,22 +172,25 @@ class SubagentRunIndex extends Map<string, SubagentRunRecord[]> {
       return;
     }
     const bucket = this.get(key);
-    if (bucket?.length === 1 && bucket[0] === previous) {
-      bucket[0] = entry;
-    } else if (bucket) {
-      // Replacement moves to the end, preserving the collector's last-published lookup.
-      const position = previous ? bucket.indexOf(previous) : -1;
-      if (position >= 0) {
-        bucket.splice(position, 1);
+    if (bucket) {
+      // Singleton status updates retain their bucket; larger groups keep replacement order.
+      if (bucket.size > 1) {
+        bucket.delete(runId);
       }
-      bucket.push(entry);
+      bucket.set(runId, entry);
     } else {
-      this.set(key, [entry]);
+      this.set(key, new Map([[runId, entry]]));
     }
+    this.latest.set(key, entry);
   }
 
   getLatest(key: string): SubagentRunRecord | undefined {
-    return this.get(key)?.at(-1);
+    return this.latest.get(key);
+  }
+
+  override clear(): void {
+    super.clear();
+    this.latest.clear();
   }
 }
 
@@ -625,7 +632,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     super.set(runId, entry);
     this.readLookup.set(runId, entry);
     for (const index of runIndexes) {
-      index.update(prev, entry);
+      index.update(runId, prev, entry);
     }
     this.workIndex.set(runId, entry);
     return this;
@@ -637,7 +644,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     const prev = this.get(runId);
     if (prev) {
       for (const index of runIndexes) {
-        index.update(prev);
+        index.update(runId, prev);
       }
     }
     return super.delete(runId);
@@ -717,8 +724,8 @@ export function getCurrentSubagentRunOwner(
 
 export function getSubagentChildSessionCandidates(
   childSessionKey: string,
-): readonly SubagentRunRecord[] {
-  return childSessionCandidatesByKey.get(childSessionKey) ?? emptyRunBucket;
+): Iterable<SubagentRunRecord> {
+  return childSessionCandidatesByKey.get(childSessionKey)?.values() ?? [];
 }
 
 /** Iterate live generations for one child session without scanning the registry. */
@@ -727,14 +734,14 @@ export function getSubagentRunsForChildSession(
   childAgentId?: string,
 ): Iterable<SubagentRunRecord> {
   const key = childSessionOwnerKey({ childSessionKey, childAgentId });
-  return (key ? runsByChildSessionOwner.get(key) : undefined) ?? emptyRunBucket;
+  return (key ? runsByChildSessionOwner.get(key)?.values() : undefined) ?? [];
 }
 
 /** Current requester-owned generations, without restoring or scanning retained rows. */
 export function getSubagentRunsForRequesterSession(
   requesterSessionKey: string,
 ): Iterable<SubagentRunRecord> {
-  return runsByRequesterSessionKey.get(requesterSessionKey) ?? emptyRunBucket;
+  return runsByRequesterSessionKey.get(requesterSessionKey)?.values() ?? [];
 }
 
 /** Iterate live collector members for one requester/group archive decision. */
@@ -745,9 +752,9 @@ export function getSubagentRunsForCollectorGroup(
 ): Iterable<[string, SubagentRunRecord]> {
   const key = JSON.stringify([requesterSessionKey, groupId]);
   // Restore can backfill agent ownership after index insertion; read the live owner.
-  return (runsByCollectorGroupKey.get(key) ?? emptyRunBucket)
-    .filter((entry) => entry.requesterAgentId === requesterAgentId)
-    .map((entry) => [entry.runId, entry]);
+  return [...(runsByCollectorGroupKey.get(key)?.entries() ?? [])].filter(
+    ([, entry]) => entry.requesterAgentId === requesterAgentId,
+  );
 }
 
 /** Resolve a collector tombstone that reserves its child session from ordinary turns. */

@@ -117,11 +117,17 @@ const runtimeContextProjections = [false, true].map((escape) =>
         return message;
       }
       const content = message.content;
-      const projected = transformUserTextContent(content, (text) => {
-        const escaped = escapeInternalRuntimeContextDelimiters(text);
-        return escaped === text ? undefined : escaped;
-      });
-      return projected === content ? message : Object.assign({}, message, { content: projected });
+      const projected =
+        typeof content === "string"
+          ? escapeInternalRuntimeContextDelimiters(content)
+          : content.map((block) =>
+              block.type === "text"
+                ? Object.assign({}, block, {
+                    text: escapeInternalRuntimeContextDelimiters(block.text),
+                  })
+                : block,
+            );
+      return Object.assign({}, message, { content: projected });
     }),
   ),
 );

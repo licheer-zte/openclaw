@@ -381,7 +381,9 @@ function installResolver(): void {
           const filename = fileURLToPath(resolved.url);
           const sdkTarget = isPluginSdkAliasSpecifier(specifier)
             ? aliasTarget
-            : getPluginCache().sdk.roots.has(path.dirname(filename))
+            : Array.from(getPluginCache().sdk.contexts.values()).some(({ sdkRoots }) =>
+                  sdkRoots.includes(path.dirname(filename)),
+                )
               ? resolveAliasTargetForParentUrl(
                   `openclaw/plugin-sdk/${path.basename(filename, path.extname(filename))}`,
                   context.parentURL,

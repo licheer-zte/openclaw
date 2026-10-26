@@ -26,17 +26,37 @@ function ticket<T>(
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
-it.each(["pre-abort", "abort", "delete", "timer", "late-consume"])("releases via %s", (end) => {
-  const { store, token, onExpire, listeners, empty, abort } = ticket(
-    "observer",
-    { now: () => 1_000 },
-    end === "pre-abort",
-  );
+it.each([true, false])("revokes without expiry (aborted before mint: %s)", (aborted) => {
+  const { abort, empty, onExpire, token } = ticket("observer", {}, aborted);
   expect(token).toMatch(/^[a-f0-9]{48}$/u);
-  expect(listeners()).toBe(end === "pre-abort" ? 0 : 1);
-  if (end === "pre-abort" || end === "abort") {
-    abort();
-  } else if (end === "delete") {
+  abort();
+  empty();
+  vi.advanceTimersByTime(100);
+  expect(onExpire).not.toHaveBeenCalled();
+});
+
+it("consumes a trimmed opaque ticket only once and detaches revocation", () => {
+  const payload = { session: "observer" };
+  const { store, token, expiresAtMs, abort, empty, listeners } = ticket(payload, {
+    ttlMs: 60_000,
+    now: () => 1_000,
+  });
+  expect(listeners()).toBe(1);
+  expect(token).toMatch(/^[a-f0-9]{48}$/u);
+  expect(expiresAtMs).toBe(61_000);
+  expect(store.size).toBe(1);
+  expect(store.consume(` \t${token}\n`, 60_999)).toBe(payload);
+  empty(60_999);
+  abort();
+  expect(store.consume(token)).toBeUndefined();
+});
+
+it.each(["delete", "timer", "late-consume"])("releases via %s", (end) => {
+  const { store, token, onExpire, listeners, empty, abort } = ticket("observer", {
+    now: () => 1_000,
+  });
+  expect(listeners()).toBe(1);
+  if (end === "delete") {
     expect([store.delete(token), store.delete(token)]).toEqual([true, false]);
   } else if (end === "timer") {
     vi.advanceTimersByTime(100);
@@ -44,15 +64,14 @@ it.each(["pre-abort", "abort", "delete", "timer", "late-consume"])("releases via
     expect(store.consume(token, 1_100)).toBeUndefined();
   }
   empty(1_000);
-  const expires = end === "timer" || end === "late-consume";
-  if (expires) {
+  if (end !== "delete") {
     expect(onExpire).toHaveBeenCalledExactlyOnceWith("observer", token);
   }
   store.clear();
   abort();
   expect(store.consume(token)).toBeUndefined();
   vi.advanceTimersByTime(100);
-  expect(onExpire).toHaveBeenCalledTimes(expires ? 1 : 0);
+  expect(onExpire).toHaveBeenCalledTimes(end === "delete" ? 0 : 1);
 });
 
 it.each(["mismatched", "revoked"])("rejects a %s owner at redemption", (owner) => {
@@ -82,25 +101,16 @@ it("rejects malformed tokens without consuming another ticket", () => {
   expect(store.consume(valid)).toBe("observer");
 });
 
-it("honors clock/TTL overrides and consumes trimmed tickets only once", () => {
+it("honors injected clocks and per-ticket TTL and clock overrides", () => {
   let nowMs = 1_000;
-  const payload = { session: "observer" };
-  const { store, token, expiresAtMs, listeners, abort, empty } = ticket(payload, {
-    ttlMs: 60_000,
-    now: () => nowMs,
-  });
-  const late = store.mint(payload);
-  const override = store.mint(payload, { ttlMs: 100, nowMs: 2_000 });
-  expect([expiresAtMs, override.expiresAtMs]).toEqual([61_000, 2_100]);
+  const store = createOneTimeTicketStore<string>({ ttlMs: 60_000, now: () => nowMs });
+  const first = store.mint("default");
+  const override = store.mint("override", { ttlMs: 100, nowMs: 2_000 });
+  expect([first.expiresAtMs, override.expiresAtMs]).toEqual([61_000, 2_100]);
   nowMs = 2_099;
-  expect(store.consume(override.token)).toBe(payload);
-  expect(store.consume(` \t${token}\n`, 60_999)).toBe(payload);
-  expect(listeners()).toBe(0);
-  abort();
-  expect(store.consume(token)).toBeUndefined();
-  expect(store.consume(late.token, 61_000)).toBeUndefined();
-  expect(store.consume(late.token, 1_000)).toBeUndefined();
-  empty(1_000);
+  expect(store.consume(override.token)).toBe("override");
+  expect(store.consume(first.token, 61_000)).toBeUndefined();
+  expect(store.consume(first.token, 1_000)).toBeUndefined();
 });
 
 it("clears pending tickets, detaching revocation and canceling expiry callbacks", () => {

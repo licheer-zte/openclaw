@@ -1,14 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { readCronJobScratchState } from "./scratch-store.js";
+import { readCronJobScratchState, writeCronJobScratch } from "./scratch-store.js";
 import { cronTestDeps, cronTestJob } from "./service.fixture-builders.test-support.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { run } from "./service/ops-run.js";
 import { createCronServiceState } from "./service/state.js";
 import { onTimer, runMissedJobs } from "./service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
-import { writeCronJobScratch } from "./store.worker.test-support.js";
 import { cronStoreKey } from "./store/key.js";
 import type { CronEvent, CronJob } from "./types.js";
 
@@ -37,7 +36,11 @@ async function createFixture() {
       storePath,
       log: logger,
       nowMs: () => nowMs,
-      runIsolatedAgentJob: async () => ({ status: "ok", summary: "done", delivered: true }),
+      runIsolatedAgentJob: vi.fn(async () => ({
+        status: "ok" as const,
+        summary: "done",
+        delivered: true,
+      })),
       onEvent: (event) => {
         events.push(structuredClone(event));
         if (event.action === "removed") {

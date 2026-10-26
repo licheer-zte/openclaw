@@ -3,7 +3,7 @@ import {
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { registerSignalApprovalReactionTarget } from "./approval-reactions.js";
 // Real SQLite, monitor and handler; only Gateway approval resolution is mocked.
 import { startSignalIngressMonitor } from "./signal-ingress.js";
@@ -17,12 +17,21 @@ vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
 }));
 
 vi.useRealTimers();
-const { createBaseSignalEventHandlerDeps, createSignalReceiveEvent } =
-  await import("./monitor/event-handler.test-harness.js");
-const { createSignalEventHandler } = await import("./monitor/event-handler.js");
+let harness: typeof import("./monitor/event-handler.test-harness.js");
+let createHandler: typeof import("./monitor/event-handler.js").createSignalEventHandler;
 
 type SignalIngressQueue = NonNullable<Parameters<typeof startSignalIngressMonitor>[0]["queue"]>;
 type SignalIngressPayload = Parameters<SignalIngressQueue["enqueue"]>[1];
+
+beforeAll(async () => {
+  harness = await import("./monitor/event-handler.test-harness.js");
+  ({ createSignalEventHandler: createHandler } = await import("./monitor/event-handler.js"));
+});
+
+beforeEach(() => {
+  reactionStores.clearSignalApprovalReactionStoresForTest();
+  resolveApproval.mockReset();
+});
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
@@ -33,10 +42,9 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 it(
-  "replays approval reactions after a transient Gateway failure",
+  "releases the claim and replays a reaction after a transient Gateway failure",
   { timeout: 30_000 },
   async () => {
-    reactionStores.clearSignalApprovalReactionStoresForTest();
     const queue = createChannelIngressQueueForTests<SignalIngressPayload>({
       channelId: "signal",
       accountId: "default",
@@ -60,8 +68,8 @@ it(
     const monitor = await startSignalIngressMonitor({
       accountId: "default",
       queue,
-      dispatch: createSignalEventHandler(
-        createBaseSignalEventHandlerDeps({
+      dispatch: createHandler(
+        harness.createBaseSignalEventHandlerDeps({
           cfg: {
             channels: { signal: { allowFrom: ["+15550001111"] } },
             approvals: { exec: { enabled: true, mode: "session" } },
@@ -70,7 +78,8 @@ it(
       ),
       runtime: { error: vi.fn(), log: vi.fn() },
     });
-    const reactionEvent = createSignalReceiveEvent({
+    const reactionEvent = harness.createSignalReceiveEvent({
+      sourceNumber: "+15550001111",
       reactionMessage: {
         emoji: "👍",
         targetAuthor: "+15550001111",

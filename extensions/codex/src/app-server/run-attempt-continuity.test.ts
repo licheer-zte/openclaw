@@ -1,6 +1,7 @@
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
+import * as clientRuntime from "./client-runtime.js";
 import { protectCodexAppServerLiveThread } from "./client-runtime.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
@@ -43,8 +44,10 @@ it("retains a protected parent through private completion and owner reentry", as
     { persistedThreads: [], codexHome },
   );
   ownCodexInferenceClient(harness.client);
+  const ownershipTransfers = vi.spyOn(clientRuntime, "consumeCodexAppServerLiveThread");
   let release = () => {};
   const sessionFile = path.join(tempDir, "continuity-parent.jsonl");
+  const bindings = [];
   try {
     for (const [index, text] of [
       "Owner conversation context.",
@@ -69,9 +72,7 @@ it("retains a protected parent through private completion and owner reentry", as
         expect(harness.client.getRuntimeIdentity()?.codexHome).toBe(codexHome);
         release = protectCodexAppServerLiveThread(harness.client, "thread-1");
       }
-      await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-        threadId: "thread-1",
-      });
+      bindings.push(await readCodexAppServerBinding(sessionFile));
       const request = harness.requests.findLast(({ method }) => method === "turn/start")?.params;
       const route = getCodexInferenceThread(harness.client, "thread-1");
       const metadata =
@@ -93,6 +94,17 @@ it("retains a protected parent through private completion and owner reentry", as
       );
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       await run;
+    }
+    const ownerships = await Promise.all(ownershipTransfers.mock.results.map(({ value }) => value));
+    expect(ownerships).toHaveLength(3);
+    expect(ownerships[0]?.configFingerprint).toEqual(expect.stringMatching(/\S+/));
+    for (const ownership of ownerships) {
+      expect(ownership?.configFingerprint).toBe(ownerships[0]?.configFingerprint);
+    }
+    expect(bindings[0]?.dynamicToolsFingerprint).toEqual(expect.stringMatching(/\S+/));
+    for (const binding of bindings) {
+      expect(binding?.threadId).toBe("thread-1");
+      expect(binding?.dynamicToolsFingerprint).toBe(bindings[0]?.dynamicToolsFingerprint);
     }
     expect(
       harness.requests

@@ -25,56 +25,88 @@ function initialSubmissionFixture() {
     },
   });
   const owner = expectDefined(host.client, "connected client");
-  const submit = (text: string, createdAt: number, runId: string) => {
-    const input = expectDefined(
+  const build = (text: string, createdAt: number, runId: string) =>
+    expectDefined(
       buildInitialChatSubmission(host.sessionKey, { text, createdAt }, owner, runId),
       "initial prompt",
     );
-    host.chatSubmissions.retain(input);
-    admitChatSubmission(host, undefined);
-    return input;
-  };
-  const input = submit("original initial prompt", 1, "initial-run");
+  const input = build("original initial prompt", 1, "initial-run");
   const readmit = () => {
     host.chatSubmissions.retain(input);
     admitChatSubmission(host, undefined);
   };
+  host.chatSubmissions.retain(input);
   const retained = expectDefined(
     host.chatSubmissions.readInitial(sessionKey, input.owner),
     "retained initial input",
   );
-  const submitNewer = () => submit("new initial prompt", 2, "new-run").message;
+  admitChatSubmission(host, undefined);
+  const submitNewer = () => {
+    const newer = build("new initial prompt", 2, "new-run");
+    host.chatSubmissions.retain(newer);
+    admitChatSubmission(host, undefined);
+    return newer.message;
+  };
   return { host, input, retained, readmit, submitNewer, replace: () => (sessionId = "physical-b") };
 }
 
-it.each([
-  "physical replacement",
-  "completed",
-  "uncertain",
-  "not-started",
-  "rejected",
-  "newer handoff",
-  "reset",
-  "new",
-] as const)("preserves initial submission ownership across %s", async (action) => {
-  const { host, input, retained, readmit, submitNewer, replace } = initialSubmissionFixture();
-  if (action === "physical replacement") {
-    applyChatCacheSnapshot(host, {
-      messages: [],
-      sessionId: "cached-placeholder",
-      pagination: { hasMore: false },
-    });
-    resetChatHistoryProjection(host);
-    admitChatSubmission(host, undefined);
-    expect(host.chatMessages).toEqual([input.message]);
-  }
+it("preserves cache-only resets and binds the first authoritative physical session", async () => {
+  const { host, input, retained, readmit, replace } = initialSubmissionFixture();
+  applyChatCacheSnapshot(host, {
+    messages: [],
+    sessionId: "cached-placeholder",
+    pagination: { hasMore: false },
+  });
+  resetChatHistoryProjection(host);
+  admitChatSubmission(host, undefined);
+  expect(host.chatMessages).toEqual([input.message]);
   await loadChatHistory(host);
-  if (action === "physical replacement") {
-    expect(host).toMatchObject({ currentSessionId: "physical-a", chatMessages: [input.message] });
-    replace();
+  expect(host).toMatchObject({ currentSessionId: "physical-a", chatMessages: [input.message] });
+  replace();
+  await loadChatHistory(host);
+  expect(host).toMatchObject({ currentSessionId: "physical-b", chatMessages: [] });
+  expect(retained).toMatchObject({ pending: false, message: null });
+  readmit();
+  expect(host.chatMessages).toEqual([]);
+});
+
+it.each(["completed", "uncertain", "not-started", "rejected", "newer handoff"] as const)(
+  "retires an initial prompt only after an issued clear (%s)",
+  async (result) => {
+    const { host, input, retained, readmit, submitNewer } = initialSubmissionFixture();
     await loadChatHistory(host);
-    expect(host).toMatchObject({ currentSessionId: "physical-b", chatMessages: [] });
-  } else if (action === "reset" || action === "new") {
+    const response = createDeferred<"completed">();
+    const reset = vi.spyOn(host.sessions, "reset");
+    if (result === "rejected") {
+      reset.mockRejectedValue(new Error("Reset was refused"));
+    } else if (result === "newer handoff") {
+      reset.mockReturnValue(response.promise);
+    } else {
+      reset.mockResolvedValue(result);
+    }
+    const clearing = clearChatHistory(host);
+    if (result === "newer handoff") {
+      const newerMessage = submitNewer();
+      response.resolve("completed");
+      await clearing;
+      expect(host.chatMessages).toEqual([newerMessage]);
+      expect(retained).toMatchObject({ pending: false, message: null });
+      return;
+    }
+    await clearing;
+    resetChatHistoryProjection(host);
+    readmit();
+    expect(host.chatMessages).toEqual(
+      result === "completed" || result === "uncertain" ? [] : [input.message],
+    );
+  },
+);
+
+it.each(["reset", "new"])(
+  "retires initial ownership on authoritative %s and admits a newer run",
+  async (reason) => {
+    const { host, readmit, submitNewer } = initialSubmissionFixture();
+    await loadChatHistory(host);
     handlePageGatewayEvent(host, {
       type: "event",
       event: "sessions.changed",
@@ -82,36 +114,13 @@ it.each([
         sessionKey: host.sessionKey,
         sessionId: host.currentSessionId,
         agentId: "main",
-        reason: action,
+        reason,
       },
     });
     await loadChatHistory(host);
-  } else {
-    const response = createDeferred<"completed" | "uncertain" | "not-started">();
-    vi.spyOn(host.sessions, "reset").mockImplementation(() =>
-      action === "rejected" ? Promise.reject(new Error("Reset was refused")) : response.promise,
-    );
-    const clearing = clearChatHistory(host);
-    const newer = action === "newer handoff" ? submitNewer() : undefined;
-    if (action !== "rejected") {
-      response.resolve(action === "newer handoff" ? "completed" : action);
-    }
-    await clearing;
-    if (newer) {
-      expect(host.chatMessages).toEqual([newer]);
-      expect(retained).toMatchObject({ pending: false, message: null });
-      return;
-    }
-    resetChatHistoryProjection(host);
-  }
-  const preserved = action === "not-started" || action === "rejected";
-  if (!preserved) {
-    expect(retained).toMatchObject({ pending: false, message: null });
-  }
-  readmit();
-  expect(host.chatMessages).toEqual(preserved ? [input.message] : []);
-  if (action === "reset" || action === "new") {
+    readmit();
+    expect(host.chatMessages).toEqual([]);
     const newerMessage = submitNewer();
     expect(host.chatMessages).toEqual([newerMessage]);
-  }
-});
+  },
+);

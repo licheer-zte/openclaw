@@ -1,4 +1,3 @@
-import { carryLinkExtraction } from "./markdown-links.js";
 import type { Envelope, LoadedRecord } from "./model.js";
 
 /** Longest chain of merged pages followed before a redirect is treated as invalid. */
@@ -113,12 +112,7 @@ export function effectiveRecord(
       metadata[key] = [...new Set(metadata[key]!.map(resolve))];
     }
   }
-  if (!Object.keys(redirected).length) {
-    return record;
-  }
-  const projection = { ...record, metadata, redirected };
-  carryLinkExtraction(record, projection);
-  return projection;
+  return Object.keys(redirected).length ? { ...record, metadata, redirected } : record;
 }
 
 /** Link candidates for current records, plus the mapping that sends merged pages to their survivors. */

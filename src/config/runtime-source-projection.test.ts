@@ -11,6 +11,7 @@ import {
 } from "./resolution-facts.js";
 import {
   createRuntimeConfigReader as createReader,
+  hashRuntimeConfigValue as hashConfig,
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot as setSnapshot,
 } from "./runtime-snapshot.js";
@@ -27,11 +28,12 @@ const tokenRef = new Map([[tokenPath, "GATEWAY_TOKEN"]]);
 function expectIsolatedCopy(copy: OpenClawConfig, original: OpenClawConfig) {
   expect(copy).toEqual(original);
   expect(copy).not.toBe(original);
+  expect(hashConfig(copy)).toBe(hashConfig(original));
 }
 
 it("captures authored values and provenance with one isolated runtime generation", () => {
   const source: OpenClawConfig = {
-    agents: { entries: { ops: {} } },
+    agents: { entries: { ops: {}, research: {} } },
     gateway: { auth: { mode: "token", token: "${GATEWAY_TOKEN}" } },
   };
   const runtime: OpenClawConfig = {
@@ -63,16 +65,6 @@ it("captures authored values and provenance with one isolated runtime generation
   expect(projectSource(captured)).toBe(authored);
   expect(captured.gateway?.auth?.token).toBe("synthetic-resolved-token");
   expect(authored.gateway?.auth?.token).toBe("${GATEWAY_TOKEN}");
-  setSnapshot(runtime, source);
-  runtime.gateway!.auth!.token = "after-publication";
-  source.gateway!.auth!.token = "after-publication";
-  const next = capture(runtime);
-  expect(next).not.toBe(captured);
-  expect(next.gateway?.auth?.token).toBe("changed-runtime");
-  expect(projectSource(next).gateway?.auth?.token).toBe("changed-source");
-  expect(capture(runtime)).toBe(next);
-  expect(capture(next)).toBe(next);
-  expect(captured.gateway?.auth?.token).toBe("synthetic-resolved-token");
 });
 
 it("projects runtime edits once while ordinary derived configs remain independent", () => {
@@ -94,21 +86,44 @@ it("projects runtime edits once while ordinary derived configs remain independen
   expect(authored.tools?.exec?.safeBins).toEqual(["jq"]);
 });
 
-it("keeps a source-free capture pinned when its mutable origin later matches the process source", () => {
+it("uses one captured value when no authored source is active", () => {
   const original = { gateway: { port: 19001 } };
   const captured = capture(original);
   expect(projectSource(captured)).toBe(captured);
   expect(capture(captured)).toBe(captured);
   original.gateway.port = 19002;
   expect(captured.gateway?.port).toBe(19001);
-  const source: OpenClawConfig = { gateway: { port: 19002 } };
-  const runtime: OpenClawConfig = { gateway: { port: 19002, mode: "local" } };
+});
+
+it("captures a revision at publication and reuses it until the next publication", () => {
+  const runtime = { gateway: { port: 19001 } };
+  const source = { gateway: { port: 19002 } };
   setSnapshot(runtime, source);
-  const scoped = { gateway: { port: 19003 } };
-  const pinned = capture(scoped);
-  scoped.gateway.port = 19002;
-  const read = createReader(pinned);
-  expect(read()).toBe(pinned);
+  runtime.gateway.port = 19003;
+  source.gateway.port = 19004;
+  const first = capture(runtime);
+  expect(first.gateway?.port).toBe(19001);
+  expect(projectSource(first).gateway?.port).toBe(19002);
+  expect(capture(runtime)).toBe(first);
+  expect(capture(first)).toBe(first);
+
+  setSnapshot(runtime, source);
+  const next = capture(runtime);
+  expect(next).not.toBe(first);
+  expect(next.gateway?.port).toBe(19003);
+  expect(projectSource(next).gateway?.port).toBe(19004);
+  expect(first.gateway?.port).toBe(19001);
+});
+
+it("keeps a scoped capture pinned when its mutable origin later matches the process source", () => {
+  const source: OpenClawConfig = { gateway: { port: 19001 } };
+  const runtime: OpenClawConfig = { gateway: { port: 19001, mode: "local" } };
+  setSnapshot(runtime, source);
+  const scoped: OpenClawConfig = { gateway: { port: 19002 } };
+  const captured = capture(scoped);
+  scoped.gateway!.port = 19001;
+  const read = createReader(captured);
+  expect(read()).toBe(captured);
   setSnapshot({ gateway: { port: 19003 } }, source);
-  expect(read()).toBe(pinned);
+  expect(read()).toBe(captured);
 });

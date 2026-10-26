@@ -272,6 +272,7 @@ suite.define(() => {
   });
 
   it.each([
+    ["shared", "navigating away and back", ["agent:main:other"]],
     ["personal", "navigating away and back", ["agent:main:other"]],
     ["shared", "LRU eviction", ["agent:main:other", "agent:main:third", "agent:main:fourth"]],
   ] as const)("keeps the original %s retry after %s", async (source, navigation, via) => {

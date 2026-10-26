@@ -117,20 +117,21 @@ describe("background reindex resumption", () => {
           });
         }
       }
-      const config = fixture.createConfig({
-        provider: mixedSources
-          ? "batch-wide-test"
-          : resume === "fallback" || resume === "close"
-            ? "openai"
-            : "none",
-        fallback: resume === "fallback" ? "fallback-provider" : undefined,
-        batchEnabled: mixedSources,
-        cacheEnabled: resume === "close",
-        sources: mixedSources ? ["memory", "sessions"] : ["sessions"],
-        sessionMemory: true,
-        vectorEnabled: false,
-      });
-      const manager = await fixture.getFreshManager(config);
+      const manager = await fixture.getFreshManager(
+        fixture.createConfig({
+          provider: mixedSources
+            ? "batch-wide-test"
+            : resume === "fallback" || resume === "close"
+              ? "openai"
+              : "none",
+          fallback: resume === "fallback" ? "fallback-provider" : undefined,
+          batchEnabled: mixedSources,
+          cacheEnabled: resume === "close",
+          sources: mixedSources ? ["memory", "sessions"] : ["sessions"],
+          sessionMemory: true,
+          vectorEnabled: false,
+        }),
+      );
       onTestFinished(() => manager.close());
       if (resume === "close") {
         (manager as unknown as { cache: { maxEntries?: number } }).cache.maxEntries = 2;
@@ -258,20 +259,12 @@ describe("background reindex resumption", () => {
           for (const pathname of shadowPaths) {
             expect((await fs.stat(pathname)).isFile()).toBe(true);
           }
-          const published = Reflect.get(manager, "publishedDatabase") as MemoryIndexDatabase;
-          const prune = vi
-            .spyOn(published, "pruneEmbeddingCache")
-            .mockRejectedValue(new Error("Cache write admission is closed"));
-          await expect(manager.close()).resolves.toBeUndefined();
-          expect(prune).not.toHaveBeenCalled();
+          await manager.close();
           const reopened = new DatabaseSync(databasePath, { readOnly: true });
           try {
             expect(
               reopened.prepare("SELECT count(*) AS n FROM memory_embedding_cache").get(),
-            ).toEqual({ n: 4 });
-            expect(
-              reopened.prepare("SELECT count(*) AS n FROM memory_index_sources").get(),
-            ).toEqual({ n: 0 });
+            ).toEqual({ n: 2 });
           } finally {
             reopened.close();
           }
@@ -282,14 +275,6 @@ describe("background reindex resumption", () => {
           for (const pathname of shadowPaths) {
             await expect(fs.stat(pathname)).rejects.toMatchObject({ code: "ENOENT" });
           }
-          release();
-          const restarted = await fixture.getFreshManager(config);
-          (restarted as unknown as { cache: { maxEntries?: number } }).cache.maxEntries = 2;
-          await restarted.sync({ reason: "cli" });
-          const restartedDatabase = Reflect.get(restarted, "db") as DatabaseSync;
-          expect(
-            restartedDatabase.prepare("SELECT count(*) AS n FROM memory_embedding_cache").get(),
-          ).toEqual({ n: 2 });
           return;
         }
         const expectedPaths = [...sessionPaths];

@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { writeFixtureJsonSync } from "../../../cli/cli-fixtures.test-support.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { discoverConfiguredPluginLoadPaths } from "../../../plugins/discovery.js";
 import { clearPluginMetadataLifecycleCaches } from "../../../plugins/plugin-metadata-lifecycle.js";
@@ -24,15 +23,18 @@ it("preserves missing packaged aliases while removing inspected aliases and reta
   );
   const healthyAlias = path.join(bundledRoot, "alias-demo");
   fs.mkdirSync(healthyAlias, { recursive: true });
-  writeFixtureJsonSync(path.join(healthyAlias, "openclaw.plugin.json"), {
-    id: "alias-demo",
-    configSchema: {},
-  });
-  writeFixtureJsonSync(path.join(healthyAlias, "package.json"), {
-    name: "@fixture/alias-demo",
-    version: "1.0.0",
-    openclaw: { extensions: ["./index.cjs"] },
-  });
+  fs.writeFileSync(
+    path.join(healthyAlias, "openclaw.plugin.json"),
+    JSON.stringify({ id: "alias-demo", configSchema: {} }),
+  );
+  fs.writeFileSync(
+    path.join(healthyAlias, "package.json"),
+    JSON.stringify({
+      name: "@fixture/alias-demo",
+      version: "1.0.0",
+      openclaw: { extensions: ["./index.cjs"] },
+    }),
+  );
   fs.writeFileSync(path.join(healthyAlias, "index.cjs"), "module.exports = {};\n");
   const missingAlias = path.join(
     stateDir,

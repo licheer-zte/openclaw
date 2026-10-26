@@ -117,7 +117,8 @@ export function registerGatewayRestartOwnershipTests({
           expectCallCount(2, start, acquireLock);
           expect(close).toHaveBeenCalledOnce();
         } finally {
-          await heartbeat.stop();
+          heartbeat.stop();
+          await heartbeat.worker.terminate();
           captureSignal("SIGINT")();
           await vi.advanceTimersByTimeAsync(0);
           await expect(exited).resolves.toBe(0);

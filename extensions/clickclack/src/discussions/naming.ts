@@ -50,7 +50,13 @@ export function slugifyDiscussionLabel(label: string, sessionKey: string): strin
   return slug || fallbackDiscussionLabel(sessionKey);
 }
 
-function discussionSessionPeerId(identity: Parameters<typeof discussionSessionKey>[0]): string {
+function discussionSessionPeerId(identity: {
+  mainSessionKey: string;
+  sessionId: string;
+  serverBaseUrl: string;
+  channelId: string;
+  externalRef: string;
+}): string {
   const digest = sha256Hex(
     [
       identity.mainSessionKey,

@@ -149,6 +149,7 @@ async function registerTree(turnOwner = false, predecessor = false) {
 }
 
 it.each([
+  "normal retirement",
   "retirement with retained predecessor",
   "retirement write rollback",
   "successor registration write rollback",

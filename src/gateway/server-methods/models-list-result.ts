@@ -522,8 +522,6 @@ export async function prepareModelsListResult({
           ...(view === "provider-config"
             ? {}
             : projectModelCatalogAccessPrograms({
-                config: cfg,
-                agentId,
                 snapshot: projectionSnapshot,
                 entry,
                 evaluation,

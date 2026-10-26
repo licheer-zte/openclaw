@@ -1,34 +1,40 @@
 import { randomUUID } from "node:crypto";
 import type {
-  AgentHarnessAttemptParamsV2 as AttemptParams,
+  AgentHarnessAttemptParamsV2 as AgentHarnessAttemptParams,
   AgentHarnessAttemptResult,
   AgentHarnessCompactParams,
+  AgentHarnessV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { runWithAsyncWorkResources } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { vi } from "vitest";
 import {
-  createCopilotAgentHarness as createHarness,
-  type CopilotSessionBinding as Binding,
+  createCopilotAgentHarness as createCopilotAgentHarnessImpl,
+  type CopilotSessionBinding,
 } from "./harness.js";
-import { createCopilotTestHostCapabilities as createTestHost } from "./src/host-capability.test-support.js";
+import { createCopilotTestHostCapabilities } from "./src/host-capability.test-support.js";
 
 type CanonicalAttemptResult = Extract<AgentHarnessAttemptResult, { terminal: unknown }>;
 
 export function makeSessionStoreMock() {
-  const entries = new Map<string, Binding>();
+  const entries = new Map<string, CopilotSessionBinding>();
   return {
     entries,
     store: {
-      register: vi.fn(async (key: string, value: Binding) => void entries.set(key, value)),
+      register: vi.fn(async (key: string, value: CopilotSessionBinding) => {
+        entries.set(key, value);
+      }),
       lookup: vi.fn(async (key: string) => entries.get(key)),
       delete: vi.fn(async (key: string) => entries.delete(key)),
     },
   };
 }
 
-export function asAttemptParams(value: Record<string, unknown>): AttemptParams {
-  return { hostCapabilities: createTestHost(), ...value } as unknown as AttemptParams;
+export function asAttemptParams(value: Record<string, unknown>): AgentHarnessAttemptParams {
+  return {
+    hostCapabilities: createCopilotTestHostCapabilities(),
+    ...value,
+  } as unknown as AgentHarnessAttemptParams;
 }
 
 export function asCompleteAttemptResult(value: Record<string, unknown>): CanonicalAttemptResult {
@@ -50,8 +56,10 @@ export function asCompleteAttemptResult(value: Record<string, unknown>): Canonic
   } as CanonicalAttemptResult;
 }
 
-export function createCopilotAgentHarness(options?: Parameters<typeof createHarness>[0]) {
-  const harness = createHarness(options);
+export function createCopilotAgentHarness(
+  options?: Parameters<typeof createCopilotAgentHarnessImpl>[0],
+) {
+  const harness = createCopilotAgentHarnessImpl(options);
   if (typeof harness.compact !== "function") {
     return harness;
   }
@@ -64,8 +72,8 @@ export function createCopilotAgentHarness(options?: Parameters<typeof createHarn
   return {
     ...harness,
     compact: (
-      params: Omit<Parameters<typeof compact>[0], "hostCapabilities"> &
-        Partial<Pick<Parameters<typeof compact>[0], "hostCapabilities">>,
+      params: AgentHarnessCompactParams &
+        Partial<Pick<AgentHarnessCompactParams<2>, "hostCapabilities">>,
     ) => {
       if (params.hostCapabilities) {
         return compact({ ...params, hostCapabilities: params.hostCapabilities });
@@ -86,20 +94,32 @@ export function createCopilotAgentHarness(options?: Parameters<typeof createHarn
           pluginId: "copilot",
         });
         onAcquired({ release: host.close, releaseBeforeResultWhenIdle: true });
-        const { kind, version, assertActive, retainSourceAuthority } = host.capabilities;
+        const retainSourceAuthority = host.capabilities.retainSourceAuthority;
         if (!retainSourceAuthority) {
           throw new Error("Compaction fixture requires the production source capability");
         }
-        return await compact({
+        const prepared = {
           ...params,
-          hostCapabilities: { kind, version, assertActive, retainSourceAuthority },
-        });
+          hostCapabilities: {
+            kind: host.capabilities.kind,
+            version: host.capabilities.version,
+            assertActive: host.capabilities.assertActive,
+            retainSourceAuthority,
+          },
+        };
+        return await compact(prepared);
       });
     },
   };
 }
 
-export function asFinalizationAttempt(params: AttemptParams) {
+type SettledTurnFinalizationAttemptParams = Parameters<
+  NonNullable<AgentHarnessV2["finalizeSettledTurn"]>
+>[0]["attempt"];
+
+export function asFinalizationAttempt(
+  params: AgentHarnessAttemptParams,
+): SettledTurnFinalizationAttemptParams {
   const { hostCapabilities: _hostCapabilities, ...attempt } = params;
   return attempt;
 }

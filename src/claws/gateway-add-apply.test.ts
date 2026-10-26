@@ -32,10 +32,10 @@ const mocks = vi.hoisted(() => ({
 // mock-isolation: Add receives a fixed Claw source without contacting ClawHub.
 vi.mock("./clawhub-source.js", () => ({ withResolvedClawHubSource: mocks.resolve }));
 // mock-isolation: Lease acquisition is controlled to test Add admission boundaries.
-vi.mock("../state/openclaw-state-lease.js", () => ({ withOpenClawStateLeaseAsync: mocks.lease }));
+vi.mock("../state/openclaw-state-lease.js", () => ({ withOpenClawStateLease: mocks.lease }));
 // mock-isolation: Plugin lease acquisition must be observable without a live owner.
 vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
-  withPluginLifecycleLeaseAsync: mocks.pluginLease,
+  withPluginLifecycleLease: mocks.pluginLease,
 }));
 vi.mock("../config/io.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/io.runtime.js")>()),
@@ -151,18 +151,10 @@ function enterPluginLease(before: () => void = () => {}) {
   mocks.pluginLease.mockImplementation(
     async (
       _options: unknown,
-      run: (lease: {
-        databasePath: string;
-        assertOwned: () => void;
-        assertCurrent: () => void;
-      }) => Promise<unknown>,
+      run: (lease: { databasePath: string; assertOwned: () => void }) => Promise<unknown>,
     ) => {
       before();
-      return run({
-        databasePath: "/tmp/state.sqlite",
-        assertOwned: mocks.owned,
-        assertCurrent: mocks.owned,
-      });
+      return run({ databasePath: "/tmp/state.sqlite", assertOwned: mocks.owned });
     },
   );
 }
@@ -186,11 +178,8 @@ beforeEach(() => {
   );
   mocks.persist.mockResolvedValue(persistedSource);
   mocks.lease.mockImplementation(
-    async (
-      _options: unknown,
-      _context: unknown,
-      run: (lease: { assertOwned: () => void; assertCurrent: () => void }) => Promise<unknown>,
-    ) => await run({ assertOwned: mocks.owned, assertCurrent: mocks.owned }),
+    async (_options: unknown, run: (lease: { assertOwned: () => void }) => Promise<unknown>) =>
+      await run({ assertOwned: mocks.owned }),
   );
   enterPluginLease();
   usePolicy(() => config);
@@ -209,8 +198,7 @@ describe("Gateway Claw Add application", () => {
     mocks.lease.mockImplementation(
       async (
         options: { scope: string; key: string },
-        _context: unknown,
-        run: (lease: { assertOwned: () => void; assertCurrent: () => void }) => Promise<unknown>,
+        run: (lease: { assertOwned: () => void }) => Promise<unknown>,
       ) => {
         const key = `${options.scope}:${options.key}`;
         const previous = pendingLeases.get(key) ?? Promise.resolve();
@@ -221,7 +209,7 @@ describe("Gateway Claw Add application", () => {
         );
         await previous;
         try {
-          return await run({ assertOwned: mocks.owned, assertCurrent: mocks.owned });
+          return await run({ assertOwned: mocks.owned });
         } finally {
           resolve();
         }

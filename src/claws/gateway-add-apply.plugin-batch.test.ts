@@ -10,7 +10,6 @@ import { getPluginCache } from "../plugins/plugin-cache.js";
 import {
   hasPluginLifecycleLease,
   withPluginLifecycleLease,
-  withPluginLifecycleLeaseAsync,
 } from "../plugins/plugin-lifecycle-lease.js";
 import { createInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
@@ -186,7 +185,7 @@ describe("Gateway Claw Add plugin handoff", () => {
         },
       );
       const reloadPlugins = vi.fn(async (_targets, options) =>
-        withPluginLifecycleLeaseAsync({ env }, async () => {
+        withPluginLifecycleLease({ env }, async () => {
           options?.commitGuard?.();
           return { operationId: "reload", generation: 3, pluginIds: ["fixture"] };
         }),

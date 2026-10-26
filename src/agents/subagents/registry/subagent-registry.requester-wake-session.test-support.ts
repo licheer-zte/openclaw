@@ -71,7 +71,6 @@ export function holdRequesterWakeResponses(
 
 export function createGatewayContext() {
   const recoveryRuntime: GatewayRequestContext["recoveryRuntime"] = {
-    prepareFailedWorkerPlacement: async () => undefined,
     prepareRestartRecovery: () => undefined,
     dispatchAgent: (params, timeoutMs) => callGateway({ method: "agent", params, timeoutMs }),
     waitForAgent: (params, timeoutMs, signal) =>

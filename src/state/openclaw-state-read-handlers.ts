@@ -36,7 +36,6 @@ import {
 } from "../gateway/operator-approval-standing-grants.worker.js";
 import {
   readOperatorApprovalReplayInDatabase,
-  readOperatorApprovalPendingSnapshotInDatabase,
   readPendingOperatorApprovalsInDatabase,
   listTerminalOperatorApprovalsInDatabase,
 } from "../gateway/operator-approval-store.kernel.worker.js";
@@ -349,12 +348,6 @@ export function readOpenClawStateDatabaseCommand(
   }
   if (command.type === "operatorApprovals.placementGrant") {
     return { type: command.type, rows: readPlacementGrantRows(db, command.input) };
-  }
-  if (command.type === "operatorApprovals.pendingSnapshot") {
-    return {
-      type: command.type,
-      page: readOperatorApprovalPendingSnapshotInDatabase(command.input, db),
-    };
   }
   if (command.type === "operatorApprovals.pending") {
     return {

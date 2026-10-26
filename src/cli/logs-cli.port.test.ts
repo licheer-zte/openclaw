@@ -18,11 +18,15 @@ import { registerLogsCli } from "./logs-cli.js";
 afterEach(() => vi.restoreAllMocks());
 
 async function withLogsGateway(
-  source: "config" | "malformed" | "timeout" | undefined,
+  options: {
+    source?: "config" | "malformed";
+    failure?: "timeout";
+  },
   run: (fixture: {
     port: string;
     requests: string[];
-    output: { stdout: string; stderr: string };
+    stdout: string[];
+    stderr: string[];
   }) => Promise<void>,
 ) {
   await withOpenClawTestState(
@@ -36,12 +40,12 @@ async function withLogsGateway(
     async (state) => {
       await state.writeConfig({
         gateway: {
-          mode: source === "config" ? "remote" : "local",
+          mode: options.source === "config" ? "remote" : "local",
           auth: { mode: "none" },
-          ...(source === "config" ? { remote: { url: "ws://remote.example:19001" } } : {}),
+          ...(options.source === "config" ? { remote: { url: "ws://remote.example:19001" } } : {}),
         },
       });
-      if (source === "malformed") {
+      if (options.source === "malformed") {
         await fs.writeFile(state.configPath, "{ gateway:");
       }
       const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
@@ -54,7 +58,7 @@ async function withLogsGateway(
             return;
           }
           requests.push(frame.method);
-          if (frame.method === "connect" || source !== "timeout") {
+          if (frame.method === "connect" || !options.failure) {
             const payload =
               frame.method === "connect"
                 ? buildMinimalGatewayHelloOkPayload({ methods: ["logs.tail"] })
@@ -65,10 +69,14 @@ async function withLogsGateway(
       });
       await once(server, "listening");
       const port = String((server.address() as AddressInfo).port);
-      const output = { stdout: "", stderr: "" };
-      for (const stream of ["stdout", "stderr"] as const) {
-        vi.spyOn(process[stream], "write").mockImplementation((chunk) => {
-          output[stream] += String(chunk);
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      for (const [stream, chunks] of [
+        [process.stdout, stdout],
+        [process.stderr, stderr],
+      ] as const) {
+        vi.spyOn(stream, "write").mockImplementation((chunk) => {
+          chunks.push(String(chunk));
           return true;
         });
       }
@@ -76,7 +84,7 @@ async function withLogsGateway(
         throw new ExitError(code);
       });
       try {
-        await run({ port, requests, output });
+        await run({ port, requests, stdout, stderr });
       } finally {
         await closeMinimalGatewayServer(server);
       }
@@ -96,23 +104,23 @@ const explicitTarget = (port: string) => ["--url", gatewayUrl(port), "--token", 
 it.each(["config", "malformed"] as const)(
   "honors an explicit target with %s config",
   async (source) => {
-    await withLogsGateway(source, async ({ port, requests, output }) => {
+    await withLogsGateway({ source }, async ({ port, requests, stdout, stderr }) => {
       await runLogs(source === "config" ? ["--port", port] : explicitTarget(port));
       expect(requests).toEqual(["connect", "logs.tail"]);
-      expect(output.stdout).toContain("selected local log");
+      expect(stdout.join("")).toContain("selected local log");
       if (source === "malformed") {
-        expect(output.stderr).toContain("openclaw doctor --fix");
+        expect(stderr.join("")).toContain("openclaw doctor --fix");
       }
     });
   },
 );
 
 it("uses the failure reason as the JSON summary after a post-hello timeout", async () => {
-  await withLogsGateway("timeout", async ({ port, requests, output }) => {
+  await withLogsGateway({ failure: "timeout" }, async ({ port, requests, stdout, stderr }) => {
     await expect(runLogs(explicitTarget(port))).rejects.toBeInstanceOf(ExitError);
     expect(requests).toEqual(["connect", "logs.tail"]);
-    expect(output.stdout).toBe("");
-    expect(JSON.parse(output.stderr)).toMatchObject({
+    expect(stdout.join("")).toBe("");
+    expect(JSON.parse(stderr.join(""))).toMatchObject({
       type: "error",
       message: expect.stringMatching(/timeout|timed out/),
       error: expect.stringMatching(/timeout|timed out/),
@@ -124,8 +132,14 @@ it("uses the failure reason as the JSON summary after a post-hello timeout", asy
 it.each([
   [undefined, ["--port", "$port", "--max-bytes", ""], "--max-bytes must be a positive integer."],
   ["config", [], "uses plaintext ws:// to a non-loopback address"],
+  [undefined, ["--port", "65536"], "--port must be an integer between 1 and 65535."],
+  [
+    undefined,
+    ["--port", "19083", "--url", "ws://127.0.0.1:19083"],
+    "Use either --url or --port, not both.",
+  ],
 ] as const)("rejects config=%s args=%j before connecting", async (source, args, message) => {
-  await withLogsGateway(source, async ({ port, requests }) => {
+  await withLogsGateway({ source }, async ({ port, requests }) => {
     await expect(runLogs(args.map((arg) => (arg === "$port" ? port : arg)))).rejects.toThrow(
       message,
     );

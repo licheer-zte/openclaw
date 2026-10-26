@@ -81,24 +81,7 @@ async function mountShell(waitForSidebar = true) {
   const query: typeof view.container.querySelector = view.container.querySelector.bind(
     view.container,
   );
-  const settle = async (withTopbar = false) => {
-    refresh();
-    await owner.navigationSidebar.updateComplete;
-    if (withTopbar) {
-      await query<SolidBridgeElement<object>>("openclaw-app-topbar")!.updateComplete;
-    }
-    flush();
-  };
-  const route = (routeId: NonNullable<ShellOwner["routeState"]["routeId"]>) => {
-    owner.routeState = { routeId };
-    refresh();
-  };
-  const gateway = () => {
-    const initial = runtime.context.gateway.snapshot;
-    const snapshot = vi.spyOn(runtime.context.gateway, "snapshot", "get");
-    return (patch: Partial<typeof initial>) => snapshot.mockReturnValue({ ...initial, ...patch });
-  };
-  return { owner, runtime, view, query, refresh, settle, route, gateway };
+  return { owner, runtime, view, query, refresh };
 }
 
 it("publishes readiness when the retained sidebar's delayed module commits", async () => {
@@ -185,25 +168,33 @@ it("updates native history buttons only while connected and refreshes them on re
   });
   const back = query<HTMLButtonElement>(".macos-titlebar-controls__back")!;
   const forward = query<HTMLButtonElement>(".macos-titlebar-controls__forward")!;
-  const expectHistory = (disabled: boolean[]) =>
-    waitForSolid(() => expect([back.disabled, forward.disabled]).toEqual(disabled));
   const publish = (canGoBack: boolean, canGoForward: boolean) =>
     window.dispatchEvent(
       new CustomEvent(NATIVE_HISTORY_STATE_EVENT, { detail: { canGoBack, canGoForward } }),
     );
 
   publish(true, false);
-  await expectHistory([false, true]);
+  await waitForSolid(() => {
+    expect(back.disabled).toBe(false);
+    expect(forward.disabled).toBe(true);
+  });
   owner.disconnect();
   publish(false, true);
   flush();
-  expect([back.disabled, forward.disabled]).toEqual([false, true]);
+  expect(back.disabled).toBe(false);
+  expect(forward.disabled).toBe(true);
 
   owner.connect();
   owner.routeState = { routeId: "chat" };
-  await expectHistory([true, false]);
+  await waitForSolid(() => {
+    expect(back.disabled).toBe(true);
+    expect(forward.disabled).toBe(false);
+  });
   publish(true, false);
-  await expectHistory([false, true]);
+  await waitForSolid(() => {
+    expect(back.disabled).toBe(false);
+    expect(forward.disabled).toBe(true);
+  });
 });
 
 it("passes the assistant a live lookup of the selected registered chat pane", async () => {
@@ -301,11 +292,12 @@ it("preserves notice padding when a session route resolves without a chat pane",
 });
 
 it("keeps pages interactive through transport loss and fences reload-required", async () => {
-  const { owner, gateway, query, refresh } = await mountShell();
+  const { owner, runtime, query, refresh } = await mountShell();
   owner.routeState = { routeId: "logs" };
-  const publish = gateway();
+  const snapshot = vi.spyOn(runtime.context.gateway, "snapshot", "get");
+  const initial = runtime.context.gateway.snapshot;
   for (const phase of ["reconnecting", "offline", "reload-required"] as const) {
-    publish({ phase });
+    snapshot.mockReturnValue({ ...initial, phase });
     refresh();
     expect(query("#control-ui-main")?.hasAttribute("inert"), phase).toBe(false);
     const outlet = query("openclaw-router-outlet")!;
@@ -313,6 +305,7 @@ it("keeps pages interactive through transport loss and fences reload-required", 
     expect(outlet.getAttribute("aria-disabled"), phase).toBe(
       phase === "reload-required" ? "true" : null,
     );
+    expect(query(".connection-action-block"), phase).toBeNull();
   }
 });
 
@@ -461,19 +454,25 @@ it.each([false, true])(
   "keeps the focused gateway retry across footer and mobile header updates (mobile %s)",
   async (mobile) => {
     mockMobile(() => mobile);
-    const { owner, gateway, query, settle: settleShell } = await mountShell();
+    const { owner, runtime, query, refresh } = await mountShell();
     owner.routeState = { routeId: "sessions" };
     await vi.dynamicImportSettled();
     const presentation = () =>
       query(mobile ? ".mobile-connection-status" : ".sidebar-shell__footer")!;
-    const settle = () => settleShell(true);
+    const settle = async () => {
+      refresh();
+      await owner.navigationSidebar.updateComplete;
+      await query<SolidBridgeElement<object>>("openclaw-app-topbar")!.updateComplete;
+      flush();
+    };
     const disconnected = {
+      ...runtime.context.gateway.snapshot,
       phase: "offline" as const,
       offlineStable: true,
       lastError: "Gateway unavailable",
     };
-    const publish = gateway();
-    publish(disconnected);
+    const snapshot = vi.spyOn(runtime.context.gateway, "snapshot", "get");
+    snapshot.mockReturnValue(disconnected);
     await settle();
 
     const retry = presentation().querySelector<HTMLButtonElement>("button")!;
@@ -481,7 +480,7 @@ it.each([false, true])(
     retry.focus();
     expect(document.activeElement).toBe(retry);
 
-    publish({
+    snapshot.mockReturnValue({
       ...disconnected,
       lastError: "Connection refused?token=chip-secret",
     });
@@ -504,7 +503,7 @@ it.each([false, true])(
       subscribe: () => () => {},
       invalidate: () => {},
     };
-    publish({ ...disconnected, deferredIntentCount: 1 });
+    snapshot.mockReturnValue({ ...disconnected, deferredIntentCount: 1 });
     await settle();
     expect(presentation().querySelector("button")).toBe(retry);
     expect(retry.getAttribute("aria-label")).toBe("Disconnected · 3 queued — Retry now");
@@ -518,7 +517,7 @@ it.each([false, true])(
     await settle();
     expect(retry.getAttribute("aria-label")).toBe("Disconnected · 1 queued — Retry now");
 
-    publish({ ...disconnected, phase: "connecting" });
+    snapshot.mockReturnValue({ ...disconnected, phase: "connecting" });
     await settle();
     expect(presentation().textContent).toContain("Connecting…");
     expect(presentation().querySelector("button")).toBeNull();
@@ -527,11 +526,14 @@ it.each([false, true])(
 
 it("keeps one connection announcement through outage and recovery with the mobile drawer closed", async () => {
   mockMobile(() => true);
-  const { owner, gateway, query, refresh } = await mountShell();
+  const { owner, runtime, query, refresh } = await mountShell();
   owner.routeState = { routeId: "sessions" };
-  const connected = { phase: "connected" as const, offlineStable: false };
-  const publish = gateway();
-  publish(connected);
+  const connected = {
+    ...runtime.context.gateway.snapshot,
+    phase: "connected" as const,
+    offlineStable: false,
+  };
+  const snapshot = vi.spyOn(runtime.context.gateway, "snapshot", "get").mockReturnValue(connected);
   refresh();
 
   const announcement = query(".shell > .sr-only[role=status]")!;
@@ -542,7 +544,7 @@ it("keeps one connection announcement through outage and recovery with the mobil
   expect(query(".shell-nav")?.hasAttribute("inert")).toBe(true);
   expect(announcement.closest("[inert]")).toBeNull();
 
-  publish({ ...connected, phase: "offline", offlineStable: true });
+  snapshot.mockReturnValue({ ...connected, phase: "offline", offlineStable: true });
   refresh();
   expect(query(".shell > .sr-only[role=status]")).toBe(announcement);
   expect(announcement.textContent).toBe("Disconnected");
@@ -551,7 +553,7 @@ it("keeps one connection announcement through outage and recovery with the mobil
   expect(line.textContent).toContain("Disconnected");
   expect(line.querySelector("[role=status], [aria-live]")).toBeNull();
 
-  publish(connected);
+  snapshot.mockReturnValue(connected);
   refresh();
   expect(query(".shell > .sr-only[role=status]")).toBe(announcement);
   expect(announcement.textContent).toBe("Connected");
@@ -562,22 +564,19 @@ it("keeps one connection announcement through outage and recovery with the mobil
 it("keeps status in navigation across web layouts without replacing the content frame", async () => {
   let mobile = false;
   mockMobile(() => mobile);
-  const { owner, runtime, gateway, query, refresh } = await mountShell();
+  const { owner, runtime, query, refresh } = await mountShell();
   await vi.dynamicImportSettled();
-  const publish = gateway();
+  const snapshot = vi.spyOn(runtime.context.gateway, "snapshot", "get");
+  const initial = runtime.context.gateway.snapshot;
   const content = query("main.content");
   const footer = () => query(".sidebar-shell__footer .gateway-status");
   for (const phase of ["connecting", "starting", "connected", "offline"] as const) {
-    publish({ phase, offlineStable: false });
+    snapshot.mockReturnValue({ ...initial, phase, offlineStable: false });
     refresh();
     await owner.navigationSidebar.updateComplete;
-    if (phase === "connected") {
-      expect(footer()?.textContent).toBe("Connected");
-    } else {
-      expect(footer(), phase).toBeNull();
-    }
+    expect(footer(), phase).toBeNull();
   }
-  publish({ phase: "offline", offlineStable: true });
+  snapshot.mockReturnValue({ ...initial, phase: "offline", offlineStable: true });
   for (const layout of [
     { mobile: false, collapsed: false, drawer: false, routeId: "chat" },
     { mobile: false, collapsed: true, drawer: false, routeId: "chat" },
@@ -607,12 +606,16 @@ it("keeps status in navigation across web layouts without replacing the content 
 });
 
 it("keeps connection retry in the minimal footer when the Settings renderer is unavailable", async () => {
-  const { owner, runtime, gateway, view, query, refresh } = await mountShell();
+  const { owner, runtime, view, query, refresh } = await mountShell();
   const renderer = vi.spyOn(settingsSidebar, "ShellSettingsSidebar").mockImplementation(() => {
     throw new Error("Settings chunk unavailable");
   });
   onTestFinished(() => renderer.mockRestore());
-  gateway()({ phase: "offline", offlineStable: true });
+  vi.spyOn(runtime.context.gateway, "snapshot", "get").mockReturnValue({
+    ...runtime.context.gateway.snapshot,
+    phase: "offline",
+    offlineStable: true,
+  });
   const connect = vi.spyOn(runtime.context.gateway, "connect").mockImplementation(() => undefined);
   owner.routeState = { routeId: "appearance" };
   refresh();
@@ -631,27 +634,35 @@ it("keeps connection retry in the minimal footer when the Settings renderer is u
   expect(connect).toHaveBeenCalledOnce();
 });
 
-it("briefly reveals collapsed status transitions without removing the stable status footer", async () => {
+it("briefly reveals collapsed status transitions and a recovery footer without extending their timers", async () => {
   vi.stubGlobal("innerWidth", 1280);
-  const { owner, runtime, gateway, query, settle } = await mountShell();
+  const { owner, runtime, query, refresh } = await mountShell();
   await vi.dynamicImportSettled();
   await owner.navigationSidebar.updateComplete;
   vi.useFakeTimers();
-  const connected = { phase: "connected" as const, offlineStable: false };
-  const publish = gateway();
-  publish(connected);
+  const connected = {
+    ...runtime.context.gateway.snapshot,
+    phase: "connected" as const,
+    offlineStable: false,
+  };
+  const snapshot = vi.spyOn(runtime.context.gateway, "snapshot", "get").mockReturnValue(connected);
   runtime.context.navigation.update({ navCollapsed: true });
+  const settle = async () => {
+    refresh();
+    await owner.navigationSidebar.updateComplete;
+    flush();
+  };
   const flag = () => query(".sidebar-connection-flag");
   const footer = () => query(".sidebar-shell__footer .gateway-status");
   await settle();
   expect(flag()?.hasAttribute("data-open")).toBe(false);
-  expect(footer()?.textContent).toBe("Connected");
-  publish({ ...connected, phase: "offline", offlineStable: true });
+  expect(footer()).toBeNull();
+  snapshot.mockReturnValue({ ...connected, phase: "offline", offlineStable: true });
   await settle();
   expect(flag()?.hasAttribute("data-open")).toBe(true);
   expect(flag()?.textContent).toContain("Disconnected");
   vi.advanceTimersByTime(3_000);
-  publish({
+  snapshot.mockReturnValue({
     ...connected,
     phase: "offline",
     offlineStable: true,
@@ -661,17 +672,17 @@ it("briefly reveals collapsed status transitions without removing the stable sta
   vi.advanceTimersByTime(1_000);
   await settle();
   expect(flag()?.hasAttribute("data-open")).toBe(false);
-  publish({ ...connected, phase: "reconnecting", offlineStable: true });
+  snapshot.mockReturnValue({ ...connected, phase: "reconnecting", offlineStable: true });
   await settle();
   expect(flag()?.hasAttribute("data-open")).toBe(true);
   expect(flag()?.textContent).toContain("Reconnecting…");
-  publish(connected);
+  snapshot.mockReturnValue(connected);
   await settle();
   expect(flag()?.hasAttribute("data-open")).toBe(true);
   expect(footer()?.textContent).toBe("Connected");
   vi.advanceTimersByTime(2_000);
   await settle();
-  expect(footer()?.textContent).toBe("Connected");
+  expect(footer()).toBeNull();
   expect(flag()?.hasAttribute("data-open")).toBe(true);
   vi.advanceTimersByTime(2_000);
   await settle();
@@ -679,11 +690,16 @@ it("briefly reveals collapsed status transitions without removing the stable sta
 });
 
 it("checks writing-surface clearance only when the avatar flag would open", async () => {
-  const { owner, runtime, gateway, query, settle } = await mountShell();
+  const { owner, runtime, query, refresh } = await mountShell();
   await vi.dynamicImportSettled();
-  const publish = gateway();
-  publish({ phase: "connected" });
+  const connected = { ...runtime.context.gateway.snapshot, phase: "connected" as const };
+  const snapshot = vi.spyOn(runtime.context.gateway, "snapshot", "get").mockReturnValue(connected);
   runtime.context.navigation.update({ navCollapsed: true });
+  const settle = async () => {
+    refresh();
+    await owner.navigationSidebar.updateComplete;
+    flush();
+  };
   await settle();
   const anchor = query<HTMLElement>(".sidebar-identity-anchor")!;
   const card = anchor.querySelector<HTMLButtonElement>(".sidebar-identity-card")!;
@@ -704,12 +720,13 @@ it("checks writing-surface clearance only when the avatar flag would open", asyn
   query("main.content")!.append(footer);
   owner.shellLayout.registerFooterControlSurface(composer);
   vi.useFakeTimers();
-  publish({ phase: "offline", offlineStable: true });
+  snapshot.mockReturnValue({ ...connected, phase: "offline", offlineStable: true });
   await settle();
   expect(flag.hasAttribute("data-open")).toBe(false);
   expect(card.title).toBe(card.getAttribute("aria-label"));
   expect(measure).toHaveBeenCalledOnce();
-  publish({
+  snapshot.mockReturnValue({
+    ...connected,
     phase: "offline",
     offlineStable: true,
     lastError: "Still offline",
@@ -751,7 +768,7 @@ it("checks writing-surface clearance only when the avatar flag would open", asyn
 });
 
 it("restores the delegated shell after a pending update and can select another workspace", async () => {
-  const { runtime, view, query, refresh, route } = await mountShell();
+  const { owner, runtime, view, query, refresh } = await mountShell();
   const shell = query(".shell");
   const sidebar = query("openclaw-app-sidebar");
   const expectShell = () => {
@@ -761,12 +778,6 @@ it("restores the delegated shell after a pending update and can select another w
   const expectBuiltIn = () => {
     expect(query("openclaw-plugin-view")).toBeNull();
     expectShell();
-  };
-  const delegatedWorkspace = async () => {
-    const plugin = query<HTMLElementTagNameMap["openclaw-plugin-view"]>("openclaw-plugin-view");
-    expect(plugin).not.toBeNull();
-    await settleLitElement(plugin!);
-    return plugin!;
   };
   const selectWorkspace = (value?: ControlUiRegistration<ControlUiReplacement>) => {
     selected.mockImplementation((surface) => (surface === "workspace" ? value : undefined));
@@ -794,39 +805,47 @@ it("restores the delegated shell after a pending update and can select another w
   const selected = vi.spyOn(runtime.context.plugins, "selectedReplacement");
   selected.mockReturnValue(undefined);
   runtime.context.plugins.selectReplacement("workspace", null);
-  route("plugins");
+  owner.routeState = { routeId: "plugins" };
+  refresh();
   selectWorkspace(replacement);
   expectBuiltIn();
 
-  route("dashboard");
-  let plugin = await delegatedWorkspace();
+  owner.routeState = { routeId: "dashboard" };
+  refresh();
+  let plugin = query<HTMLElementTagNameMap["openclaw-plugin-view"]>("openclaw-plugin-view");
+  expect(plugin).not.toBeNull();
+  await settleLitElement(plugin!);
   const target = query("[data-delegated-workspace]");
   expect(target?.querySelector(".shell")).toBe(shell);
   expect(target?.querySelector("openclaw-app-sidebar")).toBe(sidebar);
 
   // A pending plugin update cannot remove the shell restored directly on Dashboard.
-  plugin.props = { sessionKey: "agent:main:updated", routeId: "dashboard" };
+  plugin!.props = { sessionKey: "agent:main:updated", routeId: "dashboard" };
   selectWorkspace();
   expectBuiltIn();
-  await settleLitElement(plugin);
+  await settleLitElement(plugin!);
   expectShell();
   expect(shell?.isConnected).toBe(true);
 
   selectWorkspace(replacement);
-  plugin = await delegatedWorkspace();
-  expect(plugin.querySelector(".shell")).toBe(shell);
+  plugin = query<HTMLElementTagNameMap["openclaw-plugin-view"]>("openclaw-plugin-view");
+  expect(plugin).not.toBeNull();
+  await settleLitElement(plugin!);
+  expect(plugin!.querySelector(".shell")).toBe(shell);
 
   // Plugins restores the built-in shell while the delegated workspace remains selected.
-  plugin.props = { sessionKey: "agent:main:updated", routeId: "dashboard" };
-  route("plugins");
+  plugin!.props = { sessionKey: "agent:main:updated", routeId: "dashboard" };
+  owner.routeState = { routeId: "plugins" };
+  refresh();
   expectBuiltIn();
 
-  await settleLitElement(plugin);
+  await settleLitElement(plugin!);
   expectShell();
   expect(shell?.isConnected).toBe(true);
 
   selectWorkspace();
-  route("dashboard");
+  owner.routeState = { routeId: "dashboard" };
+  refresh();
   expectBuiltIn();
 
   const customWorkspace: ControlUiRegistration<ControlUiReplacement> = {
@@ -843,30 +862,27 @@ it("restores the delegated shell after a pending update and can select another w
       },
     },
   };
-  route("plugins");
+  owner.routeState = { routeId: "plugins" };
+  refresh();
   selectWorkspace(customWorkspace);
   expect(query("openclaw-plugin-view")).toBeNull();
   expect(query(".shell")).toBe(shell);
 
-  route("dashboard");
-  const customPlugin = await delegatedWorkspace();
+  owner.routeState = { routeId: "dashboard" };
+  refresh();
+  const customPlugin = query<HTMLElementTagNameMap["openclaw-plugin-view"]>("openclaw-plugin-view");
+  expect(customPlugin).not.toBeNull();
+  await settleLitElement(customPlugin!);
   expect(view.getByRole("heading", { name: "Custom workspace" })).toBeTruthy();
 
-  route("plugins");
-  await settleLitElement(customPlugin);
+  owner.routeState = { routeId: "plugins" };
+  refresh();
+  await settleLitElement(customPlugin!);
   expectBuiltIn();
 
   selectWorkspace();
-  route("dashboard");
+  owner.routeState = { routeId: "dashboard" };
+  refresh();
   expectShell();
   expect(shell?.isConnected).toBe(true);
-});
-
-it("does not discover a fallback Home while the route shows a session recovery notice", async () => {
-  const { owner } = await mountShell();
-  owner.activeSessionKey = "agent:main:main";
-  owner.routeState = { routeId: "chat", sessionRouteNotice: true };
-  expect(readShellView(owner).sidebarProperties.sessionKey).toBe("");
-  owner.routeState = { routeId: "chat", committedSessionKey: "agent:main:main" };
-  expect(readShellView(owner).sidebarProperties.sessionKey).toBe("agent:main:main");
 });

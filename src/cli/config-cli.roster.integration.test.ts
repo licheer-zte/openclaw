@@ -8,7 +8,6 @@ import { resolveLegacyInheritedAuthAgentId } from "../agents/legacy-inherited-au
 import { readConfigFileSnapshot } from "../config/config.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
-import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 import { formatCliCommand } from "./command-format.js";
 import { useConfigCliIntegrationHarness } from "./config-cli.integration.test-harness.js";
 
@@ -396,15 +395,18 @@ describe("config cli roster integration", () => {
     const raw = JSON.stringify({ agents: { ownership: "explicit", entries: originalEntries } });
     await withConfig(raw, async ({ configPath, tempDir }) => {
       const patchPath = path.join(tempDir, "patch.json");
-      writeFixtureJsonSync(patchPath, {
-        agents: {
-          entries: removed,
-          list: [
-            { id: "main", ...main },
-            { id: "worker", name: "original-worker" },
-          ],
-        },
-      });
+      fs.writeFileSync(
+        patchPath,
+        JSON.stringify({
+          agents: {
+            entries: removed,
+            list: [
+              { id: "main", ...main },
+              { id: "worker", name: "original-worker" },
+            ],
+          },
+        }),
+      );
       const args = ["config", "patch", "--file", patchPath];
       await invoke([...args, "--dry-run"]);
       expect(read(configPath)).toBe(raw);
@@ -479,7 +481,7 @@ describe("config cli roster integration", () => {
     await withConfig(raw, async ({ configPath, tempDir }) => {
       const patchPath = path.join(tempDir, "replacement.json");
       if ("patch" in scenario) {
-        writeFixtureJsonSync(patchPath, scenario.patch);
+        fs.writeFileSync(patchPath, JSON.stringify(scenario.patch));
       }
       const args =
         "patch" in scenario

@@ -42,7 +42,6 @@ vi.mock("../secrets/target-registry-data.js", async (importOriginal) => {
   return { ...actual, getSecretTargetRegistry: actual.getCoreSecretTargetRegistry };
 });
 
-import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import {
   createDoctorHealthFlowContext,
   createDoctorPrompterFixture as makePrompter,
@@ -81,11 +80,14 @@ describe("noteSecurityWarnings gateway exposure", () => {
     await withExecApprovalsFile({ version: 1 }, async () => {
       vi.stubEnv("GATEWAY_AUTH_TOKEN_FAKE_A", "synthetic-gateway-token");
       const configPath = path.join(process.env.OPENCLAW_STATE_DIR!, "openclaw.json");
-      await writeFixtureJson(configPath, {
-        plugins: { enabled: false },
-        // Match this suite's core-only secret registry; channel targets are plugin-owned.
-        gateway: { auth: { mode: "token", token } },
-      });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          plugins: { enabled: false },
+          // Match this suite's core-only secret registry; channel targets are plugin-owned.
+          gateway: { auth: { mode: "token", token } },
+        }),
+      );
       const snapshot = await createConfigIO({
         configPath,
         observe: false,
@@ -240,7 +242,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
         OPENCLAW_CONFIG_PATH: path.join(process.env.OPENCLAW_STATE_DIR!, "openclaw.json"),
         OLLAMA_API_KEY: "synthetic-resolved-key",
       };
-      await writeFixtureJson(env.OPENCLAW_CONFIG_PATH, cfg);
+      await fs.writeFile(env.OPENCLAW_CONFIG_PATH, JSON.stringify(cfg));
       const report = await runSecretsAudit({ env });
       const auditPaths = report.findings
         .filter((finding) => finding.code === "PLAINTEXT_FOUND")

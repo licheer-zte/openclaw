@@ -442,7 +442,7 @@ describe("loadControlUiSessionPullRequests", () => {
         return { statsBase: null, creatable: false, equalPushedTips: false, complete: true };
       }
       if (operation.type === "checkout.revision") {
-        return { key: "unchanged" };
+        return "unchanged";
       }
       if (operation.type !== "pull-request.branch-facts") {
         throw new Error("Unexpected local Git operation");
@@ -515,7 +515,7 @@ describe("loadControlUiSessionPullRequests", () => {
         return { statsBase: null, creatable: false, equalPushedTips: false, complete: true };
       }
       if (operation.type === "checkout.revision") {
-        return revision === null ? null : { key: revision };
+        return revision;
       }
       if (operation.type === "checkout.context") {
         return { ...context, branch, root: operation.input.root, defaultBranch: "main" };

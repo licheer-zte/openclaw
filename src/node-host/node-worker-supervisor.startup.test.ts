@@ -39,7 +39,6 @@ import {
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
   TEST_WORKER_ENDPOINT,
-  TEST_WORKER_SOURCE,
   testNodeWorkerEnvironmentIdentity,
   testNodeWorkerLaunchIdentity,
   testIsolatedWorkerLaunchInput as launchInput,
@@ -93,34 +92,6 @@ function writeWorker(bundleRoot: string, input: ReturnType<typeof launchInput>, 
   );
 }
 
-async function prepareWindowsRecovery(
-  f: ReturnType<typeof fixture>,
-  cleanupMode: "windows-job" | "process-group",
-) {
-  const store = f.store();
-  const input = launchInput(f.workspaceDir, "windows-recovery", "wait");
-  const claim = {
-    ...testNodeWorkerLaunchIdentity(input),
-    gatewayNamespace: input.gatewayNamespace,
-  };
-  const supervisor = { pid: 2_000_000_001, startTime: 1 };
-  const worker = { pid: 2_000_000_002, startTime: 2 };
-  vi.spyOn(workerProcessIdentity, "getNodeWorkerBootIdentity").mockReturnValue("win32:test-boot");
-  await store.claim(claim, supervisor, 1);
-  const receipt = await store.markRunning({ ...claim, supervisor, worker, cleanupMode });
-  const inspect = workerProcessIdentity.inspectNodeWorkerProcessIdentity;
-  const observation: { workerState: "live" | "dead" | "reused" } = { workerState: "live" };
-  vi.spyOn(workerProcessIdentity, "inspectNodeWorkerProcessIdentity").mockImplementation(
-    (identity) =>
-      identity.pid === supervisor.pid
-        ? "dead"
-        : identity.pid === worker.pid
-          ? observation.workerState
-          : inspect(identity),
-  );
-  return { store, input, receipt, worker, observation };
-}
-
 describe("node worker startup", () => {
   it.runIf(process.platform === "linux" || process.platform === "darwin").each([
     { build: "native-v1", lineage: true, nativeOwner: "v1" },
@@ -156,8 +127,10 @@ describe("node worker startup", () => {
       writeWorker(
         bundleRoot,
         input,
-        `import { spawnSync } from "node:child_process";
-process.once("message", message => {
+        `import fs from "node:fs";
+import { spawnSync } from "node:child_process";
+import { createInterface } from "node:readline";
+const started = new Promise(resolve => process.once("message", message => {
   const keys = Object.keys(message).sort();
   const expected = ${JSON.stringify(expectedKeys)};
   if (message.type !== "openclaw-worker-start-v1" || JSON.stringify(keys) !== JSON.stringify(expected)) {
@@ -168,8 +141,16 @@ process.once("message", message => {
   const group = spawnSync("ps", ["-p", String(process.pid), "-o", "pgid="], { encoding: "utf8" });
   if (group.status !== 0) process.exit(25);
   fs.writeFileSync(${JSON.stringify(reportPath)}, JSON.stringify({ pid: process.pid, pgid: Number(group.stdout.trim()), keys }));
-});
-${TEST_WORKER_SOURCE}`,
+  resolve();
+}));
+await started;
+const lines = createInterface({ input: process.stdin });
+lines.once("line", line => {
+  const turn = JSON.parse(line);
+  fs.writeSync(1, JSON.stringify({ type: "result", turnId: turn.turnId, retainWorker: false,
+    result: { status: "completed", transcriptLeafId: "leaf-1", transcriptNextSeq: 2 } }) + "\\n");
+  process.exit(0);
+});`,
       );
       let adapterPid: number | undefined;
       observeNodeWorkerAdapters((adapter) => {
@@ -349,9 +330,33 @@ describe("node worker supervisor initialization", () => {
     "holds Windows capacity until the recorded worker is %s and the Job grace expires",
     async (gone) => {
       await using f = fixture();
-      const { store, input, receipt, worker, observation } = await prepareWindowsRecovery(
-        f,
-        "windows-job",
+      const store = f.store();
+      const input = launchInput(f.workspaceDir, "windows-grace", "wait");
+      const claim = {
+        ...testNodeWorkerLaunchIdentity(input),
+        gatewayNamespace: input.gatewayNamespace,
+      };
+      const supervisor = { pid: 2_000_000_001, startTime: 1 };
+      const worker = { pid: 2_000_000_002, startTime: 2 };
+      vi.spyOn(workerProcessIdentity, "getNodeWorkerBootIdentity").mockReturnValue(
+        "win32:test-boot",
+      );
+      await store.claim(claim, supervisor, 1);
+      const receipt = await store.markRunning({
+        ...claim,
+        supervisor,
+        worker,
+        cleanupMode: "windows-job",
+      });
+      const inspect = workerProcessIdentity.inspectNodeWorkerProcessIdentity;
+      let workerState: "live" | "dead" | "reused" = "live";
+      vi.spyOn(workerProcessIdentity, "inspectNodeWorkerProcessIdentity").mockImplementation(
+        (identity) =>
+          identity.pid === supervisor.pid
+            ? "dead"
+            : identity.pid === worker.pid
+              ? workerState
+              : inspect(identity),
       );
       const poll = createDeferred();
       const grace = createDeferred();
@@ -388,7 +393,7 @@ describe("node worker supervisor initialization", () => {
         expect((await store.get(input.launchId))?.state).toBe("running");
         expect(await store.nonterminalCount()).toBe(1);
         expect(capacities).toEqual([]);
-        observation.workerState = gone;
+        workerState = gone;
         exited.resolve();
         await awaitGateBeforeSettlement(grace.promise, recovering, "skipped Windows Job grace");
         expect((await store.get(input.launchId))?.state).toBe("running");
@@ -431,10 +436,35 @@ describe("node worker supervisor initialization", () => {
   });
 
   it("keeps older Windows receipts reserved without recorded Job custody", async () => {
+    const cleanupMode = "process-group";
     await using f = fixture();
-    const { bundleRoot, env } = f;
-    const { store, input, worker, observation } = await prepareWindowsRecovery(f, "process-group");
-    observation.workerState = "reused";
+    const { bundleRoot, env, workspaceDir } = f;
+    const store = f.store();
+    const input = launchInput(workspaceDir, "windows-reused", "wait");
+    const claim = {
+      ...testNodeWorkerLaunchIdentity(input),
+      gatewayNamespace: input.gatewayNamespace,
+    };
+    const previousSupervisor = { pid: 2_000_000_001, startTime: 1 };
+    const worker = { pid: 2_000_000_002, startTime: 2 };
+    vi.spyOn(workerProcessIdentity, "getNodeWorkerBootIdentity").mockReturnValue("win32:test-boot");
+    await store.claim(claim, previousSupervisor, 1);
+    await store.markRunning({
+      ...claim,
+      supervisor: previousSupervisor,
+      worker,
+      cleanupMode,
+    });
+
+    const inspectIdentity = workerProcessIdentity.inspectNodeWorkerProcessIdentity;
+    vi.spyOn(workerProcessIdentity, "inspectNodeWorkerProcessIdentity").mockImplementation(
+      (identity) => {
+        if (identity.pid === previousSupervisor.pid) {
+          return "dead";
+        }
+        return identity.pid === worker.pid ? "reused" : inspectIdentity(identity);
+      },
+    );
     const inspectTree = workerTreeControl.inspectOwnedNodeWorkerTree;
     vi.spyOn(workerTreeControl, "inspectOwnedNodeWorkerTree").mockImplementation((identity) => {
       // Scope the Windows observation to its owner; the real database remains host-native.
@@ -458,7 +488,7 @@ describe("node worker supervisor initialization", () => {
       expect(await store.get(input.launchId)).toMatchObject({
         state: "running",
         worker,
-        workerCleanupMode: "process-group",
+        workerCleanupMode: cleanupMode,
       });
       expect(capacities.at(-1)).toEqual({ total: 1, available: 0 });
       expect(await recovered.hasActiveWork()).toBe(true);

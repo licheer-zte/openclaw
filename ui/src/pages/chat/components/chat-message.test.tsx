@@ -543,7 +543,7 @@ describe("grouped chat rendering", () => {
     expect(renderSender("profile-alice", false).querySelector("a.chat-sender-name")).toBeNull();
   });
 
-  it("renders multiline system notices as sanitized markdown", async () => {
+  it("renders multiline system notices as sanitized markdown", () => {
     markdownRenderMock.mockImplementationOnce(renderMarkdownHtml);
     render(
       renderChatNotice({
@@ -556,7 +556,6 @@ describe("grouped chat rendering", () => {
       }),
     );
 
-    await waitForSolid(() => expect(element(".chat-notice")).not.toBeNull());
     const notice = element(".chat-notice");
     expect(notice?.querySelector(".chat-divider__title")?.textContent).toBe("System");
     expect(notice?.querySelector("strong")?.textContent).toBe("first line");
@@ -566,7 +565,7 @@ describe("grouped chat rendering", () => {
     expect(notice?.querySelector("img[onerror]")).toBeNull();
   });
 
-  it("renders Codex guardian decisions and warnings in the transcript", async () => {
+  it("renders Codex guardian decisions and warnings in the transcript", () => {
     const host = createHost();
     applyNotice(host, 1, {
       phase: "completed",
@@ -590,7 +589,6 @@ describe("grouped chat rendering", () => {
       phase: "strict_review_required",
     });
     renderNotices(host, "run-guardian", "guardian-render-test");
-    await waitForSolid(() => expect(elements(".chat-notice")).toHaveLength(4));
 
     const notices = elements(".chat-notice");
     expect(notices).toHaveLength(4);
@@ -654,7 +652,7 @@ describe("grouped chat rendering", () => {
     ]);
   });
 
-  it("renders configuration warnings as system notices rather than Guardian failures", async () => {
+  it("renders configuration warnings as system notices rather than Guardian failures", () => {
     const host = createHost();
     applyNotice(
       host,
@@ -667,7 +665,6 @@ describe("grouped chat rendering", () => {
       "notice",
     );
     renderNotices(host, "run-warning", "configuration-warning-render-test");
-    await waitForSolid(() => expect(elementText(".chat-divider__title")).toBe("System"));
 
     expect(elementText(".chat-divider__title")).toBe("System");
     expect(harness.view.textContent).toContain("Custom execution rules were not applied.");

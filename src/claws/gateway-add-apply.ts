@@ -8,11 +8,10 @@ import {
   PluginInstallRuntimeBatch,
   type PluginInstallBatchReload,
 } from "../plugins/install-runtime-batch.js";
-import { withPluginLifecycleLeaseAsync } from "../plugins/plugin-lifecycle-lease.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
-import { withOpenClawStateLeaseAsync } from "../state/openclaw-state-lease.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import {
   type applyClawAddPlanStateless,
   stageClawAddHostRequirementsStateless,
@@ -96,7 +95,6 @@ export async function applyClawAddForGateway(
   },
 ): Promise<GatewayClawAddApplyResult> {
   input.assertCurrent();
-  const stateContext = captureOpenClawStateWorkerContext({ env: input.policyConfig.env });
   let settledResult: GatewayClawAddApplyResult | undefined;
   try {
     const resolved = await withResolvedClawHubSource({
@@ -108,10 +106,11 @@ export async function applyClawAddForGateway(
       ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
       ...(input.stateDir ? { stateDir: input.stateDir } : {}),
       run: async (source, trust, persistSource) =>
-        await withOpenClawStateLeaseAsync(
+        await withOpenClawStateLease(
           {
             scope: "core:claw-add-allocation",
             key: normalizeAgentId(source.manifest.agent.id),
+            database: { scope: "shared", options: {} },
             leaseMs: 60_000,
             waitMs: 10 * 60_000,
             heartbeat: "worker",
@@ -119,11 +118,10 @@ export async function applyClawAddForGateway(
             leaseLabel: "Claw agent allocation",
             operationLabel: "claw.add.allocation",
           },
-          stateContext,
           async (allocationLease) => {
             const assertAllocationCurrent = () => {
               input.assertCurrent();
-              allocationLease.assertCurrent();
+              allocationLease.assertOwned();
             };
             assertAllocationCurrent();
             const initialContext = await input.getPlanningContext();
@@ -152,10 +150,11 @@ export async function applyClawAddForGateway(
                 initialProjection.blockers[0]?.message ?? "This Claw cannot be added right now.",
               );
             }
-            return await withOpenClawStateLeaseAsync(
+            return await withOpenClawStateLease(
               {
                 scope: "core:agent-deletion",
                 key: initialPlan.agent.finalId,
+                database: { scope: "shared", options: {} },
                 leaseMs: 60_000,
                 waitMs: 5_000,
                 heartbeat: "worker",
@@ -163,16 +162,10 @@ export async function applyClawAddForGateway(
                 leaseLabel: "Claw add",
                 operationLabel: "claw.add.lease",
               },
-              stateContext,
               async (lease) => {
                 const assertCurrent = () => {
                   assertAllocationCurrent();
-                  lease.assertCurrent();
-                };
-                const prepareEffect = async () => {
-                  await allocationLease.assertOwned();
-                  await lease.assertOwned();
-                  assertCurrent();
+                  lease.assertOwned();
                 };
                 const settleResult = (
                   result: Awaited<ReturnType<typeof applyClawAddPlanStateless>>,
@@ -219,7 +212,7 @@ export async function applyClawAddForGateway(
                   return settleResult(result, readiness, precedingStageError?.code);
                 };
                 let abortableStage: StagedAddHandoff | undefined;
-                const prepared = await withPluginLifecycleLeaseAsync(
+                const prepared = await withPluginLifecycleLease(
                   {
                     env: input.policyConfig.env,
                     signal: input.signal,
@@ -289,7 +282,6 @@ export async function applyClawAddForGateway(
                           );
                         }
                         assertCurrent();
-                        await prepareEffect();
                         const persisted = await persistSource();
                         assertCurrent();
                         const persistedContext = {
@@ -375,7 +367,7 @@ export async function applyClawAddForGateway(
                             ? new PluginInstallRuntimeBatch(
                                 { env: input.policyConfig.env },
                                 (targets) =>
-                                  withPluginLifecycleLeaseAsync(
+                                  withPluginLifecycleLease(
                                     {
                                       env: input.policyConfig.env,
                                       signal: input.signal,
@@ -397,8 +389,6 @@ export async function applyClawAddForGateway(
                                             assertCurrent();
                                           };
                                           assertRuntimePolicyCurrent();
-                                          await prepareEffect();
-                                          assertRuntimePolicyCurrent();
                                           return await reloadPlugins(targets, {
                                             commitGuard: assertRuntimePolicyCurrent,
                                           });
@@ -410,8 +400,6 @@ export async function applyClawAddForGateway(
                         const applyOptions = {
                           stateMode: "worker" as const,
                           assertCurrent,
-                          prepareEffect,
-                          leaseSet: { context: stateContext, leases: [allocationLease, lease] },
                           getCurrentConfig: getCurrentClawsConfig,
                           assertReviewedConfig,
                           config: persistedContext.config,
@@ -488,7 +476,7 @@ export async function applyClawAddForGateway(
                 const withCurrentAddPolicy = async <T>(
                   run: (options: StatelessClawAddOptions) => Promise<T>,
                 ): Promise<T> =>
-                  withPluginLifecycleLeaseAsync(
+                  withPluginLifecycleLease(
                     {
                       env: input.policyConfig.env,
                       signal: input.signal,

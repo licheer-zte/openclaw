@@ -1,14 +1,17 @@
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { WizardSession } from "../../wizard/session.js";
+import type { GatewayClient } from "./client-types.js";
 import {
   createAdmittedWizardSession,
-  startGatewayWizard,
+  respondSetupAdmissionBusy,
   whenAdmittedWizardSessionSettled,
 } from "./setup-admission.js";
 import {
   activateGatewaySetupInference,
   createSystemAgentGatewayRuntime,
 } from "./system-agent-execution.js";
-import type { GatewayRequestContext, GatewayRequestOptions } from "./types.js";
+import type { GatewayRequestContext, RespondFn } from "./types.js";
+import { publishWizardLoginSession } from "./wizard-login.js";
 
 type SetupActivation = Pick<
   Parameters<typeof activateGatewaySetupInference>[0],
@@ -34,16 +37,15 @@ const authWizardRequests = new WeakMap<
   AuthWizardRequest
 >();
 
-/** One provider-auth retry per owner replaces its predecessor; other starts admit directly. */
-async function admitSetupActivationSession(
+async function createSetupActivationSession(
   params: {
     sessionId: string;
     ownerKey?: string;
+    assertCurrent?: () => void;
     activation: SetupActivation;
     context: GatewayRequestContext;
   },
   createSession: () => WizardSession,
-  assertCurrent: () => void,
 ): Promise<WizardSession | undefined> {
   const { ownerKey, activation } = params;
   if (!ownerKey || activation.kind !== "provider-auth") {
@@ -69,7 +71,7 @@ async function admitSetupActivationSession(
     previous.pending = true;
     try {
       const predecessor = await previous.session;
-      assertCurrent();
+      params.assertCurrent?.();
       if (predecessor) {
         if (predecessor.getStatus() === "running" && !predecessor.cancel()) {
           return undefined;
@@ -86,7 +88,10 @@ async function admitSetupActivationSession(
     activation,
     sessionId: params.sessionId,
     pending: true,
-    session: createAdmittedWizardSession(createSession),
+    session: createAdmittedWizardSession(() => {
+      params.assertCurrent?.();
+      return createSession();
+    }),
   };
   authWizardRequests.set(sessions, request);
   const release = () => {
@@ -110,26 +115,43 @@ async function admitSetupActivationSession(
   }
 }
 
+export function rejectExistingSetupWizardSession(params: {
+  sessionId: string;
+  context: GatewayRequestContext;
+  respond: RespondFn;
+}): boolean {
+  const sessions = params.context.wizardSessions;
+  if (
+    !sessions.has(params.sessionId) &&
+    authWizardRequests.get(sessions)?.sessionId !== params.sessionId
+  ) {
+    return false;
+  }
+  params.respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.INVALID_REQUEST, "wizard session already exists"),
+  );
+  return true;
+}
+
 export async function startSetupActivationWizard(params: {
-  request: GatewayRequestOptions;
   sessionId: string;
   ownerKey?: string;
-  /** Browser provider sign-in belongs to the connection that opened it. */
-  connectionBound?: boolean;
-  isLocalClient?: boolean;
+  client?: GatewayClient;
   assertCurrent?: () => void;
   activation: SetupActivation;
+  isLocalClient?: boolean;
   timeoutMs: number;
+  context: GatewayRequestContext;
+  respond: RespondFn;
 }) {
-  const { context } = params.request;
-  await startGatewayWizard({
-    request: params.request,
-    sessionId: params.sessionId,
-    connectionBound: params.connectionBound,
-    assertCurrent: params.assertCurrent,
-    admit: (create, assertCurrent) =>
-      admitSetupActivationSession({ ...params, context }, create, assertCurrent),
-    createSession: (assertCurrent) =>
+  if (rejectExistingSetupWizardSession(params)) {
+    return;
+  }
+  const session = await createSetupActivationSession(
+    params,
+    () =>
       new WizardSession(
         async (prompter, signal, runnerSession) => {
           const result = await activateGatewaySetupInference({
@@ -140,20 +162,21 @@ export async function startSetupActivationWizard(params: {
             prompter,
             signal,
             isCancelled: () => signal.aborted,
-            assertCurrent,
+            assertCurrent: params.assertCurrent,
             beforePersistentEffect: () => {
-              assertCurrent();
+              params.assertCurrent?.();
               runnerSession.lockCancellationForPreparation();
             },
             onPreparationComplete: () => {
-              assertCurrent();
+              params.assertCurrent?.();
               runnerSession.finishPreparation();
             },
             onCommitStarted: () => {
-              assertCurrent();
+              params.assertCurrent?.();
               runnerSession.lockCancellation();
             },
           });
+          params.assertCurrent?.();
           signal.throwIfAborted();
           if (!result.ok) {
             if (result.disposition === "rejected-before-promotion") {
@@ -173,5 +196,23 @@ export async function startSetupActivationWizard(params: {
         },
         { timeoutMs: params.timeoutMs },
       ),
-  });
+  );
+  if (!session) {
+    respondSetupAdmissionBusy(params.respond);
+    return;
+  }
+  if (params.client) {
+    await publishWizardLoginSession({
+      client: params.client,
+      context: params.context,
+      sessionId: params.sessionId,
+      respond: params.respond,
+      assertCurrent: () => params.assertCurrent?.(),
+      session,
+    });
+    return;
+  }
+  params.context.wizardSessions.set(params.sessionId, session);
+  // Return ownership before any prompt so cancellation survives a lost start reply.
+  params.respond(true, { sessionId: params.sessionId, done: false, status: "running" }, undefined);
 }

@@ -26,8 +26,6 @@ export type EmbeddingProviderCallOptions = {
   inputType?: "query" | "document" | "semantic" | "classification" | "clustering";
   /** The host applied an explicit query instruction; skip provider query templates. */
   queryInstructionApplied?: boolean;
-  /** The host applied an explicit document format; skip provider document templates. */
-  documentFormatApplied?: boolean;
   /** Report each successful upstream request before resolving; undefined means usage unavailable. */
   onUsage?: (usage: EmbeddingUsage | undefined) => void;
 } & MemorySearchDeadlineControlOptions;
@@ -36,7 +34,7 @@ export type EmbeddingProviderCallOptions = {
 export type EmbeddingProviderRuntime = {
   id: string;
   cacheKeyData?: Record<string, unknown>;
-  /** Equivalent prior identities; alias cache reads require matching published index metadata. */
+  /** Prior persisted model/cache identities that are equivalent to the current identity. */
   indexIdentityAliases?: Array<{
     model: string;
     cacheKeyData: Record<string, unknown>;

@@ -13,14 +13,23 @@ import type {
 } from "../embedded-agent-runner/run/types.js";
 import { retainPreparedPluginRegistry } from "../prepared-model-runtime.plugin-lifetime.js";
 import { maybeCompactAgentHarnessSession as compactSession } from "./compaction.js";
-import * as lifecycle from "./lifecycle.test-support.js";
+import { createBaseAttemptParams } from "./lifecycle.test-support.js";
 
 export function createAttemptResult(sessionIdUsed: string): EmbeddedRunAttemptResult {
-  const { diagnosticTrace: _trace, ...result } = lifecycle.createAttemptResult();
   return {
-    ...result,
+    terminal: { kind: "ok" },
     sessionIdUsed,
+    messagesSnapshot: [],
     assistantTexts: [`${sessionIdUsed} ok`],
+    toolMetas: [],
+    lastAssistant: undefined,
+    didSendViaMessagingTool: false,
+    messagingToolSentTexts: [],
+    messagingToolSentMediaUrls: [],
+    messagingToolSentTargets: [],
+    cloudCodeAssistFormatError: false,
+    replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
   };
 }
 
@@ -29,7 +38,7 @@ export const createHarnessAttemptParams = (
   config?: OpenClawConfig,
 ): EmbeddedRunAttemptParams =>
   ({
-    ...lifecycle.createBaseAttemptParams(),
+    ...createBaseAttemptParams(),
     admittedRunContext,
     agentId: "main",
     runId: admittedRunContext.operationalRunInstance.runId,

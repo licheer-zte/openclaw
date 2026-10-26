@@ -1,6 +1,6 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { loadFreshIMessageReplyCacheForTest } from "../test-support/runtime.js";
-import { admitIMessageContext } from "./inbound-context.test-helpers.js";
 import {
   createInboundDecisionParams,
   type InboundDecisionParams,
@@ -10,25 +10,41 @@ type InboundProcessingModule = typeof import("./inbound-processing.js");
 
 type ReplyCacheModule = typeof import("../monitor-reply-cache.js");
 let rememberIMessageReplyCache: ReplyCacheModule["rememberIMessageReplyCache"];
+let buildIMessageInboundContext: InboundProcessingModule["buildIMessageInboundContext"];
 let resolveIMessageInboundDecision: InboundProcessingModule["resolveIMessageInboundDecision"];
+const cfg = {} as OpenClawConfig;
 
 beforeAll(async () => {
   ({ rememberIMessageReplyCache } = await loadFreshIMessageReplyCacheForTest());
-  ({ resolveIMessageInboundDecision } = await import("./inbound-processing.js"));
+  ({ buildIMessageInboundContext, resolveIMessageInboundDecision } =
+    await import("./inbound-processing.js"));
 });
 
 function resolveDecision(overrides: Parameters<typeof createInboundDecisionParams>[0] = {}) {
-  return resolveIMessageInboundDecision(createInboundDecisionParams(overrides));
+  return resolveIMessageInboundDecision(createInboundDecisionParams({ cfg, ...overrides }));
 }
 
 async function buildContext(
   messageOverrides: Partial<InboundDecisionParams["message"]>,
   overrides: Parameters<typeof resolveDecision>[0] = {},
 ) {
-  return (await admitIMessageContext({ ...overrides, message: messageOverrides })).context();
+  const { message } = createInboundDecisionParams({ message: messageOverrides });
+  const admitted = await resolveDecision({ ...overrides, message });
+  expect(admitted.kind).toBe("dispatch");
+  if (admitted.kind !== "dispatch") {
+    throw new Error("expected context fixture admission");
+  }
+  return buildIMessageInboundContext({
+    cfg,
+    accountService: undefined,
+    decision: admitted,
+    message,
+    historyLimit: 0,
+    groupHistories: new Map(),
+  });
 }
 
-describe("iMessage inbound context and admission", () => {
+describe("buildIMessageInboundContext presentation", () => {
   it.each([
     [
       { sender_name: "Alice", chat_name: "" },
@@ -49,6 +65,9 @@ describe("iMessage inbound context and admission", () => {
     expect(actual).toMatchObject({ fromLabel, ctxPayload });
     expect(actual.ctxPayload.CommandSource).toBeUndefined();
   });
+});
+
+describe("resolveIMessageInboundDecision command auth", () => {
   it("treats a failed pairing read as an empty allowlist", async () => {
     await expect(
       resolveDecision({
@@ -62,12 +81,12 @@ describe("iMessage inbound context and admission", () => {
   });
 
   it("does not auto-authorize DM commands in open mode without allowlists", async () => {
-    expect(
-      await resolveDecision({
-        message: { id: 100, text: "/status" },
-        allowFrom: [],
-      }),
-    ).toEqual({ kind: "drop", reason: "dmPolicy blocked" });
+    const decision = await resolveDecision({
+      message: { id: 100, text: "/status" },
+      allowFrom: [],
+    });
+
+    expect(decision).toEqual({ kind: "drop", reason: "dmPolicy blocked" });
   });
 
   it("marks authorized iMessage control commands as text command turns", async () => {
@@ -87,6 +106,9 @@ describe("iMessage inbound context and admission", () => {
       CommandTurn: { kind: "text-slash", source: "text", authorized: true, commandName: "new" },
     });
   });
+});
+
+describe("iMessage bot-owned thread mention policy", () => {
   const rootGuid = "imessage-bot-thread-root";
 
   beforeAll(async () => {
@@ -111,7 +133,10 @@ describe("iMessage inbound context and admission", () => {
         channels: {
           imessage: {
             groupPolicy: "open",
-            groups: { "*": { requireMention: true, requireMentionInBotThreads: false }, "123": {} },
+            groups: {
+              "*": { requireMention: true, requireMentionInBotThreads: false },
+              "123": {},
+            },
           },
         },
       },

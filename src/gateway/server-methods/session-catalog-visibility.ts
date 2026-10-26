@@ -36,12 +36,6 @@ type SessionCatalogVisibility = { cacheKey: string } & (
       others: "view" | "suggest" | "write";
       isCreator: ReturnType<typeof prepareSessionCreatorProfile>;
     }
-  | {
-      kind: "restricted-invited";
-      others: "invited";
-      profileId: string;
-      isCreator: ReturnType<typeof prepareSessionCreatorProfile>;
-    }
 );
 
 export function resolveSessionCatalogVisibility(
@@ -70,9 +64,6 @@ export function resolveSessionCatalogVisibility(
   }
   // The cache key and this synchronous publication use the same identity facts.
   const isCreator = prepareSessionCreatorProfile(profileId, profileAliases);
-  if (others === "invited") {
-    return { cacheKey, kind: "restricted-invited", others, profileId, isCreator };
-  }
   return others && others !== "none"
     ? { cacheKey, kind: "restricted-shared", others, isCreator }
     : { cacheKey, kind: "restricted-owner", others, isCreator };
@@ -90,10 +81,7 @@ export function isPublishedCatalogVisible(visibility: SessionCatalogVisibility):
 function visibleCatalogSessionEntry(params: {
   session: SessionCatalogSession;
   requestEntries: ReturnType<typeof createSessionCatalogRequestEntrySnapshot>;
-  visibility: Extract<
-    SessionCatalogVisibility,
-    { kind: "restricted-shared" | "restricted-owner" | "restricted-invited" }
-  >;
+  visibility: Extract<SessionCatalogVisibility, { kind: "restricted-shared" | "restricted-owner" }>;
 }): SessionEntry | undefined {
   const sessionKey = params.session.sessionKey;
   if (!params.session.createdActor?.id || !sessionKey || isIncognitoSessionKey(sessionKey)) {
@@ -105,10 +93,7 @@ function visibleCatalogSessionEntry(params: {
   return entry !== undefined &&
     entry.incognito !== true &&
     (params.visibility.isCreator(entry.createdActor) ||
-      (entry.visibility !== "draft" &&
-        (params.visibility.kind === "restricted-shared" ||
-          (params.visibility.kind === "restricted-invited" &&
-            params.requestEntries.isMember(sessionKey, params.visibility.profileId)))))
+      (params.visibility.kind === "restricted-shared" && entry.visibility !== "draft"))
     ? entry
     : undefined;
 }
@@ -160,7 +145,6 @@ export async function resolveSessionCatalogThreadVisibility(params: {
   while (projection.needsSelectionPreparation()) {
     await projection.prepareSelection();
   }
-  await projection.prepareMembership();
   let config = params.context.getRuntimeConfig();
   let visibility = resolveSessionCatalogVisibility(params.client, config);
   if (visibility.kind === "unrestricted") {
@@ -198,7 +182,6 @@ export async function resolveSessionCatalogThreadVisibility(params: {
     while (projection.needsSelectionPreparation()) {
       await projection.prepareSelection();
     }
-    await projection.prepareMembership();
     config = params.context.getRuntimeConfig();
     visibility = resolveSessionCatalogVisibility(params.client, config);
     if (visibility.kind === "unrestricted") {

@@ -1,9 +1,14 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
+import { createPluginRegistry } from "../plugins/registry.js";
+import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 
 export function createMcpProofPluginRegistry() {
-  const pluginRegistry = createTestPluginRegistry();
+  const pluginRegistry = createPluginRegistry({
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+    runtime: {} as PluginRuntime,
+    activateGlobalSideEffects: false,
+  });
 
   return {
     registry: pluginRegistry.registry,

@@ -300,7 +300,7 @@ type CurrentUserTimestampOverride = NonNullable<LlmBoundaryOptions["currentUserT
 
 export async function prepareEmbeddedAttemptSessionBoundary(input: {
   abortSignal?: AbortSignal;
-  activeSession: Pick<AgentSession, "agent" | "subscribe">;
+  activeSession: Pick<AgentSession, "agent">;
   appendOnlyRuntimeContext?: boolean;
   inHistorySystemUpdates?: boolean;
   attempt: SessionBoundaryAttempt;
@@ -551,7 +551,7 @@ export async function prepareEmbeddedAttemptSessionManager(
   const openSessionManager = () =>
     input.withOwnedTranscriptWrite(async () => {
       const target = input.sessionTarget;
-      const limits = resolveEmbeddedSessionContextLimits(attempt);
+      const limits = resolveEmbeddedSessionContextLimits(attempt.contextTokenBudget);
       const initial = prepareInitialPersistedUserTurnCohort({
         target,
         message: preparedUserTurnMessage,

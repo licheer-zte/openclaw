@@ -25,36 +25,24 @@ async function resolveReconnectRun(promise: Promise<void>): Promise<void> {
   await promise;
 }
 
-async function runConnections(steps: (Error | undefined)[], reconnectAfterClose = true) {
-  const abort = new AbortController();
-  const delays: number[] = [];
-  const connect = vi.fn(async () => {
-    if (!steps.length) {
-      return abort.abort();
-    }
-    const error = steps.shift();
-    if (error) {
-      throw error;
-    }
-  });
-  await resolveReconnectRun(
-    runWithReconnect(connect, {
-      abortSignal: abort.signal,
-      onReconnect: (ms) => delays.push(ms),
-      reconnectAfterClose,
-    }),
-  );
-  return { connect, delays };
-}
-
 describe("runWithReconnect", () => {
   it("resets backoff after successful connection", async () => {
-    const { connect, delays } = await runConnections([
-      new Error("first failure"),
-      undefined,
-      new Error("second failure"),
-    ]);
-    expect(connect).toHaveBeenCalledTimes(4);
+    const abort = new AbortController();
+    const delays: number[] = [];
+    const connectFn = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("first failure"))
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("second failure"))
+      .mockImplementation(async () => abort.abort());
+
+    const run = runWithReconnect(connectFn, {
+      abortSignal: abort.signal,
+      onReconnect: (delayMs) => delays.push(delayMs),
+    });
+    await resolveReconnectRun(run);
+
+    expect(connectFn).toHaveBeenCalledTimes(4);
     expect(delays).toEqual([2000, 2000, 2000]);
   });
 
@@ -77,17 +65,37 @@ describe("runWithReconnect", () => {
 
   it("applies twenty percent jitter to reconnect delay", async () => {
     vi.mocked(Math.random).mockReturnValue(1);
-    const { connect, delays } = await runConnections([new Error("connection refused")]);
-    expect(connect).toHaveBeenCalledTimes(2);
+    const abort = new AbortController();
+    const delays: number[] = [];
+    const connectFn = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("connection refused"))
+      .mockImplementation(async () => abort.abort());
+
+    const run = runWithReconnect(connectFn, {
+      abortSignal: abort.signal,
+      onReconnect: (delayMs) => delays.push(delayMs),
+    });
+    await resolveReconnectRun(run);
+
+    expect(connectFn).toHaveBeenCalledTimes(2);
     expect(delays).toEqual([2400]);
   });
 
   it("finishes authentication on success after retrying failures", async () => {
-    const { connect, delays } = await runConnections(
-      [new Error("authentication pending"), undefined],
-      false,
-    );
-    expect(connect).toHaveBeenCalledTimes(2);
-    expect(delays).toEqual([2000]);
+    const onReconnect = vi.fn();
+    const connectFn = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("authentication pending"))
+      .mockResolvedValue(undefined);
+
+    const run = runWithReconnect(connectFn, {
+      onReconnect,
+      reconnectAfterClose: false,
+    });
+    await resolveReconnectRun(run);
+
+    expect(connectFn).toHaveBeenCalledTimes(2);
+    expect(onReconnect).toHaveBeenCalledExactlyOnceWith(2000);
   });
 });

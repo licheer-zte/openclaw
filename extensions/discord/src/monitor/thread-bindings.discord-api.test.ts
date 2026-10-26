@@ -12,11 +12,6 @@ import { resolveThreadBindingPersona } from "./thread-bindings.persona.js";
 import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
 const cfg = { channels: { discord: { token: "synthetic-token" } } };
-const account = { cfg, accountId: "default" };
-const webhook = { webhookId: "wh-1", webhookToken: "tok-1" };
-const revoked = () => {
-  throw new Error("Command owner was revoked");
-};
 const record: ThreadBindingRecord = {
   accountId: "default",
   channelId: "parent-1",
@@ -57,9 +52,15 @@ let mocks: ReturnType<typeof fixture>;
 beforeEach(() => {
   mocks = fixture();
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 it.each([
+  [
+    { id: "wh1", token: "token1" },
+    { webhookId: "wh1", webhookToken: "token1" },
+  ],
   [
     { id: " wh1 ", token: " token1 " },
     { webhookId: "wh1", webhookToken: "token1" },
@@ -70,7 +71,9 @@ it.each([
   [{ id: 1, token: "token1" }, {}],
 ])("creates binding webhooks from the Discord response %j", async (response, expected) => {
   mocks.post.mockResolvedValueOnce(response);
-  expect(await createWebhookForChannel({ ...account, channelId: "c1" })).toEqual(expected);
+  expect(await createWebhookForChannel({ cfg, accountId: "default", channelId: "c1" })).toEqual(
+    expected,
+  );
   expect(mocks.post).toHaveBeenCalledExactlyOnceWith("/channels/c1/webhooks", {
     body: { name: "OpenClaw Agents" },
   });
@@ -79,32 +82,48 @@ it.each([
 it("blocks revoked webhook creation before posting", async () => {
   expect(
     await createWebhookForChannel({
-      ...account,
+      cfg,
+      accountId: "default",
       channelId: "c1",
-      assertCreateAllowed: revoked,
+      assertCreateAllowed: () => {
+        throw new Error("Command owner was revoked");
+      },
     }),
   ).toEqual({});
   expect(mocks.post).not.toHaveBeenCalled();
 });
 
-it.each([
-  ["channel:123456789012345678", "123456789012345678", ChannelType.GuildText],
-  ["forum-1", "forum-1", ChannelType.GuildForum],
-] as const)(
-  "resolves non-thread channel %s without using its category",
-  async (threadId, id, type) => {
-    mocks.get.mockResolvedValueOnce({ id, type, parent_id: "category-1" });
-    expect(await resolveChannelIdForBinding({ ...account, threadId })).toBe(id);
-    expect(mocks.get.mock.calls[0]?.[0]).toBe(`/channels/${id}`);
-  },
-);
+it("strips the channel prefix before requesting its route", async () => {
+  mocks.get.mockResolvedValueOnce({ id: "123456789012345678", type: ChannelType.GuildText });
+  expect(
+    await resolveChannelIdForBinding({
+      cfg,
+      accountId: "default",
+      threadId: "channel:123456789012345678",
+    }),
+  ).toBe("123456789012345678");
+  expect(mocks.get.mock.calls[0]?.[0]).toBe("/channels/123456789012345678");
+});
 
-it.each([false, true])("blocks revoked binding notices (webhook=%s)", async (useWebhook) => {
+it("keeps a forum id instead of its parent category", async () => {
+  mocks.get.mockResolvedValueOnce({
+    id: "forum-1",
+    type: ChannelType.GuildForum,
+    parent_id: "category-1",
+  });
+  expect(await resolveChannelIdForBinding({ cfg, accountId: "default", threadId: "forum-1" })).toBe(
+    "forum-1",
+  );
+});
+
+it.each([false, true])("blocks revoked binding notices (webhook=%s)", async (webhook) => {
   await maybeSendBindingMessage({
     cfg,
-    record: { ...record, ...(useWebhook ? webhook : {}) },
+    record: { ...record, ...(webhook ? { webhookId: "wh-1", webhookToken: "tok-1" } : {}) },
     text: "Binding ready",
-    assertCurrent: revoked,
+    assertCurrent: () => {
+      throw new Error("Command owner was revoked");
+    },
   });
   expect(mocks.bot).not.toHaveBeenCalled();
   expect(mocks.webhook).not.toHaveBeenCalled();
@@ -113,12 +132,14 @@ it.each([false, true])("blocks revoked binding notices (webhook=%s)", async (use
 it("sends the binding notice through its configured webhook with the agent persona", async () => {
   await maybeSendBindingMessage({
     cfg,
-    record: { ...record, ...webhook },
+    record: { ...record, webhookId: "wh-1", webhookToken: "tok-1" },
     text: "hello webhook",
   });
   expect(mocks.webhook).toHaveBeenCalledExactlyOnceWith("hello webhook", {
-    ...account,
-    ...webhook,
+    cfg,
+    webhookId: "wh-1",
+    webhookToken: "tok-1",
+    accountId: "default",
     threadId: "thread-1",
     username: "⚙️ main",
   });

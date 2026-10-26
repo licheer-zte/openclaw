@@ -485,13 +485,10 @@ extension OpenClawChatView {
             .defaultScrollAnchor(
                 self.followTarget == .latest && !self.isUserScrolling ? .bottom : nil,
                 for: .sizeChanges)
-            // Lazy row sizing can cross the threshold repeatedly within one layout. Observe the
-            // distance so a coalesced update still reconciles the stored live-edge state.
-            .onScrollGeometryChange(for: CGFloat.self) { geometry in
-                geometry.contentSize.height - geometry.visibleRect.maxY
-            } action: { _, distanceFromBottom in
-                let isAtLiveEdge = distanceFromBottom <= Layout.liveEdgeThreshold
-                guard self.isAtLiveEdge != isAtLiveEdge else { return }
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                let distanceFromBottom = geometry.contentSize.height - geometry.visibleRect.maxY
+                return distanceFromBottom <= Layout.liveEdgeThreshold
+            } action: { _, isAtLiveEdge in
                 self.isAtLiveEdge = isAtLiveEdge
                 guard self.hasPerformedInitialScroll else { return }
                 if isAtLiveEdge, !self.isUserScrolling, !self.isFollowingTurn, self.searchMessageID == nil {

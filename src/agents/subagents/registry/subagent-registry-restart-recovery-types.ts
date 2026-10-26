@@ -11,8 +11,6 @@ export type RestartRecoveryResult =
   | { status: "deferred" }
   | {
       status: "terminal";
-      terminalStatus?: "failed";
-      release?: () => void;
       recoveryCurrent?: SubagentRecoveryCurrent;
       sessionEffects?: SubagentSessionEffects;
       error: string;

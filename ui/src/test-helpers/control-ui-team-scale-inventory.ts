@@ -42,13 +42,7 @@ export function createTeamScaleSessionInventory({
   sidebarPersistentChildren?: boolean;
   people: ControlUiMockPresenceUser[];
   counts: Record<
-    | "sessions"
-    | "firstPage"
-    | "owners"
-    | "pinned"
-    | "childSessions"
-    | "cronSessions"
-    | "systemSessions",
+    "sessions" | "owners" | "pinned" | "childSessions" | "cronSessions" | "systemSessions",
     number
   >;
 }) {
@@ -56,13 +50,11 @@ export function createTeamScaleSessionInventory({
     const pinned = index >= counts.sessions - counts.pinned;
     const owner = people[index % counts.owners]!;
     const running = index < 24;
-    const uuidPrefix =
-      offRosterSession && index === counts.sessions - counts.pinned ? "f00dcafe" : "00000000";
     const row: TeamScaleSession = {
       key:
         index === 0
           ? "agent:main:main"
-          : `agent:main:${pinned ? "dashboard" : "chat"}:${uuidPrefix}-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+          : `agent:main:${pinned ? "dashboard" : "chat"}:00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
       ...(index === 0 ? { isMain: true } : {}),
       sessionId: `team-session-${index + 1}`,
       childOwnerSessionKeys: [],
@@ -108,10 +100,7 @@ export function createTeamScaleSessionInventory({
   const pinnedKeys = pinnedRows.filter((row) => row.pinned).map((row) => row.key);
   const persistentParent = sidebarPersistentChildren ? sessions[5]! : undefined;
   if (persistentParent) {
-    // Keep child details outside the owned root page so expansion needs its own read.
-    for (const row of sessions.slice(0, counts.firstPage + 1)) {
-      row.owner = sessions[0]!.owner;
-    }
+    persistentParent.owner = sessions[0]!.owner;
     persistentParent.participants = [
       { identity: { type: "profile", id: people[0]!.id }, label: people[0]!.name },
     ];
@@ -159,7 +148,7 @@ export function createTeamScaleSessionInventory({
         ? { spawnedBy: parent, parentSessionKey: parent, childOwnerSessionKeys: [parent] }
         : {}),
       ...(!child && !cron ? { createdActor: { type: "system", id: "gateway" } } : {}),
-      ...(persistent ? { owner: persistentParent.owner, participants: [] } : {}),
+      ...(persistent ? { owner: sessions[1]!.owner, participants: [] } : {}),
     });
   }
   for (const parent of [

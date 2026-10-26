@@ -1,52 +1,68 @@
+// Pending pairing render tests cover crash-safety for malformed pairing-list scalars.
 import { describe, expect, it } from "vitest";
 import { parsePairingList } from "../../shared/node-list-parse.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 
-function render(pending: unknown[], tableWidth = 80) {
-  return renderPendingPairingRequestsTable({
-    pending: parsePairingList({ pending }).pending,
-    now: 1000,
-    tableWidth,
-    theme: { heading: (text) => text, muted: (text) => text },
-  }).table;
-}
-
-const request = (requestId: string, fields: Record<string, unknown> = {}) => ({
-  requestId,
-  nodeId: requestId,
-  ...fields,
-});
+const theme = {
+  heading: (text: string) => text,
+  warn: (text: string) => text,
+  muted: (text: string) => text,
+};
 
 describe("cli/nodes-cli/pairing-render", () => {
   it("renders pending rows parsed from malformed scalars without throwing", () => {
     // node.pair.list rows are blind-cast from the pairing file; non-string requestId/nodeId/
     // displayName/remoteIp once crashed the renderer's .trim()/sanitizeTerminalText calls.
+    const { pending } = parsePairingList({
+      pending: [{ requestId: 7, nodeId: {}, displayName: 42, remoteIp: 99, ts: 1 }],
+    });
+
     expect(() =>
-      render([{ requestId: 7, nodeId: {}, displayName: 42, remoteIp: 99, ts: 1 }]),
+      renderPendingPairingRequestsTable({ pending, now: 1000, tableWidth: 80, theme }),
     ).not.toThrow();
   });
 
   it("keeps a valid pending label after normalization", () => {
-    const table = render([
-      { requestId: "r1", nodeId: "n1", displayName: "Phone", remoteIp: "10.0.0.1", ts: 1 },
-    ]);
+    const { pending } = parsePairingList({
+      pending: [
+        { requestId: "r1", nodeId: "n1", displayName: "Phone", remoteIp: "10.0.0.1", ts: 1 },
+      ],
+    });
+
+    const { table } = renderPendingPairingRequestsTable({
+      pending,
+      now: 1000,
+      tableWidth: 80,
+      theme,
+    });
     expect(table).toContain("Phone");
     expect(table).toContain("10.0.0.1");
   });
 
   it("shows recorded and legacy approval requirements", () => {
-    const table = render(
-      [
-        request("recorded", { requiredApproveScopes: ["operator.pairing", "operator.write"] }),
-        request("legacy", { commands: ["system.run"] }),
-        request("default", {
+    const { pending } = parsePairingList({
+      pending: [
+        {
+          requestId: "recorded",
+          nodeId: "n1",
+          requiredApproveScopes: ["operator.pairing", "operator.write"],
+        },
+        { requestId: "legacy", nodeId: "n2", commands: ["system.run"] },
+        {
+          requestId: "default",
+          nodeId: "n3",
           requiredApproveScopes: ["operator.pairing"],
           commands: ["system.run"],
-        }),
-        request("empty"),
+        },
+        { requestId: "empty", nodeId: "n4" },
       ],
-      120,
-    );
+    });
+    const { table } = renderPendingPairingRequestsTable({
+      pending,
+      now: 1000,
+      tableWidth: 120,
+      theme,
+    });
     expect(table).toContain("Approval scopes");
     expect(table).toContain("operator.pairing, operator.write");
     expect(table).toContain("operator.pairing, operator.admin");
@@ -55,15 +71,27 @@ describe("cli/nodes-cli/pairing-render", () => {
   });
 
   it("keeps untrusted scope text safe in a narrow terminal", () => {
-    const table = render(
-      [
-        request("r1", {
+    const { pending } = parsePairingList({
+      pending: [
+        {
+          requestId: "r1",
+          nodeId: "n1",
           requiredApproveScopes: ["operator.admin\u001b[2J\nnext\u0007"],
-        }),
-        request("r2", { requiredApproveScopes: "invalid", commands: ["system.run"] }),
+        },
+        {
+          requestId: "r2",
+          nodeId: "n2",
+          requiredApproveScopes: "invalid",
+          commands: ["system.run"],
+        },
       ],
-      70,
-    );
+    });
+    const { table } = renderPendingPairingRequestsTable({
+      pending,
+      now: 1000,
+      tableWidth: 70,
+      theme,
+    });
     expect(table).toContain("Approval scopes");
     expect(table).toContain("operator.admin");
     expect(table).not.toContain("\u001b");

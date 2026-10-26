@@ -91,7 +91,6 @@ export function recordSkippedCronRunsInWorker(
               job,
               {
                 status: "skipped",
-                errorReason: undefined,
                 completionStatus: "failed",
                 error:
                   change.kind === "ownerless"

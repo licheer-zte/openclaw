@@ -27,7 +27,6 @@ import { Icon } from "./solid/icon.tsx";
 registerEnglishCatalog(registerSidebarAttentionEnglish);
 
 export type SidebarAttentionProps = {
-  cachedCount?: number;
   activeRouteId?: NavigationRouteId;
   onNavigate?: ApplicationContext["navigate"];
   watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
@@ -71,7 +70,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
   let panelFocus: SidebarAttentionFocus | null = null;
   let panelGeneration = 0;
   let disposed = false;
-  const count = createMemo(() => props.cachedCount ?? sidebarInboxTabCounts(attention.read()).all);
+  const count = createMemo(() => sidebarInboxTabCounts(attention.read()).all);
   const label = createMemo(() =>
     t(count() === 1 ? "attention.issueCount" : "attention.issueCountPlural", {
       count: String(count()),
@@ -294,14 +293,13 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
   });
 
   return (
-    <>
+    <Show when={gateway.read().snapshot.phase === "connected" || attention.read().length > 0}>
       <span class="sr-only" role="status" aria-live="polite">
         {label()}
       </span>
       <button
         type="button"
         class="sidebar-issues-button"
-        disabled={gateway.read().snapshot.phase !== "connected" && attention.read().length === 0}
         aria-expanded={panelOpen() ? "true" : "false"}
         aria-haspopup="dialog"
         aria-controls="sidebar-issues-panel"
@@ -356,7 +354,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
           />
         </Loading>
       </Show>
-    </>
+    </Show>
   );
 }
 
@@ -366,7 +364,6 @@ export const SidebarAttention = defineSolidBridge<SidebarAttentionProps, Sidebar
     useOptionalApplication() ? renderSidebarAttentionContent(props, host) : props.children,
   {
     properties: {
-      cachedCount: { default: undefined, attribute: false },
       activeRouteId: { default: undefined, attribute: false },
       onNavigate: { default: undefined, attribute: false },
       watchUpdateProgress: { default: undefined, attribute: false },

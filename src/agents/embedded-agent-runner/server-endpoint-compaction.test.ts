@@ -96,16 +96,6 @@ const compactionUsage = () => ({
   output_tokens: 200,
   dropped_message_count: 1,
 });
-// The transport prices endpoint compaction like a normal Responses call.
-const compactionModelUsage = () => ({
-  input: 1_000,
-  output: 200,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 1_200,
-  usageReport: { state: "available" },
-  cost: { input: 0.002, output: 0.0016, cacheRead: 0, cacheWrite: 0, total: 0.0036 },
-});
 function createCompactionResponse(responseModel: Model = model, userText = sourceText) {
   return {
     item: compactionItem(),
@@ -115,7 +105,6 @@ function createCompactionResponse(responseModel: Model = model, userText = sourc
     ],
     historyMode: "retained-users",
     usage: compactionUsage(),
-    modelUsage: compactionModelUsage(),
     model: responseModel,
     replayMetadata: testing.buildOpenAIResponsesReasoningReplayMetadata(responseModel, {
       sessionId: "session-1",
@@ -202,7 +191,7 @@ describe("attemptServerEndpointCompaction", () => {
         },
       });
       expect(owner.message.providerReplay).not.toHaveProperty("replayIndex");
-      expect(onUsage).toHaveBeenCalledExactlyOnceWith(compactionModelUsage());
+      expect(onUsage).toHaveBeenCalledExactlyOnceWith(compactionUsage());
       expect(warn).not.toHaveBeenCalled();
       expect(onCompactionCommitted).toHaveBeenCalledExactlyOnceWith(1_000);
       expect(committedOwner).toMatchObject({

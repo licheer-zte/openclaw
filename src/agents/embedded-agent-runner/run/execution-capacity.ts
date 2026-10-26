@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
-import { AsyncContext } from "../../../shared/async-context.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 
 type CapacityWait = {
@@ -14,7 +13,7 @@ type CapacityOwner = {
   outside: <T>(operation: () => Promise<T>) => Promise<T>;
 };
 
-const capacityOwner = new AsyncContext<CapacityOwner>(Symbol("executionCapacityOwner"));
+const capacityOwner = new AsyncLocalStorage<CapacityOwner>();
 
 /** Keep one task and its owners alive across separately admitted capacity tickets. */
 export async function withReleasableExecutionCapacity<T>(

@@ -13,21 +13,28 @@ import { resolveAcpCommandBindingContext } from "./context.js";
 
 const resolveCommandConversation =
   vi.fn<NonNullable<ChannelConfiguredBindingProvider["resolveCommandConversation"]>>();
-const commandParams = (ctx: Parameters<typeof buildCommandTestParams>[2]) =>
-  buildCommandTestParams("/acp status", {}, ctx);
-const resolveContext = (ctx: Parameters<typeof commandParams>[0]) =>
-  resolveAcpCommandBindingContext(commandParams(ctx));
+function commandParams(ctx: Parameters<typeof buildCommandTestParams>[2]) {
+  return buildCommandTestParams("/acp status", {}, ctx);
+}
+
+function expectContext(
+  ctx: Parameters<typeof commandParams>[0],
+  expected: ReturnType<typeof resolveAcpCommandBindingContext>,
+) {
+  expect(resolveAcpCommandBindingContext(commandParams(ctx))).toEqual(expected);
+}
 
 const plugin = {
   ...createChannelTestPluginBase({
     id: "test-acp",
     config: { listAccountIds: () => ["default", "work"], defaultAccountId: () => "work" },
   }),
-  bindings: { resolveCommandConversation, selfParentConversationByDefault: true },
+  bindings: { resolveCommandConversation, selfParentConversationByDefault: false },
 };
 
 beforeEach(() => {
   resolveCommandConversation.mockReset().mockReturnValue(null);
+  plugin.bindings.selfParentConversationByDefault = false;
   setActivePluginRegistry(createTestRegistry([{ pluginId: "test-acp", source: "test", plugin }]));
 });
 afterEach(() => resetPluginRuntimeStateForTest());
@@ -36,6 +43,8 @@ it("passes authoritative command and message facts to the plugin resolver", () =
   const conversation = { conversationId: "peer", parentConversationId: "parent" };
   resolveCommandConversation.mockReturnValue(conversation);
   const params = commandParams({
+    Provider: "discord",
+    Surface: "discord",
     OriginatingChannel: "test-acp",
     OriginatingTo: "origin-target",
     To: "fallback-target",
@@ -73,14 +82,28 @@ it("passes authoritative command and message facts to the plugin resolver", () =
   });
 });
 
+it("drops plugin self-parent defaults before ACP binding lookup", () => {
+  plugin.bindings.selfParentConversationByDefault = true;
+  resolveCommandConversation.mockReturnValue({ conversationId: "peer" });
+  expectContext(
+    { OriginatingChannel: "test-acp" },
+    { channel: "test-acp", accountId: "work", conversationId: "peer" },
+  );
+});
+
+it("falls back to the default account and generic target resolution", () => {
+  expectContext(
+    { Provider: "slack", Surface: "slack", OriginatingChannel: "slack", To: "<#123456789>" },
+    { channel: "slack", accountId: "default", conversationId: "123456789" },
+  );
+});
+
 it.each([
-  [undefined, { conversationId: "peer" }, { accountId: "work", conversationId: "peer" }],
-  [undefined, null, { accountId: "work", threadId: undefined }],
-  ["personal", null, { accountId: "personal", threadId: undefined }],
-] as const)("resolves account %s / %j", (accountId, conversation, expected) => {
-  resolveCommandConversation.mockReturnValue(conversation);
-  expect(resolveContext({ OriginatingChannel: "test-acp", AccountId: accountId })).toEqual({
-    channel: "test-acp",
-    ...expected,
-  });
+  { accountId: undefined, expected: "work" },
+  { accountId: "personal", expected: "personal" },
+])("keeps account $expected when no conversation can be resolved", ({ accountId, expected }) => {
+  expectContext(
+    { OriginatingChannel: "test-acp", AccountId: accountId },
+    { channel: "test-acp", accountId: expected, threadId: undefined },
+  );
 });

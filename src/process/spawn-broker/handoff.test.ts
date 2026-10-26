@@ -1,6 +1,5 @@
 import { deepStrictEqual, ok } from "node:assert/strict";
 import { once } from "node:events";
-import { text } from "node:stream/consumers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnCommand } from "../exec-spawn.js";
 import { BrokerChild } from "./child.js";
@@ -8,23 +7,38 @@ import { runWithSpawnBroker } from "./context.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
 import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
 
-describe.skipIf(!supportsSpawnBrokerCommandTransport())("spawn broker pipe handoff", () => {
+const skipBrokerTests = !supportsSpawnBrokerCommandTransport();
+
+describe.skipIf(skipBrokerTests)("spawn broker pipe handoff", () => {
   let host: SpawnBrokerHost;
   beforeAll(async () => {
     host = createSpawnBrokerHost();
     await host.ready();
   });
-  afterAll(() => host.close());
-  const spawn = (source: string, stdin: "pipe" | "ignore" = "ignore") =>
-    host.spawn(process.execPath, ["-e", source], { stdio: [stdin, "pipe", "pipe"] });
+  afterAll(async () => {
+    await host.close();
+  });
 
   it("preserves async iteration and resume requested immediately after readiness", async () => {
-    const source =
-      "process.stdout.write('a'.repeat(2**21));process.stderr.write('b'.repeat(2**21))";
-    const child = spawn(source);
+    const child = host.spawn(
+      process.execPath,
+      [
+        "-e",
+        "process.stdout.write('a'.repeat(2*1024*1024));process.stderr.write('b'.repeat(2*1024*1024))",
+      ],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
     await child.ready();
     const closed = once(child, "close", { signal: AbortSignal.timeout(5_000) });
-    const output = text(child.stdout!);
+    const output = (async () => {
+      let text = "";
+      for await (const chunk of child.stdout!) {
+        text += chunk;
+      }
+      return text;
+    })();
     void output.catch(() => {});
     child.stderr!.resume();
     await closed;
@@ -53,10 +67,16 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("spawn broker pipe hando
         transport === "native"
           ? undefined
           : runWithSpawnBroker(host, () => spawnCommand([process.execPath, "-e", source], options));
-      const child = command?.nodeChildProcess ?? spawn(source, options.stdin);
+      const child =
+        command?.nodeChildProcess ??
+        host.spawn(process.execPath, ["-e", source], {
+          stdio: [options.stdin, "pipe", "pipe"],
+        });
       ok(child instanceof BrokerChild, "Fixture did not use the broker");
+      // The command starts, but the host cannot acknowledge its first pipe yet.
       await Promise.resolve();
-      for (const resumeAt = performance.now() + 200; performance.now() < resumeAt;) {
+      const resumeAt = performance.now() + 200;
+      while (performance.now() < resumeAt) {
         /* Model an event-loop stall during asynchronous descriptor transfer. */
       }
       await child.ready();

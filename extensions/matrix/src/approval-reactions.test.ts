@@ -18,7 +18,11 @@ const anchor = { accountId: "default", roomId: "!ops:example.org", eventId: "$ap
 const approval = { ...anchor, approvalId: "req-123", approvalKind: "exec" as const };
 
 async function registerTarget(params: Partial<Parameters<typeof register>[0]> = {}): Promise<void> {
-  const target = { ...approval, allowedDecisions: ["allow-once" as const], ...params };
+  const target = {
+    ...approval,
+    allowedDecisions: ["allow-once" as const],
+    ...params,
+  };
   targets.push(target);
   await register(target);
 }
@@ -44,11 +48,16 @@ describe("matrix approval reactions", () => {
   });
 
   it("does not expose an approval reaction target to another Matrix account", async () => {
-    await registerTarget({ accountId: "account-a" });
+    const shared = { roomId: "!shared:example.org", eventId: "$approval-msg" };
+    await registerTarget({
+      accountId: "account-a",
+      ...shared,
+      approvalId: "req-account-a",
+    });
 
-    expect(await resolveTarget({ accountId: "account-b" })).toBeNull();
-    expect(await resolveTarget({ accountId: "account-a" })).toEqual({
-      approvalId: approval.approvalId,
+    expect(await resolveTarget({ accountId: "account-b", ...shared })).toBeNull();
+    expect(await resolveTarget({ accountId: "account-a", ...shared })).toEqual({
+      approvalId: "req-account-a",
       approvalKind: "exec",
       decision: "allow-once",
     });
@@ -74,13 +83,17 @@ describe("matrix approval reactions", () => {
         allowedDecisions: ["allow-once", "deny"] as const,
       },
     };
-    const store = {
+    const lookup = vi.fn().mockResolvedValue(record);
+    const openKeyedStore = vi.fn(() => ({
       register: persist,
-      lookup: vi.fn().mockResolvedValue(record),
+      lookup,
+      consume: vi.fn(),
       delete: vi.fn().mockResolvedValue(undefined),
-    };
+      entries: vi.fn(),
+      clear: vi.fn(),
+    }));
     setMatrixRuntime({
-      state: { openKeyedStoreV2: () => store },
+      state: { openKeyedStoreV2: openKeyedStore },
       logging: { getChildLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() }) },
     } as never);
 
@@ -98,7 +111,8 @@ describe("matrix approval reactions", () => {
       approvalKind,
       decision: "deny",
     });
-    expect(store.lookup).toHaveBeenCalledWith('["default","!ops:example.org","$approval-msg-2"]');
+    expect(openKeyedStore).toHaveBeenCalledOnce();
+    expect(lookup).toHaveBeenCalledWith('["default","!ops:example.org","$approval-msg-2"]');
 
     persist.mockRejectedValueOnce(new Error("sqlite unavailable"));
     await registerTarget({
@@ -109,10 +123,11 @@ describe("matrix approval reactions", () => {
     });
     expect(warn).toHaveBeenCalled();
 
-    expect(await resolveTarget({ eventId: "$approval-msg-3", reactionKey: "❌" })).toEqual({
-      approvalId: "req-fallback",
-      approvalKind,
-      decision: "deny",
-    });
+    expect(
+      await resolveTarget({
+        eventId: "$approval-msg-3",
+        reactionKey: "❌",
+      }),
+    ).toEqual({ approvalId: "req-fallback", approvalKind, decision: "deny" });
   });
 });

@@ -32,11 +32,20 @@ vi.mock("../cli/command-config-resolution.js", () => ({
   resolveCommandConfigWithSecrets: mocks.resolveCommandConfigWithSecrets,
 }));
 
-afterEach(resetPluginLoaderTestStateForTest);
-afterAll(cleanupPluginLoaderFixturesForTest);
+// mock-isolation: JSON fallback proof does not need account rendering or runtime channel state.
+vi.mock("./channels/shared.js", () => ({
+  appendBaseUrlBit: () => undefined,
+  appendEnabledConfiguredLinkedBits: () => undefined,
+  appendModeBit: () => undefined,
+  appendTokenSourceBits: () => undefined,
+  buildChannelAccountLine: () => "",
+}));
 
-it("reports env-only external manifest channels in JSON fallback without full runtime load", async () => {
-  mocks.callGateway.mockRejectedValue(new Error("gateway closed"));
+vi.mock("../cli/progress.js", () => ({
+  withProgress: async (_opts: unknown, run: () => Promise<unknown>) => await run(),
+}));
+
+function writeExternalEnvChannelPlugin() {
   useNoBundledPlugins();
   const pluginDir = makePluginLoaderTempDir();
   const fullMarker = path.join(pluginDir, "full-loaded.txt");
@@ -61,6 +70,15 @@ it("reports env-only external manifest channels in JSON fallback without full ru
     `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");`,
     "utf-8",
   );
+  return { pluginDir, fullMarker };
+}
+
+afterEach(resetPluginLoaderTestStateForTest);
+
+it("reports env-only external manifest channels in JSON fallback without full runtime load", async () => {
+  Object.values(mocks).forEach((mock) => mock.mockReset());
+  mocks.callGateway.mockRejectedValue(new Error("gateway closed"));
+  const { pluginDir, fullMarker } = writeExternalEnvChannelPlugin();
   const config: OpenClawConfig = {
     plugins: { load: { paths: [pluginDir] }, allow: ["external-env-channel-plugin"] },
   };
@@ -73,7 +91,7 @@ it("reports env-only external manifest channels in JSON fallback without full ru
   const { runtime, logs } = createCapturingTestRuntime();
 
   await withEnvAsync({ EXTERNAL_ENV_CHANNEL_TOKEN: "token" }, async () => {
-    await channelsStatusCommand({ json: true, probe: false }, runtime);
+    await channelsStatusCommand({ json: true, probe: false }, runtime as never);
   });
 
   expect(fs.existsSync(fullMarker)).toBe(false);
@@ -83,3 +101,5 @@ it("reports env-only external manifest channels in JSON fallback without full ru
     configuredChannels: ["external-env-channel"],
   });
 });
+
+afterAll(cleanupPluginLoaderFixturesForTest);
