@@ -451,6 +451,15 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
       // Reply-path lexical recall skips query embedding and the semantic provider lease.
       if (keywordOnly || !this.provider) {
         this.assertRequiredProviderAvailable("search");
+        if (this.providerRequirement.mode === "optional") {
+          // Optional mode degrades to keyword-only silently today; name the degradation
+          // so operators can see recall is reduced (issue #183425).
+          log.warn(
+            `memory search: no embedding provider available, serving keyword-only results (semantic search disabled). ` +
+              `reason=${this.providerUnavailableReason ?? this.providerLifecycle.reason ?? "provider not configured"} ` +
+              `agentId=${this.agentId}`,
+          );
+        }
         if (!this.fts.enabled || !this.fts.available) {
           log.warn("memory search: keyword-only search has no available FTS index");
           return [];

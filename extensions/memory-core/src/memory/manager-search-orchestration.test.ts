@@ -217,6 +217,25 @@ describe("memory index", () => {
     expectFixtureHit(await manager.search("alpha"));
   });
 
+  it("warns when optional mode serves keyword-only results because no provider is available", async () => {
+    providerFixture.forceNoProvider = true;
+    const manager = await syncedManager({});
+    memoryWarnings.mockClear();
+
+    const results = await manager.search("alpha");
+
+    expectFixtureHit(results);
+    expect(memoryWarnings).toHaveBeenCalledWith(
+      expect.stringContaining("memory search: no embedding provider available"),
+    );
+    expect(memoryWarnings).toHaveBeenCalledWith(
+      expect.stringContaining("semantic search disabled"),
+    );
+    expect(memoryWarnings).toHaveBeenCalledWith(
+      expect.stringContaining("No API key found for provider"),
+    );
+  });
+
   it("falls back to keyword results after bounded query embedding retries are exhausted with unset provider", async () => {
     const cfg = createCfg({});
     const manager = await getPersistentManager(cfg);
