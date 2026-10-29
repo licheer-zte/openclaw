@@ -27,6 +27,8 @@ const callGatewayMock = vi.fn();
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
   callGatewayLeastPrivilege: (...args: unknown[]) => callGatewayMock(...args),
+  isGatewayTransportError: (error: unknown) =>
+    error instanceof Error && error.name === "GatewayTransportError",
   randomIdempotencyKey: () => "idem-1",
 }));
 

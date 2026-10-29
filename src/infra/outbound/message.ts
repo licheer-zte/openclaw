@@ -1,3 +1,4 @@
+import { GatewayProtocolRequestTimeoutError } from "../../../packages/gateway-client/src/protocol-request.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
@@ -18,6 +19,7 @@ import { normalizePollInput } from "../../polls.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { formatErrorMessage } from "../errors.js";
+import { throwIfAborted } from "./abort.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
 import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import {
@@ -45,6 +47,9 @@ import { buildOutboundSessionContext, type OutboundSessionContext } from "./sess
 import { resolveOutboundTarget } from "./targets.js";
 
 const SEND_BUFFER_MEDIA_URL = "buffer://message-send/attachment";
+
+const GATEWAY_SEND_RECONCILIATION_TIMEOUT_MS = 60_000;
+const GATEWAY_SEND_RECONCILIATION_MAX_MS = 9 * 60_000;
 
 const loadMessageConfigRuntime = createLazyRuntimeModule(
   () => import("./message.config.runtime.js"),
@@ -203,6 +208,7 @@ async function callMessageGateway<T>(params: {
   params: Record<string, unknown>;
   onPlatformSendDispatch?: () => Promise<void>;
   assertDirectAdapterHandoff?: () => void;
+  abortSignal?: AbortSignal;
 }): Promise<T> {
   const gateway = resolveOutboundMessageGatewayOptions(params.gateway);
   // Mint before the local dispatch fence so revocation during RPC is enforced
@@ -212,20 +218,52 @@ async function callMessageGateway<T>(params: {
     : await params.gateway?.resolveAgentRuntimeIdentityToken?.();
   await params.onPlatformSendDispatch?.();
   assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
-  if (params.gateway?.request) {
-    return await params.gateway.request<T>({
-      method: params.method,
-      params: params.params,
-      timeoutMs: gateway.timeoutMs,
-    });
+  const request = <R>(timeoutMs: number | null, signal?: AbortSignal): Promise<R> =>
+    params.gateway?.request
+      ? params.gateway.request<R>({
+          method: params.method,
+          params: params.params,
+          timeoutMs,
+          ...(signal ? { signal } : {}),
+        })
+      : loadMessageGatewayRuntime().then(({ callGatewayLeastPrivilege }) =>
+          callGatewayLeastPrivilege<R>({
+            ...gateway,
+            method: params.method,
+            params: params.params,
+            timeoutMs,
+            agentRuntimeIdentityToken,
+            ...(signal ? { signal } : {}),
+          }),
+        );
+  try {
+    return await request<T>(gateway.timeoutMs);
+  } catch (error) {
+    const { isGatewayTransportError } = await loadMessageGatewayRuntime();
+    if (
+      params.method !== "send" ||
+      !(
+        (isGatewayTransportError(error) && error.kind === "timeout") ||
+        (error instanceof GatewayProtocolRequestTimeoutError && error.requestSent)
+      )
+    ) {
+      throw error;
+    }
+    // The Gateway may still finish the first request after the local timer.
+    // Nothing learned by a later reattach can prove that attempt did not send.
+    throwIfAborted(params.abortSignal);
   }
-  const { callGatewayLeastPrivilege } = await loadMessageGatewayRuntime();
-  return await callGatewayLeastPrivilege<T>({
-    ...gateway,
-    method: params.method,
-    params: params.params,
-    agentRuntimeIdentityToken,
-  });
+
+  const reconciliationSignal = params.abortSignal
+    ? AbortSignal.any([params.abortSignal, AbortSignal.timeout(GATEWAY_SEND_RECONCILIATION_MAX_MS)])
+    : undefined;
+  // A caller-side timeout does not cancel Gateway work. Reattach once with the
+  // unchanged idempotency key so the live Gateway can join the original send
+  // instead of starting another platform delivery.
+  return await request<T>(
+    params.abortSignal ? null : Math.max(gateway.timeoutMs, GATEWAY_SEND_RECONCILIATION_TIMEOUT_MS),
+    reconciliationSignal,
+  );
 }
 
 async function resolveMessageConfig(cfg?: OpenClawConfig): Promise<OpenClawConfig> {
@@ -442,6 +480,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     method: "send",
     onPlatformSendDispatch: params.onPlatformSendDispatch,
     assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+    abortSignal: params.abortSignal,
     params: {
       to: params.to,
       message: params.content,
